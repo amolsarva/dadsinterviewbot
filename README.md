@@ -1,12 +1,10 @@
 # AI Interview Assistant — Vercel
-
-Minimal app: React frontend + Edge Function using Vercel Blob + SendGrid.
+Modern UI with React + Vite and a single Edge Function saving to Vercel Blob and emailing via SendGrid.
 
 ## Deploy
-1. Push repo to GitHub
-2. Import to Vercel
-3. Add env vars:
+1) Push to GitHub and import into Vercel (Framework: Vite)
+2) Vercel → Storage → Blob → Create Store
+3) Project Settings → Environment Variables:
    - SENDGRID_API_KEY
    - FROM_EMAIL
-4. Attach Blob store in Vercel dashboard
-5. Deploy
+4) Deploy
