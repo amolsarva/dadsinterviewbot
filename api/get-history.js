@@ -1,1 +1,1 @@
-export const runtime='edge'; export default async function handler(){return new Response('{"items":[]}')}
+export const runtime='edge'; export default async function handler(){return new Response(JSON.stringify({items:[]}),{headers:{'Content-Type':'application/json'}})}
