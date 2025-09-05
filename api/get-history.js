@@ -1,1 +1,1 @@
-// placeholder for get-history.js
+export const runtime='edge'; export default async function handler(){ return new Response(JSON.stringify({items:[]})) }

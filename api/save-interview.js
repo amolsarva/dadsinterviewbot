@@ -1,1 +1,1 @@
-// placeholder for save-interview.js
+export const runtime='edge'; export default async function handler(){ return new Response('ok') }

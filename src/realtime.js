@@ -1,1 +1,1 @@
-// placeholder for realtime.js
+// realtime client placeholder

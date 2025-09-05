@@ -1,1 +1,3 @@
-AI Interview Assistant placeholder - previously built project
+# AI Interview Assistant
+
+Minimal working package without vercel.json.
