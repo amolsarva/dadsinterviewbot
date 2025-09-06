@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRealtimeSession } from './realtime-webrtc.js'
+import DebugPanel, { patchConsole } from './DebugPanel'
 
 function fmt(ms){ const s=Math.floor(ms/1000); const m=String(Math.floor(s/60)).padStart(2,'0'); return `${m}:${String(s%60).padStart(2,'0')}` }
 
@@ -9,6 +10,7 @@ export default function App(){
   const [elapsed, setElapsed] = useState(0)
   const [blob, setBlob] = useState(null)
   const [history, setHistory] = useState([])
+  const [debugMode, setDebugMode] = useState(false)
 
   const audioRef = useRef(null)
   const connRef = useRef(null)
@@ -22,10 +24,12 @@ export default function App(){
     'Error'
 
   useEffect(()=>{
-    fetch('/api/get-history').then(r=>r.json()).then(d=>{
+    patchConsole()
+    fetch('/api/get-history' + (debugMode ? '?debug=1' : '')).then(r=>r.json()).then(d=>{
       if(Array.isArray(d?.items)) setHistory(d.items)
+      if (debugMode && d?.debugInfo) d.debugInfo.forEach(m => console.log('[SERVER]', m))
     }).catch(()=>{})
-  }, [])
+  }, [debugMode])
 
   async function start(){
     setPhase('connecting'); setElapsed(0);
@@ -89,64 +93,80 @@ export default function App(){
   const timerText = phase === 'live' ? fmt(elapsed) : (blob ? 'Saved after stop' : '00:00')
 
   return (
-    <div className="container">
-      <header className="header">
-        <div className="brand">
-          <img src="/logo.svg" alt="logo" width="40" height="40" />
-          <div>
-            <h1>Interview App (Realtime)</h1>
-            <p>True voice conversation. Public history. One-button flow.</p>
-          </div>
-        </div>
-        <span className="mini">{status}</span>
-      </header>
-
-      <div className="card">
-        <div className="hero">
-          <button className={`big ${phase==='live'?'danger':''}`} onClick={btnOnClick} disabled={phase==='saving'}>
-            {btnLabel}
-          </button>
-          <div className="timer" aria-live="polite">{timerText}</div>
-        </div>
-
-        <div className="grid">
-          <div className="box">
-            <div className="label">Assistant Audio</div>
-            <audio ref={audioRef} autoPlay playsInline />
-          </div>
-          <div className="box">
-            <div className="label">Logging email</div>
-            <input className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" />
-            <div className="mini" style={{marginTop:6}}>Used for send-on-save. Defaults to a@sarva.co.</div>
-          </div>
-        </div>
-
-        {blob && (
-          <div className="box" style={{marginTop:16}}>
-            <div className="label">Latest Mixed Recording</div>
-            <audio controls src={URL.createObjectURL(blob)} />
-          </div>
-        )}
-      </div>
-
-      <div className="history">
-        <h3>Interview History</h3>
-        <div className="history-list">
-          {history.length===0 && <div className="mini">No interviews yet.</div>}
-          {history.map(x => (
-            <div key={x.id} className="item">
-              <div>
-                <div><strong>{new Date(x.timestamp||Date.now()).toLocaleString()}</strong></div>
-                <div className="mini">{x.id}</div>
-              </div>
-              <div style={{display:'flex',gap:12}}>
-                <a href={x.audioUrl} target="_blank" rel="noreferrer">Audio</a>
-                <a href={x.transcriptUrl} target="_blank" rel="noreferrer">Transcript</a>
-              </div>
+    <div>
+      <div className="container">
+        {/* rest of your existing app UI */}
+        <header className="header">
+          <div className="brand">
+            <img src="/logo.svg" alt="logo" width="40" height="40" />
+            <div>
+              <h1>Interview App (Realtime)</h1>
+              <p>True voice conversation. Public history. One-button flow.</p>
             </div>
-          ))}
+          </div>
+          <span className="mini">{status}</span>
+        </header>
+
+        <div className="card">
+          <div className="hero">
+            <button className={`big ${phase==='live'?'danger':''}`} onClick={btnOnClick} disabled={phase==='saving'}>
+              {btnLabel}
+            </button>
+            <div className="timer" aria-live="polite">{timerText}</div>
+          </div>
+
+          <div className="grid">
+            <div className="box">
+              <div className="label">Assistant Audio</div>
+              <audio ref={audioRef} autoPlay playsInline />
+            </div>
+            <div className="box">
+              <div className="label">Logging email</div>
+              <input className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" />
+              <div className="mini" style={{marginTop:6}}>Used for send-on-save. Defaults to a@sarva.co.</div>
+            </div>
+          </div>
+
+          {blob && (
+            <div className="box" style={{marginTop:16}}>
+              <div className="label">Latest Mixed Recording</div>
+              <audio controls src={URL.createObjectURL(blob)} />
+            </div>
+          )}
+        </div>
+
+        <div className="history">
+          <h3>Interview History</h3>
+          <div className="history-list">
+            {history.length===0 && <div className="mini">No interviews yet.</div>}
+            {history.map(x => (
+              <div key={x.id} className="item">
+                <div>
+                  <div><strong>{new Date(x.timestamp||Date.now()).toLocaleString()}</strong></div>
+                  <div className="mini">{x.id}</div>
+                </div>
+                <div style={{display:'flex',gap:12}}>
+                  <a href={x.audioUrl} target="_blank" rel="noreferrer">Audio</a>
+                  <a href={x.transcriptUrl} target="_blank" rel="noreferrer">Transcript</a>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
+
+      <button
+        style={{
+          position: 'fixed', bottom: 80, right: 20, zIndex: 1002,
+          background: debugMode ? '#444' : '#ccc', color: '#fff',
+          borderRadius: 4, padding: '8px 16px', border: 'none'
+        }}
+        onClick={() => setDebugMode(m => !m)}
+      >
+        Debug Mode: {debugMode ? 'ON' : 'OFF'}
+      </button>
+
+      <DebugPanel />
     </div>
   )
 }
