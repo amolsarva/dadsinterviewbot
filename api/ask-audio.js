@@ -31,7 +31,7 @@ export default async function handler(req, res) {
 
   const payload = {
     model,
-    modalities: ['text','audio'],
+    // modalities: ['text','audio'],
     audio: { voice, format: 'mp3' },
     input: [
       {
