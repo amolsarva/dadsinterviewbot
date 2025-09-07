@@ -11,10 +11,10 @@ export async function createRealtimeSession({ onRemoteStream }) {
   const t = setTimeout(() => ctrl.abort(), 12000);
   let res;
   try { console.time('[RTC] create-ephemeral'); res = await fetch('/api/realtime-session', { method: 'POST', signal: ctrl.signal }); console.timeEnd('[RTC] create-ephemeral'); }
-  catch (e) { clearTimeout(t); if (e.name === 'AbortError') throw new Error('Server took too long to create a Realtime session.'); throw e; }
+  catch (e) { clearTimeout(t); if (e.name === 'AbortError') throw new Error('Server took too long to create a Realtime session.'); console.error('[RTC] session fetch error', e?.message||e); throw e; }
   clearTimeout(t);
 
-  const txt = await res.text(); console.debug('[RTC] session payload (truncated):', txt.slice(0, 180));
+  const txt = await res.text(); console.debug('[RTC] session payload (truncated):', txt.slice(0, 180)); if(!res.ok){ console.error('[RTC] session error', res.status, txt); throw new Error('Realtime session error: '+(txt||res.status)); }
   if (!res.ok) { let msg = 'Failed to create Realtime session.'; try { const j = JSON.parse(txt); msg = j.error || msg; } catch {} throw new Error(msg); }
   const session = JSON.parse(txt);
   const token = session?.client_secret?.value;
