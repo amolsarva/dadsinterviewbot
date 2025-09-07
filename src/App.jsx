@@ -15,6 +15,80 @@ export default function App(){
   useEffect(()=>{ try{ patchConsole(); console.info('[BOOT] UI mounted'); runSmokeTests(); }catch(e){ console.error('[BOOT] smoke failed to start', e); } },[])
 
   const audioRef = useRef(null)
+
+  const recRef = useRef(null)
+  const mediaRef = useRef(null)
+
+  async function startPTT(){
+    try{
+      console.time('[PTT] getUserMedia')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:true })
+      console.timeEnd('[PTT] getUserMedia')
+      mediaRef.current = stream
+      const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      const chunks = []
+      rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data) }
+      rec.onstop = async () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' })
+        const arr = await blob.arrayBuffer()
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(arr)))
+        console.time('[ASK] /api/ask-audio')
+        const res = await fetch('/api/ask-audio', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ audio: b64, format: 'webm', text: '' })
+        })
+        const json = await res.json().catch(()=>null)
+        console.timeEnd('[ASK] /api/ask-audio')
+        if (!res.ok || !json?.ok) {
+          console.error('[ASK] error', json || res.status)
+          alert('Ask failed: see console.')
+          return
+        }
+        if (json.text) console.log('[ASK] text:', json.text)
+        if (json.audio) {
+          const bytes = Uint8Array.from(atob(json.audio), c=>c.charCodeAt(0))
+          const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/'+(json.format||'mp3') }))
+          if (audioRef.current) { audioRef.current.src = url; audioRef.current.play().catch(()=>{}) }
+        }
+      }
+      recRef.current = rec
+      rec.start()
+      setPhase('live')
+      console.log('[PTT] recording started')
+    }catch(e){
+      console.error('[PTT] start error', e?.message||e)
+      setPhase('error'); setTimeout(()=> setPhase('idle'), 1200)
+    }
+  }
+
+  function stopPTT(){
+    try{
+      if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop()
+      if (mediaRef.current) mediaRef.current.getTracks().forEach(t=>t.stop())
+      setPhase('saving')
+      console.log('[PTT] recording stopped; sending...')
+      setTimeout(()=> setPhase('idle'), 600)
+    }catch(e){
+      console.error('[PTT] stop error', e?.message||e)
+      setPhase('idle')
+    }
+  }
+
+  async function runHealth(){
+    try{
+      console.time('[HEALTH]');
+      const r = await fetch('/api/health');
+      const j = await r.json();
+      console.timeEnd('[HEALTH]');
+      console.log('[HEALTH]', JSON.stringify(j, null, 2));
+      if(!j.ok) alert('Health check found issues. See console for details.');
+      return j;
+    }catch(e){
+      console.error('[HEALTH] error', e?.message||e);
+    }
+  }
+
   const connRef = useRef(null)
   const timerRef = useRef(null)
 
@@ -103,6 +177,18 @@ export default function App(){
             <img src="/logo.svg" alt="logo" width="40" height="40" />
             <div>
               <h1>Dad's Interview Bot</h1>
+
+        <div style={{display:'flex', gap:8, margin:'12px 0'}}>
+          <button onMouseDown={startPTT} onMouseUp={stopPTT} onTouchStart={startPTT} onTouchEnd={stopPTT}
+            style={{padding:'10px 14px', borderRadius:10, border:'1px solid #88a', background:'#eef', cursor:'pointer'}}>
+            🎤 PTT (hold-to-talk)
+          </button>
+          <button onClick={()=>{ startPTT(); setTimeout(stopPTT, 4500); }}
+            style={{padding:'10px 14px', borderRadius:10, border:'1px solid #8a8', background:'#efe', cursor:'pointer'}}>
+            ▶️ Quick 4s Test
+          </button>
+        </div>
+
               <p>True voice conversation. Public history. One-button flow.</p>
             </div>
           </div>
@@ -192,7 +278,7 @@ export default function App(){
       </div>
 
       <div style={{position:'fixed', right:16, bottom:16, display:'flex', gap:8, alignItems:'center', zIndex:9999}}>
-        <button onClick={()=>runSmokeTests()} style={{background:'#eef', border:'1px solid #99f', padding:'6px 10px', borderRadius:8, cursor:'pointer'}}>Re-run smoke tests</button>
+        <button onClick={()=>runSmokeTests()} style={{background:'#eef', border:'1px solid #99f', padding:'6px 10px', borderRadius:8, cursor:'pointer'}}>Re-run smoke tests</button><button onClick={()=>runHealth()} style={{background:'#efe', border:'1px solid #9f9', padding:'6px 10px', borderRadius:8, cursor:'pointer'}}>Health check</button>
         </div>
       <DebugPanel />
     </div>

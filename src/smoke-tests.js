@@ -43,6 +43,17 @@ export async function runSmokeTests() {
   } catch (e) { log(false, "History endpoint", e.message); }
 
   // Test 3: /api/realtime-session reachable (GET allowed)
+  // Test 3b: /api/ask-audio reachable with tiny silent payload
+  try {
+    // 200ms of silence WebM may not be trivial to synthesize here; just hit endpoint with fake base64 to assert error handling path
+    const fake = btoa('fake');
+    const r = await fetch('/api/ask-audio', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ audio: fake, format:'webm' }) });
+    if (r.status===502 || r.status===200) {
+      log(true, "Ask-audio endpoint", "reachable");
+    } else {
+      log(false, "Ask-audio endpoint", "status "+r.status);
+    }
+  } catch (e) { log(false, "Ask-audio endpoint", e.message); }
   try {
     const t0 = performance.now();
     const ctrl = new AbortController();
