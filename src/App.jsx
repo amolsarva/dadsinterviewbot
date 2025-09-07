@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRealtimeSession } from './realtime-webrtc.js'
 import DebugPanel, { patchConsole } from './DebugPanel'
+import { runSmokeTests } from './smoke-tests'
 
 function fmt(ms){ const s=Math.floor(ms/1000); const m=String(Math.floor(s/60)).padStart(2,'0'); return `${m}:${String(s%60).padStart(2,'0')}` }
 
@@ -11,6 +12,7 @@ export default function App(){
   const [blob, setBlob] = useState(null)
   const [history, setHistory] = useState([])
   const [debugMode, setDebugMode] = useState(false)
+  useEffect(()=>{ try{ patchConsole(); console.info('[BOOT] UI mounted'); runSmokeTests(); }catch(e){ console.error('[BOOT] smoke failed to start', e); } },[])
 
   const audioRef = useRef(null)
   const connRef = useRef(null)
@@ -100,7 +102,7 @@ export default function App(){
           <div className="brand">
             <img src="/logo.svg" alt="logo" width="40" height="40" />
             <div>
-              <h1>Interview App (Realtime)</h1>
+              <h1>Dad's Interview Bot</h1>
               <p>True voice conversation. Public history. One-button flow.</p>
             </div>
           </div>
@@ -166,6 +168,32 @@ export default function App(){
         Debug Mode: {debugMode ? 'ON' : 'OFF'}
       </button>
 
+      
+      {/* Floating features box */}
+      <div className="features-box" style={{
+        position:'fixed', left:'50%', transform:'translateX(-50%)',
+        bottom: 20, zIndex: 900, maxWidth: 920, width: 'calc(100% - 32px)',
+        background: 'linear-gradient(180deg, var(--panel), var(--panel-2))',
+        border: '1px solid rgba(255,255,255,.08)',
+        boxShadow: '0 10px 30px rgba(0,0,0,.35)',
+        borderRadius: 16, padding: 16
+      }}>
+        <div style={{display:'flex', gap:12, alignItems:'flex-start'}}>
+          <div style={{fontSize:18, fontWeight:800, whiteSpace:'nowrap'}}>What it does</div>
+          <ul style={{margin:0, paddingLeft: '1.2rem', lineHeight:1.45}}>
+            <li>Talk, don’t type — mic-first interviews with real-time AI voice.</li>
+            <li>Instant responses — powered by OpenAI’s low-latency Realtime API (WebRTC).</li>
+            <li>Automatic recording — mixed audio (you + AI) saved securely.</li>
+            <li>History at your fingertips — browse past sessions in a public archive.</li>
+            <li>Optional email delivery — send conversations straight to your inbox.</li>
+            <li>Reliable + private — strong server logging and timeouts keep sessions stable.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style={{position:'fixed', right:16, bottom:16, display:'flex', gap:8, alignItems:'center', zIndex:9999}}>
+        <button onClick={()=>runSmokeTests()} style={{background:'#eef', border:'1px solid #99f', padding:'6px 10px', borderRadius:8, cursor:'pointer'}}>Re-run smoke tests</button>
+        </div>
       <DebugPanel />
     </div>
   )

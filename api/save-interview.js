@@ -8,7 +8,7 @@ async function emailLinks({ apiKey, fromEmail, toEmail, id, audioUrl, transcript
     headers:{ 'Authorization':`Bearer ${apiKey}`, 'Content-Type':'application/json' },
     body: JSON.stringify({
       personalizations:[{ to:[{ email: toEmail }] }],
-      from:{ email: fromEmail, name: 'Interview App' },
+      from:{ email: fromEmail, name: 'Dad's Interview Bot' },
       subject: 'Your Interview Recording & Transcript',
       content:[{ type:'text/html', value: `<h2>Your Interview</h2>
         <p><b>ID:</b> ${id}</p>
