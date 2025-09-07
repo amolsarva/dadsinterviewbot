@@ -1,61 +1,43 @@
-// /api/health.js
-export const runtime = 'edge';
 
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
-  });
-}
-
-export default async function handler() {
-  const key = process.env.OPENAI_API_KEY;
-  const org = process.env.OPENAI_ORG || null;
-  const model = process.env.REALTIME_MODEL || 'gpt-4o-realtime-preview-2024-12-17';
+// /api/health.js — Node.js serverless (Vercel) handler
+export default async function handler(req, res) {
+  const key = process.env.OPENAI_API_KEY || '';
+  const model = process.env.AUDIO_MODEL || 'gpt-4o-audio-preview-2024-12-17';
 
   const checks = [];
-
-  // Check env presence (length only, not value)
   checks.push({ name: 'env.OPENAI_API_KEY', ok: !!key, detail: key ? `length=${key.length}` : 'missing' });
-  if (org) checks.push({ name: 'env.OPENAI_ORG', ok: true, detail: org });
 
-  // Probe basic API reachability (models list)
-  let reach = { name: 'GET /v1/models', ok: false };
+  let models = { name: 'GET /v1/models', ok: false };
   try {
     const r = await fetch('https://api.openai.com/v1/models', {
       headers: { Authorization: `Bearer ${key}` }
     });
-    reach.ok = r.ok;
-    reach.detail = `status=${r.status}`;
+    models.ok = r.ok;
+    models.detail = `status=${r.status}`;
   } catch (e) {
-    reach.detail = e?.message || 'fetch error';
+    models.detail = e?.message || 'fetch error';
   }
-  checks.push(reach);
+  checks.push(models);
 
-  // Probe realtime session create (same as /api/realtime-session but shorter timeout)
-  let rt = { name: 'POST /v1/realtime/sessions', ok: false };
+  let respCheck = { name: 'POST /v1/responses (text only)', ok: false };
   try {
-    const controller = new AbortController();
-    const to = setTimeout(()=>controller.abort(), 6000);
-    const r = await fetch('https://api.openai.com/v1/realtime/sessions', {
+    const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'OpenAI-Beta': 'realtime=v1'
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ model, voice:'verse', modalities:['audio','text'] }),
-      signal: controller.signal
+      body: JSON.stringify({ model, input: [{ role: 'user', content: [{ type: 'input_text', text: 'ping' }]}]})
     });
-    clearTimeout(to);
-    const text = await r.text();
-    rt.ok = r.ok;
-    rt.detail = `status=${r.status} body=${text.slice(0,180)}`;
+    const t = await r.text();
+    respCheck.ok = r.ok;
+    respCheck.detail = `status=${r.status} body=${t.slice(0,120)}`;
   } catch (e) {
-    rt.detail = e?.name === 'AbortError' ? 'timeout' : (e?.message || 'fetch error');
+    respCheck.detail = e?.message || 'fetch error';
   }
-  checks.push(rt);
+  checks.push(respCheck);
 
-  const allOk = checks.every(c => c.ok);
-  return json({ ok: allOk, checks });
+  const ok = checks.every(c => c.ok);
+  res.setHeader('Cache-Control','no-store');
+  return res.status(ok ? 200 : 500).json({ ok, checks });
 }

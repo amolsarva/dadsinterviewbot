@@ -1,27 +1,33 @@
-// /api/ask-audio.js
-export const runtime = 'edge';
 
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
-  });
-}
-
-export default async function handler(req) {
-  if (req.method !== 'POST') return json({ error: 'Method Not Allowed' }, 405);
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return json({ error: 'Missing OPENAI_API_KEY' }, 500);
-
-  const body = await req.json().catch(()=>null);
-  if (!body || !body.audio || !body.format) {
-    return json({ error: 'Missing audio payload' }, 400);
+// /api/ask-audio.js  — Node.js serverless (Vercel) handler
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
+
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) {
+    console.error('[ask-audio] Missing OPENAI_API_KEY');
+    return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
+  }
+
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch (e) {
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+  }
+
+  if (!body || !body.audio || !body.format) {
+    return res.status(400).json({ error: 'Missing audio payload' });
+  }
+
   const model = process.env.AUDIO_MODEL || 'gpt-4o-audio-preview-2024-12-17';
   const voice = process.env.AUDIO_VOICE || 'verse';
   const userText = (body.text || '').slice(0, 4000);
-  const audioB64 = body.audio; // base64 string
-  const fmt = body.format; // e.g. 'webm'
+  const audioB64 = body.audio;
+  const fmt = body.format;
 
   const payload = {
     model,
@@ -38,9 +44,9 @@ export default async function handler(req) {
     ]
   };
 
-  let resp;
+  let upstream;
   try {
-    resp = await fetch('https://api.openai.com/v1/responses', {
+    upstream = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${key}`,
@@ -49,19 +55,19 @@ export default async function handler(req) {
       body: JSON.stringify(payload)
     });
   } catch (e) {
-    return json({ error: 'Upstream error', detail: e?.message || String(e) }, 502);
+    console.error('[ask-audio] fetch error', e?.message || e);
+    return res.status(502).json({ error: 'Upstream error', detail: e?.message || String(e) });
   }
 
-  const text = await resp.text();
-  if (!resp.ok) {
-    return json({ error: 'OpenAI error', status: resp.status, body: text?.slice(0, 500) }, 502);
+  const text = await upstream.text();
+  if (!upstream.ok) {
+    return res.status(502).json({ error: 'OpenAI error', status: upstream.status, body: text?.slice(0,500) });
   }
 
-  // Expecting { output: [ { content: [ { type:'output_audio', audio: { data, format } }, { type:'output_text', text } ] } ] } shape
   let data;
-  try { data = JSON.parse(text); } catch { return json({ error:'Invalid JSON from OpenAI', body: text?.slice(0,400) }, 502); }
+  try { data = JSON.parse(text); }
+  catch(e) { return res.status(502).json({ error: 'Invalid JSON from OpenAI', body: text?.slice(0,400) }); }
 
-  // Try to find audio + text
   let outAudioB64 = null, outFmt = 'mp3', outText = '';
   try {
     const blocks = data.output?.[0]?.content || data.output || [];
@@ -72,10 +78,9 @@ export default async function handler(req) {
   } catch {}
 
   if (!outAudioB64) {
-    // Some responses place audio elsewhere; fallback to direct fields if present
     outAudioB64 = data?.audio?.data || null;
     outFmt = data?.audio?.format || outFmt;
   }
 
-  return json({ ok:true, text: outText || '', audio: outAudioB64, format: outFmt });
+  return res.status(200).json({ ok: true, text: outText || '', audio: outAudioB64, format: outFmt });
 }
