@@ -44,3 +44,15 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,
 .modal-title{font-weight:700;margin-bottom:8px}
 .modal ul{margin:10px 0 0 22px}
 .modal li{margin:6px 0;color:#c9d3f4}
+
+.turn-chip{
+  display:inline-block;
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:12px;
+  margin-bottom:10px;
+  border:1px solid #2a3156;
+  background:#141b34;
+}
+.turn-chip[data-turn="user"]{ color:#6fff9c; border-color:#255c47; background:#0f1d1a; }
+.turn-chip[data-turn="assistant"]{ color:#d5c8ff; border-color:#463c74; background:#191735; }

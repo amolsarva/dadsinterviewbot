@@ -1,44 +1,60 @@
-import { put } from '@vercel/blob'
-export const runtime = 'edge'
 
-async function emailLinks({ apiKey, fromEmail, toEmail, id, audioUrl, transcriptUrl, timestamp }) {
-  if(!apiKey || !fromEmail) return
-  const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-    method:'POST',
-    headers:{ 'Authorization':`Bearer ${apiKey}`, 'Content-Type':'application/json' },
-    body: JSON.stringify({
-      personalizations:[{ to:[{ email: toEmail }] }],
-      from:{ email: fromEmail, name: 'Dad's Interview Bot' },
-      subject: 'Your Interview Recording & Transcript',
-      content:[{ type:'text/html', value: `<h2>Your Interview</h2>
-        <p><b>ID:</b> ${id}</p>
-        <p><b>Date:</b> ${new Date(timestamp).toLocaleString()}</p>
-        <ul><li><a href="${audioUrl}">Audio</a></li><li><a href="${transcriptUrl}">Transcript</a></li></ul>` }]
-    })
-  })
-  if(!res.ok){ /* ignore email errors */ }
+import { put } from '@vercel/blob';
+
+export default async function handler(req, res) {
+  try {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+    const body = typeof req.body === 'string' ? JSON.parse(req.body||'{}') : (req.body || {});
+
+    const b64 = body.wav || body.audio;
+    const mime = body.mime || 'audio/wav';
+    const email = (body.email || '').toString();
+    const reply_text = (body.reply_text || '').toString();
+    const provider = (body.provider || '').toString();
+    const duration_ms = Number(body.duration_ms || 0);
+
+    if (!b64) return res.status(400).json({ error: 'Missing wav/audio base64' });
+
+    const buf = Buffer.from(b64, 'base64');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const ext = mime.includes('webm') ? 'webm' : 'wav';
+    const audioName = `interviews/${ts}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+
+    const putOpts = { access: 'public', contentType: mime };
+    const audioPut = await put(audioName, buf, putOpts);
+
+    // Save small JSON manifest alongside
+    const manifest = {
+      createdAt: new Date().toISOString(),
+      provider, duration_ms, reply_text, audio_url: audioPut.url, mime
+    };
+    const metaName = audioName.replace(/\.(wav|webm)$/, '.json');
+    await put(metaName, Buffer.from(JSON.stringify(manifest,null,2)), { access: 'public', contentType: 'application/json' });
+
+    // Optional email via SendGrid
+    let emailed = false;
+    if (email && process.env.SENDGRID_API_KEY) {
+      const sgMail = await import('@sendgrid/mail');
+      sgMail.default.setApiKey(process.env.SENDGRID_API_KEY);
+      const html = `<p>Your interview turn was saved.</p>
+        <p><a href="${audioPut.url}">Download audio</a></p>
+        <p><pre style="white-space:pre-wrap">${escapeHtml(reply_text || '')}</pre></p>`;
+      await sgMail.default.send({
+        to: email,
+        from: process.env.MAIL_FROM || 'no-reply@vercel.app',
+        subject: 'Dad\'s Interview Bot — new turn saved',
+        html
+      });
+      emailed = true;
+    }
+
+    return res.status(200).json({ ok: true, audio_url: audioPut.url, emailed });
+  } catch (err) {
+    console.error('save-interview error', err);
+    return res.status(500).json({ error: 'save-interview failed', detail: String(err && err.message || err) });
+  }
 }
 
-export default async function handler(req){
-  if(req.method!=='POST') return new Response('Method Not Allowed',{status:405})
-  try{
-    const form = await req.formData()
-    const email = form.get('email') || 'a@sarva.co'
-    const transcript = form.get('transcript') || '(no transcript)'
-    const audio = form.get('audio')
-    const timestamp = form.get('timestamp') || new Date().toISOString()
-    if(!audio) return new Response('Missing audio',{status:400})
-    const id = crypto.randomUUID()
-    const base = `interviews/${id}`
-    const { url: audioUrl } = await put(`${base}.webm`, audio, { access:'public', addRandomSuffix:false, contentType: audio.type || 'audio/webm' })
-    const { url: transcriptUrl } = await put(`${base}.txt`, transcript, { access:'public', addRandomSuffix:false, contentType:'text/plain; charset=utf-8' })
-    await put(`${base}.json`, JSON.stringify({ id, email, timestamp, audioUrl, transcriptUrl }, null, 2), { access:'public', addRandomSuffix:false, contentType:'application/json' })
-
-    await emailLinks({ apiKey: process.env.SENDGRID_API_KEY, fromEmail: process.env.FROM_EMAIL || 'noreply@example.com',
-      toEmail: email, id, audioUrl, transcriptUrl, timestamp })
-
-    return new Response(JSON.stringify({ ok:true, id, audioUrl, transcriptUrl, timestamp }), { status:200, headers:{ 'Content-Type':'application/json' } })
-  }catch(err){
-    return new Response('Error: '+err.message, { status:500 })
-  }
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
