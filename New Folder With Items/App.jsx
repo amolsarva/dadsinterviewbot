@@ -12,6 +12,8 @@ export default function App(){
   const [blob, setBlob] = useState(null)
   const [history, setHistory] = useState([])
   const [debugMode, setDebugMode] = useState(false)
+  const [provider, setProvider] = useState(localStorage.getItem('provider') || 'google')
+  useEffect(()=>{ localStorage.setItem('provider', provider) }, [provider])
   useEffect(()=>{ try{ patchConsole(); console.info('[BOOT] UI mounted'); runSmokeTests(); }catch(e){ console.error('[BOOT] smoke failed to start', e); } },[])
 
   const audioRef = useRef(null)
@@ -33,10 +35,10 @@ export default function App(){
         const arr = await blob.arrayBuffer()
         const b64 = btoa(String.fromCharCode(...new Uint8Array(arr)))
         console.time('[ASK] /api/ask-audio')
-        const res = await fetch('/api/ask-audio', {
+        const res = await fetch('/api/ask-audio?provider='+encodeURIComponent(provider), {
           method:'POST',
           headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify({ audio: b64, format: 'webm', text: '' })
+          body: JSON.stringify({ audio: b64, format: 'webm', text: 'Please understand my audio and respond succinctly.' })
         })
         const json = await res.json().catch(()=>null)
         console.timeEnd('[ASK] /api/ask-audio')
@@ -177,6 +179,9 @@ export default function App(){
             <img src="/logo.svg" alt="logo" width="40" height="40" />
             <div>
               <h1>Dad's Interview Bot</h1>
+              <div style={{marginLeft:12}}>
+                <button onClick={()=> setProvider(provider==='google' ? 'openai' : 'google')} style={{fontSize:12, padding:'6px 10px', border:'1px solid #ccc', borderRadius:10, background:'#f8f8f8', cursor:'pointer'}}>Provider: <b>{provider}</b></button>
+              </div>
 
         <div style={{display:'flex', gap:8, margin:'12px 0'}}>
           <button onMouseDown={startPTT} onMouseUp={stopPTT} onTouchStart={startPTT} onTouchEnd={stopPTT}
