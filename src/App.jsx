@@ -18,20 +18,13 @@ export default function App(){
   useEffect(()=>{
     if (!spokenOnceRef.current) {
       spokenOnceRef.current = true
-      speak(OPENING, ()=> {
-        setState('user:listening')
-        runUserTurn()
-      })
+      speak(OPENING, ()=> { setState('user:listening'); runUserTurn() })
     }
   }, [])
 
   function speak(text, onend){
-    const u = new SpeechSynthesisUtterance(text)
-    u.rate = 1; u.pitch = 1
-    u.onend = onend
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(u)
-    setState('assistant:speaking')
+    const u = new SpeechSynthesisUtterance(text); u.rate=1; u.pitch=1; u.onend=onend
+    window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); setState('assistant:speaking')
   }
 
   async function runUserTurn(){
@@ -52,10 +45,8 @@ export default function App(){
 
       const save = await fetch('/api/save-turn', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs,
-          reply_text: reply, transcript, provider: PROVIDER_DEFAULT, email
-        })
+        body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs,
+          reply_text: reply, transcript, provider: PROVIDER_DEFAULT, email })
       })
       if (!save.ok) throw new Error('Save turn failed: ' + save.status)
 
@@ -63,102 +54,54 @@ export default function App(){
       if (shouldEnd) return finalizeSession()
       setTimeout(()=> speak(reply, ()=> runUserTurn()), 300)
     }catch(e){
-      console.error(e)
-      alert('There was a problem saving or asking. Check /api/health and env keys.')
-      setState('idle')
+      console.error(e); alert('There was a problem saving or asking. Check /api/health and env keys.'); setState('idle')
     }
   }
 
   async function finalizeSession(){
     try{
-      window.speechSynthesis.cancel()
-      setState('assistant:thinking')
-      const resp = await fetch('/api/finalize-session', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ sessionId })
-      })
-      const j = await resp.json().catch(()=>({ ok:false }))
-      if (!resp.ok || !j.ok) throw new Error('Finalize failed')
-      setState('idle')
-      alert(`Session saved & emailed to ${email}`)
-    }catch(e){
-      console.error(e)
-      alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.')
-      setState('idle')
-    }
+      window.speechSynthesis.cancel(); setState('assistant:thinking')
+      const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }) })
+      const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
+      setState('idle'); alert(`Session saved & emailed to ${email}`)
+    }catch(e){ console.error(e); alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.'); setState('idle') }
   }
 
-  function startAgain(){
-    window.speechSynthesis.cancel()
-    const next = crypto.randomUUID()
-    setSessionId(next)
-    setTurn(0)
-    setState('assistant:intro')
-    spokenOnceRef.current = false
-    speak(OPENING, ()=>{ setState('user:listening'); runUserTurn() })
-  }
+  function startAgain(){ window.speechSynthesis.cancel(); const next=crypto.randomUUID(); setSessionId(next); setTurn(0); setState('assistant:intro'); spokenOnceRef.current=false; speak(OPENING, ()=>{ setState('user:listening'); runUserTurn() }) }
 
-  return (
-    <>
-      <header>
-        <div className="title">Dad’s Interview Bot <span className="statechip">{state}</span></div>
-        <div className="toolbar">
-          <input className="email" value={email} onChange={e=>setEmail(e.target.value)} />
-          <button className="secondary" onClick={()=>setHistoryOpen(true)}>History</button>
-        </div>
-      </header>
-      <main>
-        <div className="panel">
-          <div className="layout">
-            <div className={'bigglyph ' + (state==='user:listening'?'recording':'')}><div className="dot" /></div>
-            <div className="controls">
-              <div className="status">
-                {state==='assistant:intro' && 'Welcome…'}
-                {state==='user:listening' && 'Recording… take your time.'}
-                {state==='assistant:thinking' && 'Thinking…'}
-                {state==='assistant:speaking' && 'Playing reply…'}
-                {state==='idle' && 'Session complete.'}
-              </div>
-              <div style={{display:'flex', gap:8}}>
-                {state!=='idle' ? (
-                  <button onClick={finalizeSession}>Done</button>
-                ) : (
-                  <button onClick={startAgain}>Start Again</button>
-                )}
-              </div>
-              <div className="helpbar"><span>&nbsp;</span><span>Noise-robust: waits for ~2.2s quiet after speech.</span></div>
-            </div>
+  return (<>
+    <header>
+      <div className="title">Dad’s Interview Bot <span className="statechip">{state}</span></div>
+      <div className="toolbar">
+        <input className="email" value={email} onChange={e=>setEmail(e.target.value)} />
+        <button className="secondary" onClick={()=>setHistoryOpen(true)}>History</button>
+      </div>
+    </header>
+    <main>
+      <div className="panel">
+        <div className="layout">
+          <div className={'bigglyph ' + (state==='user:listening'?'recording':'')}><div className="dot" /></div>
+          <div className="controls">
+            <div className="status">{state==='assistant:intro'?'Welcome…':state==='user:listening'?'Recording… take your time.':state==='assistant:thinking'?'Thinking…':state==='assistant:speaking'?'Playing reply…':'Session complete.'}</div>
+            <div style={{display:'flex',gap:8}}>{state!=='idle'?<button onClick={finalizeSession}>Done</button>:<button onClick={startAgain}>Start Again</button>}</div>
+            <div className="helpbar"><span>&nbsp;</span><span>Noise-robust: waits for ~2.2s quiet after speech.</span></div>
           </div>
         </div>
-        {historyOpen && <History onClose={()=>setHistoryOpen(false)} />}
-      </main>
-
-      <button className="fab-health" onClick={()=>window.open('/api/health','_blank')}>Health</button>
-    </>
-  )
+      </div>
+      {historyOpen && <History onClose={()=>setHistoryOpen(false)} />}
+    </main>
+    <button className="fab-health" onClick={()=>window.open('/api/health','_blank')}>Health</button>
+  </>)
 }
 
 function History({onClose}){
   const [items, setItems] = React.useState([])
-  React.useEffect(()=>{
-    fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems).catch(()=>setItems({items:[]}))
-  },[])
-  return (
-    <div className="modal" onClick={onClose}>
-      <div className="card" onClick={e=>e.stopPropagation()}>
-        <div className="head">
-          <b>History</b>
-          <button className="ghost" onClick={onClose}>Close</button>
-        </div>
-        <div className="rows">
-          {(items.items||[]).map(s=>(
-            <div key={s.sessionId}>
-              <div><b>{new Date(s.startedAt||Date.now()).toLocaleString()}</b> — turns {s.totals?.turns||0}</div>
-              {s.manifestUrl && <div><a className="link" href={s.manifestUrl} target="_blank" rel="noreferrer">View manifest</a></div>}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
+  React.useEffect(()=>{ fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems).catch(()=>setItems({items:[]})) },[])
+  return (<div className="modal" onClick={onClose}><div className="card" onClick={e=>e.stopPropagation()}>
+    <div className="head"><b>History</b><button className="ghost" onClick={onClose}>Close</button></div>
+    <div className="rows">{(items.items||[]).map(s=>(<div key={s.sessionId}>
+      <div><b>{new Date(s.startedAt||Date.now()).toLocaleString()}</b> — turns {s.totals?.turns||0}</div>
+      {s.manifestUrl && <div><a className="link" href={s.manifestUrl} target="_blank" rel="noreferrer">View manifest</a></div>}
+    </div>))}</div>
+  </div></div>)
 }
