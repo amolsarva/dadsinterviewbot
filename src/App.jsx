@@ -30,6 +30,7 @@ export default function App(){
 
   async function runUserTurn(){
     try{
+      forceStopRef.current = false
       setState('user:listening')
       const baseline = await calibrateRMS(2.0)
       const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600, shouldForceStop: ()=> forceStopRef.current })
@@ -47,12 +48,11 @@ export default function App(){
       const save = await fetch('/api/save-turn', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs,
-          reply_text: reply, transcript, provider: PROVIDER_DEFAULT, email })
+          reply_text: reply, transcript, provider: PROVIDER_DEFAULT })
       })
       if (!save.ok) throw new Error('Save turn failed: ' + save.status)
 
       setTurn(t=>t+1)
-      forceStopRef.current = false
       if (shouldEnd) return finalizeSession()
       setTimeout(()=> speak(reply, ()=> runUserTurn()), 300)
     }catch(e){
@@ -65,7 +65,8 @@ export default function App(){
       window.speechSynthesis.cancel(); setState('assistant:thinking')
       const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
       const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
-      setState('idle'); alert(`Session saved & emailed to ${email}`)
+      setState('idle'); const sent = j.emailStatus && (j.emailStatus.ok || j.emailStatus.skipped)
+      alert(`Session saved. ${sent? (j.emailStatus.skipped? 'Email skipped.' : 'Email sent.') : 'Email failed.'}`)
     }catch(e){ console.error(e); alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.'); setState('idle') }
   }
 
@@ -77,6 +78,7 @@ export default function App(){
       <div className="toolbar">
         <input className="email" value={email} onChange={e=>setEmail(e.target.value)} />
         <button className="secondary" onClick={()=>setHistoryOpen(true)}>History</button>
+        {state!=='idle' ? (<button onClick={finalizeSession}>Done</button>) : (<button onClick={startAgain}>Start Again</button>)}
       </div>
     </header>
     <main>
@@ -86,13 +88,13 @@ export default function App(){
           <div className="controls">
             <div className="status">{state==='assistant:intro'?'Welcome…':state==='user:listening'?'Recording… take your time.':state==='assistant:thinking'?'Thinking…':state==='assistant:speaking'?'Playing reply…':'Session complete.'}</div>
             <div style={{display:'flex',gap:8}}>
-  {state!=='idle' && (
-    <button className="secondary" title="Skip the wait and let the assistant speak" onClick={()=>{ forceStopRef.current = true; }}>
-      ⏭ Next
-    </button>
-  )}
-</div>
-            <div className="helpbar"><span>&nbsp;</span><span>Noise-robust: waits for ~2.2s quiet after speech.</span></div>
+              {state==='user:listening' && (
+                <button className="secondary" title="Skip the wait and let the assistant speak" onClick={()=>{ forceStopRef.current = true; }}>
+                  ⏭ Next
+                </button>
+              )}
+            </div>
+            <div className="helpbar"><span>&nbsp;</span><span>{state==='user:listening' ? (forceStopRef.current ? 'Next queued — finishing this turn…' : 'Tip: tap ⏭ Next to skip the pause.') : 'Noise-robust listening is paused while the assistant is speaking.'}</span></div>
           </div>
         </div>
       </div>
@@ -104,12 +106,36 @@ export default function App(){
 
 function History({onClose}){
   const [items, setItems] = React.useState([])
-  React.useEffect(()=>{ fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems).catch(()=>setItems({items:[]})) },[])
-  return (<div className="modal" onClick={onClose}><div className="card" onClick={e=>e.stopPropagation()}>
-    <div className="head"><b>History</b><button className="ghost" onClick={onClose}>Close</button></div>
-    <div className="rows">{(items.items||[]).map(s=>(<div key={s.sessionId}>
-      <div><b>{new Date(s.startedAt||Date.now()).toLocaleString()}</b> — turns {s.totals?.turns||0}</div>
-      {s.manifestUrl && <div><a className="link" href={s.manifestUrl} target="_blank" rel="noreferrer">View manifest</a></div>}
-    </div>))}</div>
-  </div></div>)
+  React.useEffect(()=>{
+    fetch('/api/get-history?page=1&limit=10')
+      .then(r=>r.json())
+      .then(setItems)
+      .catch(()=>setItems({items:[]}))
+  },[])
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="card" onClick={e=>e.stopPropagation()}>
+        <div className="head">
+          <b>History</b>
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="rows">
+          {(items.items||[]).map(s => (
+            <div key={s.sessionId}>
+              <div style={{display:'flex',justifyContent:'space-between',gap:10,alignItems:'baseline'}}>
+                <div><b>{s.sessionId.slice(0,8)}</b> — turns {s.totals?.turns ?? 0}</div>
+              </div>
+              {s.manifestUrl && <div><a className="link" href={s.manifestUrl} target="_blank" rel="noreferrer">Session manifest</a></div>}
+              {(s.allTurns||[]).map(t => (
+                <div key={t.turn} style={{marginTop:6}}>
+                  <div style={{fontSize:13}}><b>Turn {t.turn}</b> — <a className="link" href={t.audio} target="_blank" rel="noreferrer">Audio</a> · <a className="link" href={t.manifest} target="_blank" rel="noreferrer">Manifest</a></div>
+                  {t.transcript && <div style={{fontSize:13,color:'#334155'}}>{t.transcript.slice(0,160)}</div>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }

@@ -1,9 +1,5 @@
-# Dad’s Interview Bot — v3.4
-- Robust storage: Blob with fallback to data: URLs (no 500s if Blob token missing).
-- In-memory KV fallback when Upstash KV isn’t configured (history/finalize still work).
-- Noise-robust VAD, polished UI, Health button bottom-right.
-
-
-## v3.5 Blob-only mode
-- No Upstash/KV dependency. History uses `@vercel/blob` **list()** to enumerate session manifests.
-- You only need `BLOB_READ_WRITE_TOKEN` (+ optional Google/SendGrid keys).
+# Dad’s Interview Bot — v3.10 (Blob-only)
+- Node functions only, no Edge, no KV.
+- @vercel/blob: uses put() for writes, list({prefix}) for history, JSON fetch for manifests.
+- Finalize aggregates turn manifests, computes totals & time bounds, returns emailStatus.
+- UI: Done on the far right; ⏭ Next only while listening; History shows all sessions & turns.
