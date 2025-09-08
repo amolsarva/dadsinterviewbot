@@ -129,7 +129,7 @@ export default function App(){
 
 function History({onClose}){
   const [items, setItems] = React.useState([])
-  useEffect(()=>{ fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems) },[])
+  React.useEffect(()=>{ fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems) },[])
   return (
     <div className="panel" style={{position:'fixed', right:16, bottom:16, maxWidth:520, maxHeight:'70vh', overflow:'auto', boxShadow:'0 10px 30px rgba(0,0,0,.1)'}}>
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>

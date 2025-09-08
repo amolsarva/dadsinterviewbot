@@ -21,7 +21,7 @@ export async function calibrateRMS(seconds=1.6){
   return median
 }
 
-export async function recordUntilSilence({baseline, startThresh, stopThresh, minDurationMs=1200, maxDurationMs=180000, silenceMs=1600, graceMs=600}){
+export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurationMs=180000, silenceMs=1600, graceMs=600}){
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
   const ctx = new AudioContext()
   const src = ctx.createMediaStreamSource(stream)
@@ -29,48 +29,35 @@ export async function recordUntilSilence({baseline, startThresh, stopThresh, min
   analyser.fftSize = 2048
   src.connect(analyser)
   const processor = ctx.createScriptProcessor(2048, 1, 1)
-  src.connect(processor)
-  processor.connect(ctx.destination)
+  src.connect(processor); processor.connect(ctx.destination)
   const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/webm;codecs=opus'
   const rec = new MediaRecorder(stream, { mimeType: mime })
   const chunks = []
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data) }
-
-  let started = false
-  let startedAt = 0
-  let lastLoudTs = performance.now()
+  let started = false, startedAt = 0, lastLoudTs = performance.now()
   const data = new Float32Array(analyser.fftSize)
 
   return await new Promise((resolve, reject)=>{
     rec.onstop = ()=>{
       const blob = new Blob(chunks, { type: mime })
       const durationMs = performance.now() - startedAt
-      cleanup()
-      resolve({ blob, durationMs })
+      cleanup(); resolve({ blob, durationMs })
     }
     processor.onaudioprocess = () => {
       analyser.getFloatTimeDomainData(data)
       const rms = Math.sqrt(data.reduce((s,v)=>s+v*v,0)/data.length)
-      const levelRatio = baseline > 0 ? (rms / baseline) : 0
+      const level = baseline>0 ? (rms / baseline) : 0
       const now = performance.now()
-      if (!started && levelRatio >= 3.0) { // startThresh nominally 3.0×
-        started = true
-        startedAt = now
-        rec.start()
-      }
+      if (!started && level >= 3.0) { started = true; startedAt = now; rec.start() }
       if (started) {
-        if (levelRatio >= 2.0) lastLoudTs = now // stopThresh nominally 2.0×
+        if (level >= 2.0) lastLoudTs = now
         const elapsed = now - startedAt
         const silenceElapsed = now - lastLoudTs
         if (elapsed >= maxDurationMs) rec.stop()
         else if (elapsed >= minDurationMs && silenceElapsed >= (silenceMs + graceMs)) rec.stop()
       }
     }
-    function cleanup(){
-      try{ processor.disconnect(); src.disconnect(); }catch(e){}
-      try{ stream.getTracks().forEach(t=>t.stop()) }catch(e){}
-      try{ ctx.close() }catch(e){}
-    }
+    function cleanup(){ try{processor.disconnect(); src.disconnect()}catch(e){} try{stream.getTracks().forEach(t=>t.stop())}catch(e){} try{ctx.close()}catch(e){} }
   })
 }
 
