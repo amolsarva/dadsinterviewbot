@@ -9,7 +9,8 @@ Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|fals
 export default async function handler(req){
   const { searchParams } = new URL(req.url)
   const provider = searchParams.get('provider') || process.env.PROVIDER || 'google'
-  const body = await req.json().catch(()=>({}))
+  let body = {}
+  try { body = await req.json() } catch {}
   const { audio, format='webm', text } = body
 
   if (!process.env.GOOGLE_API_KEY){

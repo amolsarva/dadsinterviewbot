@@ -38,11 +38,6 @@ async function kvZRange(key, start, stop, {rev=false}={}){
 
 export async function getSession(id){ return kvGet(`session:${id}`) }
 export async function putSession(obj){ await kvSet(`session:${obj.sessionId}`, obj); await kvZAdd('sessions:index', Date.now(), obj.sessionId) }
-export async function appendTurn(id, meta){
-  const s = (await getSession(id)) || { sessionId:id, startedAt:new Date().toISOString(), turns:[], totals:{turns:0, durationMs:0} }
-  s.turns.push(meta); s.totals.turns = s.turns.length
-  await putSession(s); return s
-}
 export async function listSessions(page=1, limit=10){
   const total = page*limit
   const ids = await kvZRange('sessions:index', 0, total, {rev:true})

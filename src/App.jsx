@@ -9,7 +9,7 @@ export default function App(){
   const [sessionId, setSessionId] = useState(() => sessionStorage.getItem('sessionId') || crypto.randomUUID())
   const [turn, setTurn] = useState(0)
   const [email, setEmail] = useState(() => localStorage.getItem('email') || 'a@sarva.co')
-  const [provider, setProvider] = useState(PROVIDER_DEFAULT)
+  const [provider] = useState(PROVIDER_DEFAULT)
   const [historyOpen, setHistoryOpen] = useState(false)
   const spokenOnceRef = useRef(false)
 
@@ -42,7 +42,7 @@ export default function App(){
       const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600 })
       const b64 = await blobToBase64(rec.blob)
       setState('assistant:thinking')
-      const askRes = await fetch('/api/ask-audio?provider='+encodeURIComponent(provider), {
+      const askRes = await fetch('/api/ask-audio?provider='+encodeURIComponent(PROVIDER_DEFAULT), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ audio:b64, format:'webm', sessionId, turn: turn+1 })
       }).then(r=>r.json())
@@ -51,19 +51,22 @@ export default function App(){
       const endRegex = /(i[' ]?m done|stop for now|that’s all|i’m finished|we’re done|let’s stop)/i
       const shouldEnd = end_intent === true || (transcript && endRegex.test(transcript))
 
-      await fetch('/api/save-turn', {
+      const save = await fetch('/api/save-turn', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs,
-          reply_text: reply, transcript, provider, email
+          reply_text: reply, transcript, provider: PROVIDER_DEFAULT, email
         })
       })
+      if (!save.ok) throw new Error('Save turn failed: ' + save.status)
+
       setTurn(t=>t+1)
       if (shouldEnd) return finalizeSession()
-      speak(reply, ()=> runUserTurn())
+      // Patient delay to avoid cutoffs
+      setTimeout(()=> speak(reply, ()=> runUserTurn()), 300)
     }catch(e){
       console.error(e)
-      alert('Microphone or processing error. Grant mic permission and retry.')
+      alert('Save failed. Check /api/health and env keys.')
       setState('idle')
     }
   }
@@ -72,10 +75,12 @@ export default function App(){
     try{
       window.speechSynthesis.cancel()
       setState('assistant:thinking')
-      const j = await fetch('/api/finalize-session', {
+      const resp = await fetch('/api/finalize-session', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ sessionId })
-      }).then(r=>r.json())
+      })
+      const j = await resp.json().catch(()=>({ ok:false }))
+      if (!resp.ok) throw new Error('Finalize failed: ' + resp.status)
       setState('idle')
       alert(`Session saved & emailed to ${email}`)
     }catch(e){
@@ -100,24 +105,30 @@ export default function App(){
         <div className="title">Dad’s Interview Bot <span className="statechip">{state}</span></div>
         <div className="toolbar">
           <input className="email" value={email} onChange={e=>setEmail(e.target.value)} />
-          {state!=='idle' ? (
-            <button onClick={finalizeSession}>Done</button>
-          ) : (
-            <button onClick={startAgain}>Start Again</button>
-          )}
           <button className="secondary" onClick={()=>setHistoryOpen(true)}>History</button>
         </div>
       </header>
       <main>
         <div className="panel">
-          <div className="row">
+          <div className="layout">
             <div className={'bigglyph ' + (state==='user:listening'?'recording':'')}><div className="dot" /></div>
-            <div className="status">
-              {state==='assistant:intro' && 'Welcome…'}
-              {state==='user:listening' && 'Recording… take your time.'}
-              {state==='assistant:thinking' && 'Thinking…'}
-              {state==='assistant:speaking' && 'Playing reply…'}
-              {state==='idle' && 'Session complete.'}
+            <div className="controls">
+              <div className="status">
+                {state==='assistant:intro' && 'Welcome…'}
+                {state==='user:listening' && 'Recording… take your time.'}
+                {state==='assistant:thinking' && 'Thinking…'}
+                {state==='assistant:speaking' && 'Playing reply…'}
+                {state==='idle' && 'Session complete.'}
+              </div>
+              <div style={{display:'flex', gap:8}}>
+                {state!=='idle' ? (
+                  <button onClick={finalizeSession}>Done</button>
+                ) : (
+                  <button onClick={startAgain}>Start Again</button>
+                )}
+                <button className="ghost" onClick={()=>window.open('/api/health','_blank')}>Health</button>
+              </div>
+              <div className="helpbar"><span>&nbsp;</span><span>Voice tip: pause naturally; the bot waits ~2.2s.</span></div>
             </div>
           </div>
         </div>
@@ -131,18 +142,20 @@ function History({onClose}){
   const [items, setItems] = React.useState([])
   React.useEffect(()=>{ fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems) },[])
   return (
-    <div className="panel" style={{position:'fixed', right:16, bottom:16, maxWidth:520, maxHeight:'70vh', overflow:'auto', boxShadow:'0 10px 30px rgba(0,0,0,.1)'}}>
-      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-        <b>History</b>
-        <button className="secondary" onClick={onClose}>Close</button>
-      </div>
-      <div className="history">
-        {(items.items||[]).map(s=>(
-          <div key={s.sessionId} style={{padding:'8px 0', borderBottom:'1px solid #eee'}}>
-            <div><b>{new Date(s.startedAt||Date.now()).toLocaleString()}</b> — turns {s.totals?.turns||0}</div>
-            {s.manifestUrl && <div><a className="link" href={s.manifestUrl} target="_blank" rel="noreferrer">View manifest</a></div>}
-          </div>
-        ))}
+    <div className="modal" onClick={onClose}>
+      <div className="card" onClick={e=>e.stopPropagation()}>
+        <div className="head">
+          <b>History</b>
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="rows">
+          {(items.items||[]).map(s=>(
+            <div key={s.sessionId}>
+              <div><b>{new Date(s.startedAt||Date.now()).toLocaleString()}</b> — turns {s.totals?.turns||0}</div>
+              {s.manifestUrl && <div><a className="link" href={s.manifestUrl} target="_blank" rel="noreferrer">View manifest</a></div>}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )

@@ -37,7 +37,7 @@ export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurat
   let started = false, startedAt = 0, lastLoudTs = performance.now()
   const data = new Float32Array(analyser.fftSize)
 
-  return await new Promise((resolve, reject)=>{
+  return await new Promise((resolve) =>{
     rec.onstop = ()=>{
       const blob = new Blob(chunks, { type: mime })
       const durationMs = performance.now() - startedAt
