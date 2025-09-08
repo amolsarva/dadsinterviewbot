@@ -26,6 +26,6 @@ export default async function handler(req, res){
 
     return res.status(200).json({ ok:true, userAudioUrl, manifestUrl })
   }catch(e){
-    return res.status(500).json({ ok:false, error: String(e) })
+    return res.status(200).json({ ok:false, error: String(e) }) // never 500-hang the client
   }
 }

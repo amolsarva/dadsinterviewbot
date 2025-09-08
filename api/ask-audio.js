@@ -8,8 +8,7 @@ Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|fals
 
 export default async function handler(req, res){
   try{
-    const url = new URL(req.url, 'http://localhost')
-    const provider = url.searchParams.get('provider') || process.env.PROVIDER || 'google'
+    const provider = (req.query && req.query.provider) || process.env.PROVIDER || 'google'
     const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}')
     const { audio, format='webm', text } = body
 

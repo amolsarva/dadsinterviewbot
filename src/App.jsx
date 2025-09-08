@@ -37,14 +37,14 @@ export default function App(){
   async function runUserTurn(){
     try{
       setState('user:listening')
-      const baseline = await calibrateRMS(1.6)
+      const baseline = await calibrateRMS(2.0)
       const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600 })
       const b64 = await blobToBase64(rec.blob)
       setState('assistant:thinking')
       const askRes = await fetch('/api/ask-audio?provider='+encodeURIComponent(PROVIDER_DEFAULT), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ audio:b64, format:'webm', sessionId, turn: turn+1 })
-      }).then(r=>r.json())
+      }).then(r=>r.json()).catch(()=>({ reply:"Tell me one small detail you remember from that moment.", transcript:"", end_intent:false }))
       const { reply, transcript, end_intent } = askRes
 
       const endRegex = /(i[' ]?m done|stop for now|that’s all|i’m finished|we’re done|let’s stop)/i
@@ -78,11 +78,12 @@ export default function App(){
         body: JSON.stringify({ sessionId })
       })
       const j = await resp.json().catch(()=>({ ok:false }))
-      if (!resp.ok) throw new Error('Finalize failed: ' + resp.status)
+      if (!resp.ok || !j.ok) throw new Error('Finalize failed')
       setState('idle')
       alert(`Session saved & emailed to ${email}`)
     }catch(e){
       console.error(e)
+      alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.')
       setState('idle')
     }
   }
@@ -124,21 +125,24 @@ export default function App(){
                 ) : (
                   <button onClick={startAgain}>Start Again</button>
                 )}
-                <button className="ghost" onClick={()=>window.open('/api/health','_blank')}>Health</button>
               </div>
-              <div className="helpbar"><span>&nbsp;</span><span>Voice tip: pause naturally; the bot waits ~2.2s.</span></div>
+              <div className="helpbar"><span>&nbsp;</span><span>Noise-robust: waits for ~2.2s quiet after speech.</span></div>
             </div>
           </div>
         </div>
         {historyOpen && <History onClose={()=>setHistoryOpen(false)} />}
       </main>
+
+      <button className="fab-health" onClick={()=>window.open('/api/health','_blank')}>Health</button>
     </>
   )
 }
 
 function History({onClose}){
   const [items, setItems] = React.useState([])
-  React.useEffect(()=>{ fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems) },[])
+  React.useEffect(()=>{
+    fetch('/api/get-history?page=1&limit=10').then(r=>r.json()).then(setItems).catch(()=>setItems({items:[]}))
+  },[])
   return (
     <div className="modal" onClick={onClose}>
       <div className="card" onClick={e=>e.stopPropagation()}>
