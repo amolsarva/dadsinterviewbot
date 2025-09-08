@@ -1,5 +1,5 @@
-import { getSession, putSession } from './_kv'
-import { saveBlob } from './_blob'
+import { getSession, putSession } from './_kv.js'
+import { saveBlob } from './_blob.js'
 
 export const config = { runtime: 'nodejs' }
 

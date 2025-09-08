@@ -53,3 +53,30 @@ export async function listSessions(page=1, limit=10){
   }
   return { items }
 }
+
+
+// In-memory fallback (ephemeral per function instance) when KV is not configured
+const mem = globalThis.__MEM_KV__ || (globalThis.__MEM_KV__ = { store: new Map(), z: [] })
+export async function _memGet(key){ return mem.store.has(key) ? JSON.parse(mem.store.get(key)) : null }
+export async function _memSet(key, value){ mem.store.set(key, JSON.stringify(value)) }
+export async function _memZAdd(key, score, member){ mem.z.push({score,member}); mem.z.sort((a,b)=>b.score-a.score) }
+export async function _memZRange(start, stop){ return mem.z.slice(start, stop+1).map(x=>x.member) }
+
+// Wrap exported fns to use memory when KV is missing
+const HAS_KV = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
+export async function getSession(id){ return HAS_KV ? kvGet(`session:${id}`) : _memGet(`session:${id}`) }
+export async function putSession(obj){
+  if (HAS_KV) { await kvSet(`session:${obj.sessionId}`, obj); await kvZAdd('sessions:index', Date.now(), obj.sessionId) }
+  else { await _memSet(`session:${obj.sessionId}`, obj); await _memZAdd('sessions:index', Date.now(), obj.sessionId) }
+}
+export async function listSessions(page=1, limit=10){
+  const total = page*limit
+  const ids = HAS_KV ? await kvZRange('sessions:index', 0, total, {rev:true}) : await _memZRange(0, total)
+  const slice = ids.slice((page-1)*limit, page*limit)
+  const items = []
+  for (const id of slice){
+    const s = await getSession(id)
+    if (s) items.push({ sessionId:s.sessionId, startedAt:s.startedAt, endedAt:s.endedAt, totals:s.totals, manifestUrl:s.manifestUrl })
+  }
+  return { items }
+}
