@@ -11,6 +11,7 @@ export default function App(){
   const [email, setEmail] = useState(() => localStorage.getItem('email') || 'a@sarva.co')
   const [historyOpen, setHistoryOpen] = useState(false)
   const spokenOnceRef = useRef(false)
+  const forceStopRef = useRef(false)
 
   useEffect(()=>{ sessionStorage.setItem('sessionId', sessionId) }, [sessionId])
   useEffect(()=>{ localStorage.setItem('email', email) }, [email])
@@ -31,7 +32,7 @@ export default function App(){
     try{
       setState('user:listening')
       const baseline = await calibrateRMS(2.0)
-      const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600 })
+      const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600, shouldForceStop: ()=> forceStopRef.current })
       const b64 = await blobToBase64(rec.blob)
       setState('assistant:thinking')
       const askRes = await fetch('/api/ask-audio?provider='+encodeURIComponent(PROVIDER_DEFAULT), {
@@ -51,6 +52,7 @@ export default function App(){
       if (!save.ok) throw new Error('Save turn failed: ' + save.status)
 
       setTurn(t=>t+1)
+      forceStopRef.current = false
       if (shouldEnd) return finalizeSession()
       setTimeout(()=> speak(reply, ()=> runUserTurn()), 300)
     }catch(e){
@@ -61,7 +63,7 @@ export default function App(){
   async function finalizeSession(){
     try{
       window.speechSynthesis.cancel(); setState('assistant:thinking')
-      const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }) })
+      const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
       const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
       setState('idle'); alert(`Session saved & emailed to ${email}`)
     }catch(e){ console.error(e); alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.'); setState('idle') }

@@ -11,7 +11,7 @@ export async function calibrateRMS(seconds=2.0){
   stream.getTracks().forEach(t=>t.stop()); await ctx.close(); return med
 }
 
-export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurationMs=180000, silenceMs=1600, graceMs=600}){
+export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurationMs=180000, silenceMs=1600, graceMs=600, shouldForceStop=()=>false}){
   const stream = await navigator.mediaDevices.getUserMedia({audio:true})
   const ctx = new AudioContext(); const src = ctx.createMediaStreamSource(stream); const {input,output}=createBandpass(ctx); src.connect(input)
   const an = ctx.createAnalyser(); an.fftSize=2048; output.connect(an)
@@ -28,6 +28,7 @@ export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurat
       else{ if(level<2.0) quietStreak++; else { quietStreak=0; lastLoud=now }
         const elapsed=now-startedAt, silenceElapsed=now-lastLoud
         if(elapsed>=maxDurationMs) rec.stop()
+        else if(shouldForceStop() && elapsed>=minDurationMs) rec.stop()
         else if(elapsed>=minDurationMs && quietStreak>=8 && silenceElapsed>=(silenceMs+graceMs)) rec.stop()
       }
     }
