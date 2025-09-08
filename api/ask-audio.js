@@ -1,109 +1,42 @@
-// /api/ask-audio.js — Node.js serverless (Vercel) handler with provider toggle
-// Default provider = Google Gemini (text only). OpenAI kept as optional branch.
+  export const config = { runtime: 'edge' }
+  const SYSTEM_PROMPT = `You are a warm, patient biographer helping an older adult remember their life.
+Goals: guide a long conversation in short steps; never repeat or paraphrase the user’s words; ask one short, specific, sensory-rich question (≤ 20 words) that either (a) digs deeper on the last detail, (b) moves to a closely related facet (people, place, date), or (c) gracefully shifts to a new chapter if the user signals they wish to.
+Keep silence handling patient; do not rush to speak if the user pauses briefly.
+Background noise is irrelevant—focus on spoken voice only.
+Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|false}.`
 
-const DEFAULT_PROVIDER = (process.env.PROVIDER || 'google').toLowerCase();
-const OPENAI_URL_RESPONSES = 'https://api.openai.com/v1/responses';
-const GEMINI_MODEL_DEFAULT = process.env.GOOGLE_MODEL || 'gemini-1.5-flash';
-const OPENAI_MODEL_DEFAULT = process.env.ASK_MODEL || 'gpt-4o';
+  export default async function handler(req){
+    const { searchParams } = new URL(req.url)
+    const provider = searchParams.get('provider') || process.env.PROVIDER || 'google'
+    const body = await req.json().catch(()=>({}))
+    const { audio, format='webm', text } = body
 
-export default async function handler(req, res) {
-  try {
-    if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST');
-      return res.status(405).json({ error: 'Method Not Allowed' });
+    if (!process.env.GOOGLE_API_KEY){
+      return new Response(JSON.stringify({ ok:true, provider, reply:"Who was with you in that room—name one person and what they wore.", transcript:text||"", end_intent:false }), { status:200, headers:{'Content-Type':'application/json'} })
     }
 
-    let body = req.body;
-    if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON body' }); }
+    try{
+      const parts = [{ text: SYSTEM_PROMPT }]
+      if (audio) parts.push({ inlineData: { mimeType:`audio/${format}`, data: audio } })
+      if (text) parts.push({ text })
+      parts.push({ text: 'Return JSON: {"reply": "...", "transcript": "...", "end_intent": false}' })
+      const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ contents:[{ role:'user', parts }] })
+      })
+      const j = await r.json()
+      let txt = j?.candidates?.[0]?.content?.parts?.map(p=>p.text).join('\n') || ''
+      let out = { ok:true, provider:'google', reply: "Tell me about the light in that place—morning sun, lamps, or shadows?", transcript:"", end_intent:false }
+      try{
+        const t = txt.trim().replace(/^```(json)?/,'').replace(/```$/,'')
+        const p = JSON.parse(t)
+        out.reply = p.reply || out.reply
+        out.transcript = p.transcript || out.transcript
+        out.end_intent = !!p.end_intent
+      }catch(e){ out.reply = txt || out.reply }
+      return new Response(JSON.stringify(out), { status:200, headers:{'Content-Type':'application/json'} })
+    }catch(e){
+      return new Response(JSON.stringify({ ok:true, provider, reply:"Who else was there with you—first name and one detail about them?", transcript:"", end_intent:false }), { status:200, headers:{'Content-Type':'application/json'} })
     }
-    body = body || {};
-
-    const q = req.query || {};
-    const provider = (q.provider || body.provider || DEFAULT_PROVIDER).toLowerCase();
-
-    
-    if (provider === 'google') {
-      const key = process.env.GOOGLE_API_KEY;
-      if (!key) return res.status(500).json({ error: 'Missing GOOGLE_API_KEY' });
-      const model = GEMINI_MODEL_DEFAULT;
-
-      const textPrompt = (body.text || 'Please transcribe the audio if present, then answer succinctly.').toString().slice(0, 4000);
-      const fmt = (body.format || '').toString();
-      const hasAudio = !!(body.audio && fmt);
-      const mime =
-        fmt === 'webm' ? 'audio/webm' :
-        fmt === 'wav' ? 'audio/wav' :
-        fmt === 'mp3' ? 'audio/mpeg' :
-        fmt ? `audio/${fmt}` : undefined;
-
-      const parts = [{ text: textPrompt }];
-      if (hasAudio && mime) {
-        parts.push({ inlineData: { mimeType: mime, data: body.audio } });
-      }
-
-      try {
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: 'user', parts }] })
-          }
-        );
-        const data = await resp.json();
-        if (!resp.ok) {
-          return res.status(resp.status).json({ error: 'Gemini error', detail: data });
-        }
-        const partsOut = data?.candidates?.[0]?.content?.parts || [];
-        const reply = partsOut.map(p => p.text || '').join(' ').trim();
-        return res.status(200).json({ ok: true, provider: 'google', text: reply, raw: data });
-      } catch (err) {
-        return res.status(500).json({ error: 'Gemini call failed', detail: err?.message || String(err) });
-      }
-    }
-if (provider === 'openai') {
-      const key = process.env.OPENAI_API_KEY;
-      if (!key) return res.status(500).json({ error: 'Missing OPENAI_API_KEY' });
-      const text = (body.text || 'ping').toString().slice(0, 4000);
-      const model = OPENAI_MODEL_DEFAULT;
-
-      const payload = {
-        model,
-        input: [{ role: 'user', content: [{ type: 'input_text', text }] }]
-      };
-
-      let upstream;
-      try {
-        upstream = await fetch(OPENAI_URL_RESPONSES, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-      } catch (e) {
-        return res.status(502).json({ error: 'OpenAI fetch error', detail: e?.message || String(e) });
-      }
-
-      const textResp = await upstream.text();
-      if (!upstream.ok) {
-        return res.status(502).json({ error: 'OpenAI error', status: upstream.status, body: textResp?.slice(0, 500) });
-      }
-
-      let data;
-      try { data = JSON.parse(textResp); }
-      catch { return res.status(502).json({ error: 'Invalid JSON from OpenAI', body: textResp?.slice(0, 400) }); }
-
-      let outText = '';
-      try {
-        const blocks = data.output?.[0]?.content || data.output || [];
-        for (const b of blocks) if (b?.type === 'output_text') outText = (outText + ' ' + (b.text || '')).trim();
-      } catch {}
-
-      return res.status(200).json({ ok: true, provider: 'openai', text: outText || '', raw: data });
-    }
-
-    return res.status(400).json({ error: 'Unknown provider', provider });
-  } catch (err) {
-    return res.status(500).json({ error: 'Unhandled server error', detail: err?.message || String(err) });
   }
-}

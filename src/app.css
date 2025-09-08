@@ -1,58 +1,21 @@
-:root{
-  --bg:#0b1020;
-  --panel:#11162a;
-  --ink:#eef3ff;
-  --muted:#99a3c2;
-  --accent:#7b5cff;
-  --ok:#58d68d;
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-
-.wrap{max-width:780px;margin:24px auto;padding:0 16px}
-
-.hdr{display:flex;justify-content:space-between;align-items:center;padding:14px 12px}
-.title{font-size:20px;font-weight:700}
-.hdr-actions{display:flex;gap:8px}
-.tiny{font-size:12px;padding:6px 10px;border:1px solid #3a4470;background:#1a2040;color:var(--ink);border-radius:10px;cursor:pointer}
-
-.panel{background:var(--panel);border:1px solid #2a3156;border-radius:18px;padding:18px}
-
-.status-row{display:flex;align-items:center;gap:16px}
-.glyph{width:96px;height:96px;border-radius:999px;display:flex;align-items:center;justify-content:center;border:6px solid #1e2644}
-.glyph.idle{border-color:#1e2644;color:#24305a}
-.glyph.recording{border-color:#2e6b52;animation:pulse 2s infinite ease-in-out}
-.glyph.playing{border-color:#35508f}
-.dot{font-size:42px;color:#6fff9c}
-.spinner{border:5px solid #2a3156;border-top:5px solid var(--ok);border-radius:50%;width:36px;height:36px;animation:spin 1s linear infinite}
-@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(111,255,156,0.4)}70%{box-shadow:0 0 0 16px rgba(111,255,156,0)}100%{box-shadow:0 0 0 0 rgba(111,255,156,0)}}
-
-.status-text{font-size:14px;color:var(--muted)}
-.timer{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink)}
-
-.controls{margin-top:18px}
-.primary{border:0;background:var(--accent);color:white;padding:14px 20px;border-radius:14px;font-weight:700;cursor:pointer}
-.primary.disabled{opacity:0.5;cursor:not-allowed}
-
-.assist-audio{margin-top:14px}
-
-.log{margin-top:16px;background:#0c1226;border:1px dashed #2a3156;border-radius:10px;padding:12px;color:#a7b1d4;max-height:240px;overflow:auto}
-
-.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center}
-.modal{background:#0e1530;border:1px solid #2a3156;border-radius:16px;max-width:560px;width:92%;padding:16px}
-.modal-title{font-weight:700;margin-bottom:8px}
-.modal ul{margin:10px 0 0 22px}
-.modal li{margin:6px 0;color:#c9d3f4}
-
-.turn-chip{
-  display:inline-block;
-  padding:6px 10px;
-  border-radius:999px;
-  font-size:12px;
-  margin-bottom:10px;
-  border:1px solid #2a3156;
-  background:#141b34;
-}
-.turn-chip[data-turn="user"]{ color:#6fff9c; border-color:#255c47; background:#0f1d1a; }
-.turn-chip[data-turn="assistant"]{ color:#d5c8ff; border-color:#463c74; background:#191735; }
+:root { color-scheme: light; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial; }
+body { margin: 0; background: #fafafa; color: #111; }
+header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:#fff; border-bottom:1px solid #eee; position:sticky; top:0; z-index:5;}
+.title { font-weight:700; letter-spacing:.2px; }
+.toolbar { display:flex; gap:8px; align-items:center; }
+input.email { padding:8px 10px; border:1px solid #ddd; border-radius:12px; min-width:260px;}
+button { border:none; background:#111; color:#fff; padding:10px 14px; border-radius:14px; font-weight:600; cursor:pointer; }
+button.secondary { background:#e9e9e9; color:#111; }
+button:disabled { opacity:.5; cursor:not-allowed; }
+.statechip { padding:4px 10px; border-radius:999px; background:#eef; color:#223; font-weight:600; }
+main { max-width:900px; margin:0 auto; padding:24px 16px; }
+.panel { background:#fff; border:1px solid #eee; border-radius:16px; padding:16px; }
+.row { display:flex; align-items:center; gap:12px; margin:10px 0;}
+.bigglyph { width:120px; height:120px; border-radius:999px; background:#f3f3f3; display:flex; align-items:center; justify-content:center; border:6px solid #ddd; position:relative; }
+.bigglyph.recording { border-color:#f66; animation:pulse 1.6s infinite; }
+.bigglyph .dot { width:32px; height:32px; border-radius:999px; background:#111; }
+.status { color:#555; }
+.timer { font-variant-numeric: tabular-nums; }
+.history { font-size:14px; color:#444; }
+.link { color:#06c; cursor:pointer; text-decoration:underline; }
+@keyframes pulse { 0%{ box-shadow:0 0 0 0 rgba(255,102,102,.5) } 70%{ box-shadow:0 0 0 18px rgba(255,102,102,0) } 100%{ box-shadow:0 0 0 0 rgba(255,102,102,0) } }
