@@ -85,7 +85,13 @@ export default function App(){
           <div className={'bigglyph ' + (state==='user:listening'?'recording':'')}><div className="dot" /></div>
           <div className="controls">
             <div className="status">{state==='assistant:intro'?'Welcome…':state==='user:listening'?'Recording… take your time.':state==='assistant:thinking'?'Thinking…':state==='assistant:speaking'?'Playing reply…':'Session complete.'}</div>
-            <div style={{display:'flex',gap:8}}>{state!=='idle'?<button onClick={finalizeSession}>Done</button>:<button onClick={startAgain}>Start Again</button>}</div>
+            <div style={{display:'flex',gap:8}}>
+  {state!=='idle' && (
+    <button className="secondary" title="Skip the wait and let the assistant speak" onClick={()=>{ forceStopRef.current = true; }}>
+      ⏭ Next
+    </button>
+  )}
+</div>
             <div className="helpbar"><span>&nbsp;</span><span>Noise-robust: waits for ~2.2s quiet after speech.</span></div>
           </div>
         </div>
