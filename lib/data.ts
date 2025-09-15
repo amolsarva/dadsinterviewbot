@@ -1,4 +1,4 @@
-import { putBlobFromBuffer, sha256Hex } from './blob'
+import { putBlobFromBuffer } from './blob'
 import { sendSummaryEmail } from './email'
 
 type Session = {
@@ -19,28 +19,18 @@ type Turn = {
   audio_blob_url?: string
 }
 
-const mem = {
-  sessions: new Map<string, Session>(),
-}
+const mem = { sessions: new Map<string, Session>() }
 
-function uid() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36)
-}
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36) }
 
-export async function dbHealth() {
-  return { ok: true, mode: 'memory' }
-}
+export async function dbHealth() { return { ok: true, mode: 'memory' } }
 
 export async function createSession({ email_to }:{ email_to: string}): Promise<Session> {
   const s: Session = {
     id: uid(),
     created_at: new Date().toISOString(),
-    email_to,
-    status: 'in_progress',
-    duration_ms: 0,
-    total_turns: 0,
-    turns: [],
-    artifacts: {},
+    email_to, status: 'in_progress',
+    duration_ms: 0, total_turns: 0, turns: [], artifacts: {},
   }
   mem.sessions.set(s.id, s)
   return s
@@ -50,8 +40,7 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
   const s = mem.sessions.get(id)
   if (!s) throw new Error('Session not found')
   const t: Turn = { id: uid(), role: (turn.role as any) || 'user', text: turn.text || '', audio_blob_url: turn.audio_blob_url }
-  s.turns!.push(t)
-  s.total_turns = s.turns!.length
+  s.turns!.push(t); s.total_turns = s.turns!.length
   return t
 }
 
@@ -63,7 +52,6 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
   s.duration_ms = safeDuration
   s.status = 'completed'
 
-  // Artifacts
   const txt = turns.map(t => `${t.role}: ${t.text}`).join('\n')
   const jsonObj = { sessionId: s.id, created_at: s.created_at, total_turns: turns.length, turns }
   const txtBuf = Buffer.from(txt, 'utf8')
@@ -72,18 +60,13 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
   const txtBlob = await putBlobFromBuffer(`transcripts/${s.id}.txt`, txtBuf, 'text/plain; charset=utf-8')
   const jsonBlob = await putBlobFromBuffer(`transcripts/${s.id}.json`, jsonBuf, 'application/json')
 
-  s.artifacts = {
-    transcript_txt: txtBlob.url,
-    transcript_json: jsonBlob.url,
-  }
+  s.artifacts = { transcript_txt: txtBlob.url, transcript_json: jsonBlob.url }
   s.total_turns = turns.length
   mem.sessions.set(id, s)
 
-  // Email
   const date = new Date(s.created_at).toLocaleString()
   const bodyText = [
     `Your interview session (${date})`,
-    ``,
     `Turns: ${s.total_turns}`,
     `Duration: ${Math.round(s.duration_ms/1000)}s`,
     `Transcript (txt): ${s.artifacts.transcript_txt}`,
@@ -97,7 +80,4 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
 export async function listSessions(): Promise<Session[]> {
   return Array.from(mem.sessions.values()).sort((a,b)=> (a.created_at < b.created_at ? 1 : -1))
 }
-
-export async function getSession(id: string): Promise<Session | undefined> {
-  return mem.sessions.get(id)
-}
+export async function getSession(id: string): Promise<Session | undefined> { return mem.sessions.get(id) }

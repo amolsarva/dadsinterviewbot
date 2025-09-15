@@ -12,20 +12,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a href="/" className="underline">Home</a>
               <a href="/history" className="underline">History</a>
               <a href="/settings" className="underline">Settings</a>
-              <a href="#" id="help-link" className="underline">Help</a>
+              <a href="/diagnostics" className="underline">Diagnostics</a>
             </nav>
           </header>
           {children}
           <footer className="mt-10 text-xs opacity-70">Built for family archiving — be kind to memories.</footer>
         </div>
-        <script dangerouslySetInnerHTML={{__html:`
-          document.addEventListener('click', (e) => {
-            const a = e.target.closest('#help-link');
-            if (!a) return;
-            e.preventDefault();
-            alert('• Start to begin recording\n• Done to end a turn\n• Finish Session to email and save transcripts');
-          });
-        `}} />
       </body>
     </html>
   )

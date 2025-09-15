@@ -1,10 +1,12 @@
 'use client'
 import { useInterviewMachine } from '@/lib/machine'
+import { speak } from '@/lib/tts'
 import { useEffect, useState } from 'react'
 
 export default function Home() {
   const m = useInterviewMachine()
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [greeted, setGreeted] = useState(false)
 
   // Spacebar triggers primary ONLY when not typing and not disabled
   useEffect(() => {
@@ -22,12 +24,20 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey)
   }, [m])
 
+  // Friendly greeting via browser TTS
+  useEffect(() => {
+    if (!greeted) {
+      speak("Hi—I'm ready to listen. Press Start, then talk. When you're done, press Finish Session.")
+      setGreeted(true)
+    }
+  }, [greeted])
+
   // Create a session when recording starts
   useEffect(() => {
     if (m.state === 'recording' && !sessionId) {
       fetch('/api/session/start', { method: 'POST' })
         .then(r => r.json())
-        .then(d => setSessionId(d?.id))
+        .then(d => { setSessionId(d?.id); m.pushLog('Session started: ' + d?.id) })
         .catch(() => m.pushLog('Failed to start session'))
     }
   }, [m.state, sessionId])
@@ -56,12 +66,16 @@ export default function Home() {
               if (!sessionId) return
               m.setDisabled(true)
               try {
-                await fetch(`/api/session/${sessionId}/finalize`, {
+                const res = await fetch(`/api/session/${sessionId}/finalize`, {
                   method: 'POST',
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ clientDurationMs: m.elapsedMs ?? 0 }),
                 })
+                const out = await res.json()
+                m.pushLog('Finalized: ' + JSON.stringify(out, null, 2))
                 m.toDone()
+              } catch (e) {
+                m.pushLog('Finalize failed')
               } finally {
                 m.setDisabled(false)
               }
@@ -70,10 +84,13 @@ export default function Home() {
           >
             Finish Session
           </button>
+          <button onClick={()=> speak('Okay, continuing when you are ready.')} className="text-sm bg-white/10 px-3 py-1 rounded-2xl">Speak</button>
         </div>
 
         <div className="w-full max-w-xl">
-          <textarea value={m.debugLog.join('\n')} readOnly className="w-full h-48 bg-black/30 p-2 rounded" />
+          <label className="text-xs opacity-70">On‑screen Log (copy to share diagnostics):</label>
+          <textarea value={m.debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
+          <div className="mt-2 text-xs opacity-70">See also the <a className="underline" href="/diagnostics">Diagnostics page</a>.</div>
         </div>
       </div>
     </main>
