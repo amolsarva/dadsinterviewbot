@@ -6,7 +6,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    setEmail(localStorage.getItem('defaultEmail') || (process.env.NEXT_PUBLIC_DEFAULT_EMAIL as any) || 'a@sarva.co')
+    setEmail(localStorage.getItem('defaultEmail') || 'a@sarva.co')
   }, [])
 
   return (

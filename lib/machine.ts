@@ -8,7 +8,11 @@ type Store = {
   label: string
   disabled: boolean
   debugLog: string[]
+  elapsedMs?: number
   primary: () => void
+  setDisabled: (v:boolean)=>void
+  toDone: ()=>void
+  pushLog: (s:string)=>void
 }
 
 function computeLabel(state: State): string {
@@ -27,8 +31,13 @@ export const useInterviewMachine = create<Store>((set, get) => ({
   label: 'Start',
   disabled: false,
   debugLog: ['Ready'],
+  elapsedMs: 0,
+  setDisabled: (v)=> set({ disabled: v }),
+  toDone: ()=> set({ state: 'doneSuccess', label: computeLabel('doneSuccess'), disabled: false }),
+  pushLog: (s)=> set(state => ({ debugLog: [...state.debugLog, s] })),
   primary: () => {
-    const { state, debugLog } = get()
+    const { state, disabled } = get()
+    if (disabled) return
     const push = (msg:string)=> set(s=>({debugLog:[...s.debugLog, msg]}))
     if (state === 'idle') {
       set({ state: 'recording', label: computeLabel('recording') })
@@ -41,7 +50,7 @@ export const useInterviewMachine = create<Store>((set, get) => ({
       setTimeout(()=>{
         set({ state: 'playing', label: computeLabel('playing'), disabled: false })
         push('Assistant reply ready → playing')
-      }, 800)
+      }, 600)
       return
     }
     if (state === 'thinking') {

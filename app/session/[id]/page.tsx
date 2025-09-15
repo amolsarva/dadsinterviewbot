@@ -20,7 +20,6 @@ export default async function SessionPage({ params }: { params: { id: string } }
       <div className="mt-4 space-x-3 text-sm">
         {s.artifacts?.transcript_txt && <a className="underline" href={s.artifacts.transcript_txt}>Transcript (txt)</a>}
         {s.artifacts?.transcript_json && <a className="underline" href={s.artifacts.transcript_json}>Transcript (json)</a>}
-        {s.artifacts?.audio_user && <a className="underline" href={s.artifacts.audio_user}>User audio</a>}
       </div>
     </main>
   )

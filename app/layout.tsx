@@ -23,7 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             const a = e.target.closest('#help-link');
             if (!a) return;
             e.preventDefault();
-            alert('• Start to begin recording\n• Done to end\n• We store audio + transcripts\n• Email is sent with links.');
+            alert('• Start to begin recording\n• Done to end a turn\n• Finish Session to email and save transcripts');
           });
         `}} />
       </body>

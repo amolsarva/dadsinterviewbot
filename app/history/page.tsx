@@ -19,7 +19,7 @@ export default async function HistoryPage() {
               <div className="space-x-2 text-sm">
                 <a className="underline" href={`/session/${s.id}`}>Open</a>
                 {s.artifacts?.transcript_txt && <a className="underline" href={s.artifacts.transcript_txt}>Transcript (txt)</a>}
-                {s.artifacts?.audio_user && <a className="underline" href={s.artifacts.audio_user}>User audio</a>}
+                {s.artifacts?.transcript_json && <a className="underline" href={s.artifacts.transcript_json}>Transcript (json)</a>}
               </div>
             </div>
           </li>

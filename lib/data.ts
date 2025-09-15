@@ -1,3 +1,6 @@
+import { putBlobFromBuffer, sha256Hex } from './blob'
+import { sendSummaryEmail } from './email'
+
 type Session = {
   id: string
   created_at: string
@@ -52,17 +55,43 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
   return t
 }
 
-export async function finalizeSession(id: string, body: any) {
+export async function finalizeSession(id: string, body: { clientDurationMs: number }) {
   const s = mem.sessions.get(id)
   if (!s) throw new Error('Session not found')
+  const turns = s.turns || []
+  const safeDuration = Math.max(0, Math.min(body.clientDurationMs || 0, 6 * 60 * 60 * 1000))
+  s.duration_ms = safeDuration
   s.status = 'completed'
-  s.duration_ms = body?.duration_ms || 0
-  // Pretend artifacts were written
+
+  // Artifacts
+  const txt = turns.map(t => `${t.role}: ${t.text}`).join('\n')
+  const jsonObj = { sessionId: s.id, created_at: s.created_at, total_turns: turns.length, turns }
+  const txtBuf = Buffer.from(txt, 'utf8')
+  const jsonBuf = Buffer.from(JSON.stringify(jsonObj, null, 2), 'utf8')
+
+  const txtBlob = await putBlobFromBuffer(`transcripts/${s.id}.txt`, txtBuf, 'text/plain; charset=utf-8')
+  const jsonBlob = await putBlobFromBuffer(`transcripts/${s.id}.json`, jsonBuf, 'application/json')
+
   s.artifacts = {
-    transcript_txt: `data:text/plain;base64,${Buffer.from((s.turns||[]).map(t=>`${t.role}: ${t.text}`).join('\n')).toString('base64')}`
+    transcript_txt: txtBlob.url,
+    transcript_json: jsonBlob.url,
   }
+  s.total_turns = turns.length
   mem.sessions.set(id, s)
-  return { ok: true, session: s }
+
+  // Email
+  const date = new Date(s.created_at).toLocaleString()
+  const bodyText = [
+    `Your interview session (${date})`,
+    ``,
+    `Turns: ${s.total_turns}`,
+    `Duration: ${Math.round(s.duration_ms/1000)}s`,
+    `Transcript (txt): ${s.artifacts.transcript_txt}`,
+    `Transcript (json): ${s.artifacts.transcript_json}`,
+  ].join('\n')
+  try { await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText) } catch {}
+
+  return { ok: true, session: s, emailed: true }
 }
 
 export async function listSessions(): Promise<Session[]> {

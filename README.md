@@ -1,59 +1,76 @@
-# Dad's Interview Bot
+# Dad’s Interview Bot
 
-A one-button, voice-first interview app: press **Start**, speak, the bot listens patiently, asks thoughtful follow-ups, and when you hit **Done** it stores the audio and transcript and emails you links. Deployed on Vercel.
+## Mission
+Capture family stories with zero friction. Press one big button. Speak. The bot listens patiently, asks thoughtful follow‑ups, and when you’re done it stores the audio and transcripts and emails you links. Sessions are listed in a simple history, with artifacts you can share forever.
 
-## Quick start
+This project is optimized for: **patience, simplicity, and durability**.
 
+## What this app does
+- **One‑button flow**: Start → speak → think → play reply → continue → finalize.
+- **Artifacts**: TXT transcript and JSON transcript; audio plumbing is ready to wire.
+- **Email on Done**: Summary email with links (via Resend) to transcript artifacts.
+- **History**: See past sessions with quick links.
+- **Settings**: Default email and patience knobs (local for now).
+
+## Architecture overview
+- **Next.js 14 (App Router)** + **TypeScript** + **Tailwind**.
+- **State machine** (Zustand reducer) is the single source of truth for the primary button.
+- **Storage**: Vercel Blob for artifacts (public in this build; see Security below).
+- **Metadata**: In‑memory for demo; can be replaced with Postgres/Drizzle.
+- **Email**: Resend (best‑effort if key exists; otherwise mocked).
+- **AI**: OpenAI for follow‑ups (mocked if key missing).
+
+## Quick start (local)
 ```bash
 pnpm install
 pnpm dev
-# then open http://localhost:3000
+# open http://localhost:3000
 ```
+- Without secrets, the app runs in **demo mode** with mocked AI and email and data‑URL artifacts.
+- With secrets, artifacts are written to Blob and emails are sent.
 
-### Deploy on Vercel
-1. Create a new Vercel project and import this repo.
-2. Set env vars (see below).
-3. Deploy.
-
-## Environment variables
-
+## Deploy to Vercel
+1. Import this repo.
+2. Set Environment Variables (Project Settings → Environment Variables):
 ```
-OPENAI_API_KEY=
-VERCEL_BLOB_READ_WRITE_TOKEN=
-POSTGRES_URL=
-RESEND_API_KEY=
-NEXT_PUBLIC_APP_NAME=Dad's Interview Bot
+OPENAI_API_KEY=...
+VERCEL_BLOB_READ_WRITE_TOKEN=...
+RESEND_API_KEY=...
 DEFAULT_NOTIFY_EMAIL=a@sarva.co
+NEXT_PUBLIC_APP_NAME=Dad's Interview Bot
 AI_PATIENCE_SILENCE_MS=1800
 AI_MIN_SPEAKING_GAP_MS=1200
 AI_DISABLE_BARGE_IN=true
 AI_TTS_VOICE=alloy
 ```
-
-> Missing envs? The app falls back to in-memory stores and mock AI so you can click through the UI.
+3. Deploy. This repo includes `vercel.json` so Vercel won’t look for a `dist` folder.
 
 ## Routes
+- `POST /api/session/start` → `{ id }`
+- `POST /api/session/:id/turn` → append a turn `{ role, text, audio_blob_url? }`
+- `POST /api/session/:id/finalize` → writes `transcripts/{id}.txt|.json` to Blob; emails links
+- `GET /api/history` → list recent sessions (summary)
+- `GET /api/health` → Blob & DB health (DB mocked)
 
-- `/` — Primary one-button UI with states: Idle → Recording → Thinking → Playing → ReadyToContinue → StartAgain
-- `/history` — Past sessions with links
-- `/session/[id]` — Session detail
-- `/settings` — Email default + patience controls
+## Security & privacy
+- **Today**: Artifacts are uploaded as **public** objects for simplicity (easy sharing). For private storage, set Blob access to `private` and serve via a tokenized proxy route (see comments in `lib/blob.ts`). True signed URLs with TTL are recommended for family archives; wire this only after Postgres is added to persist tokens and audit access.
+- Minimal PII: only an email address; no analytics.
 
-## Server endpoints
+## Data model (demo)
+- Sessions live in an in‑memory map: `{ id, created_at, email_to, status, total_turns, duration_ms, artifacts, turns[] }`.
+- Swap in Drizzle/Prisma later; the API contracts are stable.
 
-- `POST /api/session/start` — Start a session
-- `POST /api/session/[id]/turn` — Append user/assistant turns
-- `POST /api/session/[id]/finalize` — Write transcripts, email summary
-- `GET  /api/history` — List sessions
-- `GET  /api/health` — Check DB + Blob
+## Tests
+- `pnpm test` runs vitest stubs.
+- `pnpm test:ui` contains a Playwright config stub for future smoke tests.
 
-## Testing
+## Known gaps / next steps
+- Private Blob + tokenized download proxy.
+- Postgres persistence and migrations.
+- Streaming audio & STT wiring (Whisper/OpenAI).
+- UI polish (help modal, toasts).
 
-- `pnpm test` — vitest unit tests for state machine
-- `pnpm test:ui` — Playwright E2E (basic smoke)
-
-## Notes
-
-- Storage uses Vercel Blob for artifacts; Vercel Postgres optional for metadata (falls back to in-memory if POSTGRES_URL missing).
-- Email via Resend; if missing, UI shows a retry banner and logs a warning.
-- OpenAI used for STT/TTS/LLM; if missing, uses mock responses.
+## Troubleshooting
+- **Vercel error “No Output Directory named 'dist'”**: This repo ships `vercel.json` pointing to `.next` and `next.config.js` with `output: 'standalone'`. Vercel should now detect this as a Next.js app.
+- **Emails not received**: Confirm `RESEND_API_KEY` and sender domain.
+- **Artifacts missing**: Confirm `VERCEL_BLOB_READ_WRITE_TOKEN` and check `/api/health`.
