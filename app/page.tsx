@@ -11,6 +11,7 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
   const runningRef = useRef(false)
+  const inTurnRef = useRef(false)
 
   // Restore or create a persistent session id for blob-based flow
   useEffect(() => {
@@ -42,6 +43,8 @@ export default function Home() {
 
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
+    if (inTurnRef.current) return
+    inTurnRef.current = true
     try {
       m.pushLog('Recording started')
       const baseline = await calibrateRMS(2.0)
@@ -73,11 +76,16 @@ export default function Home() {
         const shouldEnd = endIntent || (transcript && endRegex.test(transcript))
         if (!shouldEnd) {
           m.pushLog('Continue → recording')
+          inTurnRef.current = false
           runTurnLoop()
+        }
+        if (shouldEnd) {
+          inTurnRef.current = false
         }
       }, 600)
     } catch (e) {
       m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
+      inTurnRef.current = false
     }
   }, [m, sessionId, turn])
 
