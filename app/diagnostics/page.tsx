@@ -23,12 +23,22 @@ export default function DiagnosticsPage() {
     } catch (e:any) { append('Smoke failed: ' + (e?.message || 'error')) }
   }
 
+  async function runE2E() {
+    append('→ /api/diagnostics/e2e')
+    try {
+      const res = await fetch('/api/diagnostics/e2e', { method: 'POST' })
+      const j = await res.json()
+      append(JSON.stringify(j, null, 2))
+    } catch (e:any) { append('E2E failed: ' + (e?.message || 'error')) }
+  }
+
   return (
     <main>
       <h2 className="text-lg font-semibold mb-3">Diagnostics</h2>
       <div className="flex gap-3 mb-3">
         <button onClick={runHealth} className="bg-white/10 px-3 py-1 rounded-2xl">Run Health</button>
         <button onClick={runSmoke} className="bg-white/10 px-3 py-1 rounded-2xl">Run Smoke Test</button>
+        <button onClick={runE2E} className="bg-white/10 px-3 py-1 rounded-2xl">Run End-to-End</button>
       </div>
       <textarea value={log} readOnly className="w-full h-96 bg-black/30 p-2 rounded" />
     </main>
