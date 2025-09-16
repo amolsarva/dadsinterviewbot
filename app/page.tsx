@@ -12,6 +12,7 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
+  const [disabledNext, setDisabledNext] = useState(false)
   const inTurnRef = useRef(false)
   // DEMO/TEST MODE: only 1 turn before finalize
   const MAX_TURNS = 1
@@ -58,11 +59,21 @@ export default function Home() {
     if (!sessionId) return
     if (inTurnRef.current) return
     inTurnRef.current = true
+    setDisabledNext(true)
     try {
       m.pushLog('Recording started')
-      const baseline = await calibrateRMS(2.0)
-      const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600, shouldForceStop: ()=> false })
-      const b64 = await blobToBase64(rec.blob)
+      let b64 = ''
+      let recDuration = 0
+      try {
+        const baseline = await calibrateRMS(0.5)
+        const rec = await recordUntilSilence({ baseline, minDurationMs:600, silenceMs:800, graceMs:200, shouldForceStop: ()=> false })
+        b64 = await blobToBase64(rec.blob)
+        recDuration = rec.durationMs || 0
+      } catch {
+        const silent = new Blob([new Uint8Array(1)], { type: 'audio/webm' })
+        b64 = await blobToBase64(silent)
+        recDuration = 500
+      }
       m.pushLog('Recording stopped → thinking')
 
       const askRes = await fetch('/api/ask-audio', {
@@ -78,7 +89,7 @@ export default function Home() {
       const persistPromises: Promise<any>[] = []
       persistPromises.push(fetch('/api/save-turn', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs, reply_text: reply, transcript, provider: 'google' })
+        body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: recDuration, reply_text: reply, transcript, provider: 'google' })
       }))
       persistPromises.push(fetch(`/api/session/${sessionId}/turn`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -107,11 +118,13 @@ export default function Home() {
     } catch (e) {
       m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
+      setDisabledNext(false)
     }
   }, [m, sessionId, turn])
 
   // Single-button flow handler
   const onNext = useCallback(() => {
+    if (disabledNext) return
     if (!hasStarted) {
       setHasStarted(true)
       try {
@@ -123,7 +136,7 @@ export default function Home() {
       return
     }
     if (!inTurnRef.current) runTurnLoop()
-  }, [hasStarted, runTurnLoop])
+  }, [hasStarted, runTurnLoop, disabledNext])
 
   return (
     <main className="mt-8">
@@ -132,7 +145,7 @@ export default function Home() {
 
         <div className="flex gap-3">
           {m.state !== 'doneSuccess' ? (
-            <button onClick={onNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl">Next</button>
+            <button onClick={onNext} disabled={disabledNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50">Next</button>
           ) : (
             <button onClick={()=>{ setHasStarted(false); setTurn(0); }} className="text-sm bg-white/10 px-3 py-1 rounded-2xl">Start Again</button>
           )}
