@@ -17,28 +17,36 @@ export default function Home() {
   async function finalizeNow(){
     if (!sessionId) return
     try{
-      const res = await fetch(`/api/finalize-session`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ sessionId }) })
-      const out = await res.json()
-      m.pushLog('Finalized: ' + JSON.stringify(out, null, 2))
+      const [legacyRes, memRes] = await Promise.allSettled([
+        fetch(`/api/finalize-session`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ sessionId }) }),
+        fetch(`/api/session/${sessionId}/finalize`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ clientDurationMs: 0 }) })
+      ])
+      try { if (legacyRes.status==='fulfilled') { const out = await legacyRes.value.json(); m.pushLog('Finalized (blob): ' + JSON.stringify(out)) } } catch {}
+      try { if (memRes.status==='fulfilled') { const out2 = await memRes.value.json(); m.pushLog('Finalized (mem): ' + JSON.stringify(out2)) } } catch {}
       m.toDone()
     }catch{
       m.pushLog('Finalize failed')
     }
   }
 
-  // Restore or create a persistent session id for blob-based flow
+  // Create a server-backed session id (for history), fallback to existing client id
   useEffect(() => {
     try {
-      const existing = sessionStorage.getItem('sessionId')
-      if (existing) {
-        setSessionId(existing)
-        m.pushLog('Session started: ' + existing)
-      } else {
-        const id = crypto.randomUUID()
-        sessionStorage.setItem('sessionId', id)
-        setSessionId(id)
-        m.pushLog('Session started: ' + id)
-      }
+      fetch('/api/session/start', { method: 'POST' })
+        .then(r=>r.json())
+        .then(d => {
+          const id = d?.id || crypto.randomUUID()
+          sessionStorage.setItem('sessionId', id)
+          setSessionId(id)
+          m.pushLog('Session started: ' + id)
+        })
+        .catch(() => {
+          const existing = sessionStorage.getItem('sessionId')
+          const id = existing || crypto.randomUUID()
+          sessionStorage.setItem('sessionId', id)
+          setSessionId(id)
+          m.pushLog('Session started: ' + id)
+        })
     } catch {}
   }, [])
 
@@ -64,14 +72,21 @@ export default function Home() {
       const endIntent: boolean = askRes?.end_intent === true
       const endRegex = /(i[' ]?m done|stop for now|that's all|i'm finished|we're done|let's stop)/i
 
-      try{
-        await fetch('/api/save-turn', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs, reply_text: reply, transcript, provider: 'google' })
-        }).then(r=>{ if(!r.ok) throw new Error('save-failed') })
-      }catch{
-        m.pushLog('Save turn failed, continuing')
-      }
+      // Persist artifacts and history (non-fatal if any fail)
+      const persistPromises: Promise<any>[] = []
+      persistPromises.push(fetch('/api/save-turn', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs, reply_text: reply, transcript, provider: 'google' })
+      }))
+      persistPromises.push(fetch(`/api/session/${sessionId}/turn`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role:'user', text: transcript || '' })
+      }))
+      persistPromises.push(fetch(`/api/session/${sessionId}/turn`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role:'assistant', text: reply || '' })
+      }))
+      try { await Promise.allSettled(persistPromises) } catch {}
 
       const nextTurn = turn + 1
       setTurn(nextTurn)
