@@ -7,3 +7,6 @@ Resume from last session: seed opening with recap of last transcript
 UI polish: status chips, progress indicator, mic level meter
 Error hardening: retry asks/saves, exponential backoff, inline alerts
 Add E2E tests for first-turn flow, finalize, and history listing
+Integrate OpenAI Realtime Voice (WS client, server token endpoint, TTS backoff)
+Add interactive voice barge-in, VAD, and interruptible TTS playback
+Offer selectable providers (OpenAI/Google) for STT+LLM, runtime switch in UI
