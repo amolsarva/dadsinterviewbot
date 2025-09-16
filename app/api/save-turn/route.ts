@@ -31,12 +31,13 @@ export async function POST(req: NextRequest) {
     const manifestPath = `sessions/${parsed.sessionId}/turn-${pad}.json`
 
     const userAudio = await putBlobFromBuffer(audioPath, buffer, mime)
+    const userAudioUrl = userAudio.downloadUrl || userAudio.url
     const manifestBody = {
       sessionId: parsed.sessionId,
       turn: turnNumber,
       createdAt: new Date().toISOString(),
       durationMs: Number(parsed.duration_ms) || 0,
-      userAudioUrl: userAudio.url,
+      userAudioUrl,
       transcript: parsed.transcript,
       assistantReply: parsed.reply_text,
       provider: parsed.provider,
@@ -48,7 +49,9 @@ export async function POST(req: NextRequest) {
       'application/json'
     )
 
-    return NextResponse.json({ ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url })
+    const manifestUrl = manifest.downloadUrl || manifest.url
+
+    return NextResponse.json({ ok: true, userAudioUrl, manifestUrl })
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || 'save_failed' }, { status: 400 })
   }

@@ -37,10 +37,17 @@ export async function GET(req: NextRequest) {
           turns: [],
         } as HistoryEntry)
       if (/^turn-\d+\.json$/.test(name)) {
-        entry.turns.push({ url: blob.url, uploadedAt: blob.uploadedAt, name })
+        const href = blob.downloadUrl || blob.url
+        const uploadedAtValue =
+          blob.uploadedAt instanceof Date
+            ? blob.uploadedAt.toISOString()
+            : typeof blob.uploadedAt === 'string'
+              ? blob.uploadedAt
+              : new Date().toISOString()
+        entry.turns.push({ url: href, uploadedAt: uploadedAtValue, name })
       }
       if (/^session-.+\.json$/.test(name)) {
-        entry.manifestUrl = blob.url
+        entry.manifestUrl = blob.downloadUrl || blob.url
       }
       sessions.set(id, entry)
     }

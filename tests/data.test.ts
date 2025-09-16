@@ -29,6 +29,9 @@ describe('finalizeSession', () => {
 
     expect(result.emailed).toBe(true)
     expect(result.emailStatus).toEqual({ ok: true, provider: 'resend' })
+    expect(result.session.artifacts?.session_manifest).toEqual(
+      'https://blob.test/sessions/' + session.id + '/session-' + session.id + '.json'
+    )
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('emailed')
   })
@@ -43,6 +46,9 @@ describe('finalizeSession', () => {
 
     expect(result.emailed).toBe(false)
     expect(result.emailStatus).toEqual({ skipped: true })
+    expect(result.session.artifacts?.session_manifest).toEqual(
+      'https://blob.test/sessions/' + session.id + '/session-' + session.id + '.json'
+    )
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('completed')
   })
@@ -57,6 +63,9 @@ describe('finalizeSession', () => {
 
     expect(result.emailed).toBe(false)
     expect(result.emailStatus).toEqual({ ok: false, provider: 'resend', error: 'bad' })
+    expect(result.session.artifacts?.session_manifest).toEqual(
+      'https://blob.test/sessions/' + session.id + '/session-' + session.id + '.json'
+    )
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('error')
   })
