@@ -71,7 +71,6 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
 
   s.artifacts = { transcript_txt: txtBlob.url, transcript_json: jsonBlob.url }
   s.total_turns = turns.length
-  mem.sessions.set(id, s)
 
   const date = new Date(s.created_at).toLocaleString()
   const bodyText = [
@@ -81,9 +80,25 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
     `Transcript (txt): ${s.artifacts.transcript_txt}`,
     `Transcript (json): ${s.artifacts.transcript_json}`,
   ].join('\n')
-  try { await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText) } catch {}
+  let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { ok: false; provider: 'unknown'; error: string }
+  try {
+    emailStatus = await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText)
+  } catch (e:any) {
+    emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
+  }
 
-  return { ok: true, session: s, emailed: true }
+  if ('ok' in emailStatus && emailStatus.ok) {
+    s.status = 'emailed'
+  } else if ('skipped' in emailStatus && emailStatus.skipped) {
+    s.status = 'completed'
+  } else {
+    s.status = 'error'
+  }
+
+  mem.sessions.set(id, s)
+
+  const emailed = 'ok' in emailStatus && emailStatus.ok
+  return { ok: true, session: s, emailed, emailStatus }
 }
 
 export async function listSessions(): Promise<Session[]> {

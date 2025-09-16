@@ -24,8 +24,29 @@ export default function Home() {
         fetch(`/api/finalize-session`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ sessionId }) }),
         fetch(`/api/session/${sessionId}/finalize`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ clientDurationMs: 0 }) })
       ])
-      try { if (legacyRes.status==='fulfilled') { const out = await legacyRes.value.json(); m.pushLog('Finalized (blob): ' + JSON.stringify(out)) } } catch {}
-      try { if (memRes.status==='fulfilled') { const out2 = await memRes.value.json(); m.pushLog('Finalized (mem): ' + JSON.stringify(out2)) } } catch {}
+
+      async function inspect(label: string, result: PromiseSettledResult<Response>) {
+        if (result.status !== 'fulfilled') {
+          const reason = result.reason instanceof Error ? result.reason.message : 'request_failed'
+          m.pushLog(`${label} failed: ${reason}`)
+          return false
+        }
+        let payload: any = null
+        try {
+          payload = await result.value.clone().json()
+          m.pushLog(`${label}: ` + JSON.stringify(payload))
+        } catch {}
+        if (!result.value.ok || (payload && payload.ok === false)) {
+          m.pushLog(`${label} not ok (status ${result.value.status})`)
+          return false
+        }
+        return true
+      }
+
+      const legacyOk = await inspect('Finalized (blob)', legacyRes)
+      const memOk = await inspect('Finalized (mem)', memRes)
+      if (!legacyOk || !memOk) throw new Error('Finalize failed')
+
       // DEMO: also persist a minimal client-side history record so History page has entries even without server memory/blob
       try {
         const demo = JSON.parse(localStorage.getItem('demoHistory')||'[]')
@@ -34,8 +55,10 @@ export default function Home() {
         localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0,50)))
       } catch {}
       m.toDone()
+      setDisabledNext(false)
     }catch{
       m.pushLog('Finalize failed')
+      setDisabledNext(false)
     }
   }
 
