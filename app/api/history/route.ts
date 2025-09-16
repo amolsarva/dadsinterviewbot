@@ -8,5 +8,12 @@ export async function GET() {
     status: s.status, total_turns: s.total_turns,
     artifacts: { transcript_txt: Boolean(s.artifacts?.transcript_txt), transcript_json: Boolean(s.artifacts?.transcript_json) }
   }))
-  return NextResponse.json({ items: rows })
+  // DEMO: merge client-stored demoHistory (if any) as minimal entries
+  let demo: any[] = []
+  try {
+    const raw = (globalThis as any)?.localStorage?.getItem?.('demoHistory')
+    if (raw) demo = JSON.parse(raw)
+  } catch {}
+  const demoRows = (demo||[]).map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{ transcript_txt:false, transcript_json:false } }))
+  return NextResponse.json({ items: [...demoRows, ...rows] })
 }

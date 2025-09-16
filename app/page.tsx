@@ -26,6 +26,13 @@ export default function Home() {
       ])
       try { if (legacyRes.status==='fulfilled') { const out = await legacyRes.value.json(); m.pushLog('Finalized (blob): ' + JSON.stringify(out)) } } catch {}
       try { if (memRes.status==='fulfilled') { const out2 = await memRes.value.json(); m.pushLog('Finalized (mem): ' + JSON.stringify(out2)) } } catch {}
+      // DEMO: also persist a minimal client-side history record so History page has entries even without server memory/blob
+      try {
+        const demo = JSON.parse(localStorage.getItem('demoHistory')||'[]')
+        const stamp = new Date().toISOString()
+        demo.unshift({ id: sessionId, created_at: stamp })
+        localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0,50)))
+      } catch {}
       m.toDone()
     }catch{
       m.pushLog('Finalize failed')
