@@ -1,34 +1,83 @@
-'use client'
+"use client"
 import { useInterviewMachine } from '@/lib/machine'
 import { speak } from '@/lib/tts'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { calibrateRMS, recordUntilSilence, blobToBase64 } from '../../src/lib/audio'
+
+const OPENING = `Hello and welcome to Dad’s Interview Bot. I’m your biographer companion. We’ll have gentle, short conversations to help you recall stories. When a question finishes, just answer in your own words, and when you pause I’ll ask a thoughtful follow-up. Take your time. Let’s begin.`
 
 export default function Home() {
   const m = useInterviewMachine()
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [greeted, setGreeted] = useState(false)
+  const [turn, setTurn] = useState<number>(0)
+  const runningRef = useRef(false)
 
+  // Restore or create a persistent session id for blob-based flow
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      const tag = (target?.tagName || '').toLowerCase()
-      const isTyping = tag === 'input' || tag === 'textarea' || (target?.isContentEditable ?? false)
-      if (isTyping) return
-      if (e.code === 'Space') {
-        e.preventDefault()
-        if (!m.disabled) m.primary()
+    try {
+      const existing = sessionStorage.getItem('sessionId')
+      if (existing) {
+        setSessionId(existing)
+        m.pushLog('Session started: ' + existing)
+      } else {
+        const id = crypto.randomUUID()
+        sessionStorage.setItem('sessionId', id)
+        setSessionId(id)
+        m.pushLog('Session started: ' + id)
       }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [m])
+    } catch {}
+  }, [])
 
+  // Greet and begin the interview loop when ready
   useEffect(() => {
-    if (!greeted) {
-      speak("Hi—I'm ready to listen. Press Start, then talk. When you're done, press Finish Session.")
-      setGreeted(true)
+    if (!sessionId || runningRef.current) return
+    runningRef.current = true
+    speak(OPENING)
+    m.pushLog('Assistant reply ready → playing')
+    setTimeout(() => {
+      m.primary()
+      runTurnLoop().finally(() => { runningRef.current = false })
+    }, 600)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  const runTurnLoop = useCallback(async () => {
+    if (!sessionId) return
+    try {
+      m.pushLog('Recording started')
+      m.primary()
+      const baseline = await calibrateRMS(2.0)
+      const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600, shouldForceStop: ()=> false })
+      const b64 = await blobToBase64(rec.blob)
+      m.pushLog('Recording stopped → thinking')
+
+      const askRes = await fetch('/api/ask-audio', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn+1 })
+      }).then(r=>r.json()).catch(()=>({ reply:"Tell me one small detail you remember from that moment.", transcript:"", end_intent:false }))
+      const reply: string = askRes?.reply || "Tell me one small detail you remember from that moment."
+      const transcript: string = askRes?.transcript || ''
+
+      await fetch('/api/save-turn', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs, reply_text: reply, transcript, provider: 'google' })
+      }).then(r=>{ if(!r.ok) throw new Error('save-failed') })
+
+      setTurn(t => t + 1)
+
+      speak(reply)
+      m.pushLog('Assistant reply ready → playing')
+      setTimeout(() => {
+        m.pushLog('Finished playing → ready')
+        m.primary()
+        m.pushLog('Continue → recording')
+        m.primary()
+        runTurnLoop()
+      }, 600)
+    } catch (e) {
+      m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
     }
-  }, [greeted])
+  }, [m, sessionId, turn])
 
   useEffect(() => {
     if (m.state === 'recording' && !sessionId) {
@@ -63,10 +112,10 @@ export default function Home() {
               if (!sessionId) return
               m.setDisabled(true)
               try {
-                const res = await fetch(`/api/session/${sessionId}/finalize`, {
+                const res = await fetch(`/api/finalize-session`, {
                   method: 'POST',
                   headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ clientDurationMs: m.elapsedMs ?? 0 }),
+                  body: JSON.stringify({ sessionId })
                 })
                 const out = await res.json()
                 m.pushLog('Finalized: ' + JSON.stringify(out, null, 2))

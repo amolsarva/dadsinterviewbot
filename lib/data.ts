@@ -19,7 +19,16 @@ type Turn = {
   audio_blob_url?: string
 }
 
-const mem = { sessions: new Map<string, Session>() }
+// Ensure the in-memory store survives hot reloads/dev and is shared across route invocations
+const globalKey = '__dads_interview_mem__'
+// @ts-ignore
+const g: any = globalThis as any
+if (!g[globalKey]) {
+  // @ts-ignore
+  g[globalKey] = { sessions: new Map<string, Session>() }
+}
+// @ts-ignore
+const mem: { sessions: Map<string, Session> } = g[globalKey]
 
 function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36) }
 
