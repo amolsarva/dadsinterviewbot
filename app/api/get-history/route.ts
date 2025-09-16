@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { list } from '@vercel/blob'
+import { listBlobs } from '@/lib/blob'
 
 type HistoryEntry = {
   sessionId: string
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     const limit = Number(url.searchParams.get('limit') || '10')
 
     const prefix = 'sessions/'
-    const { blobs } = await list({ prefix, limit: 2000 })
+    const { blobs } = await listBlobs({ prefix, limit: 2000 })
     const sessions = new Map<string, HistoryEntry>()
 
     for (const blob of blobs) {
@@ -37,10 +37,17 @@ export async function GET(req: NextRequest) {
           turns: [],
         } as HistoryEntry)
       if (/^turn-\d+\.json$/.test(name)) {
-        entry.turns.push({ url: blob.url, uploadedAt: blob.uploadedAt, name })
+        const href = blob.downloadUrl || blob.url
+        const uploadedAtValue =
+          blob.uploadedAt instanceof Date
+            ? blob.uploadedAt.toISOString()
+            : typeof blob.uploadedAt === 'string'
+              ? blob.uploadedAt
+              : new Date().toISOString()
+        entry.turns.push({ url: href, uploadedAt: uploadedAtValue, name })
       }
       if (/^session-.+\.json$/.test(name)) {
-        entry.manifestUrl = blob.url
+        entry.manifestUrl = blob.downloadUrl || blob.url
       }
       sessions.set(id, entry)
     }

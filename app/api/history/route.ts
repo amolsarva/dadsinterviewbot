@@ -3,10 +3,18 @@ import { listSessions } from '@/lib/data'
 
 export async function GET() {
   const items = await listSessions()
-  const rows = items.map(s => ({
-    id: s.id, created_at: s.created_at, title: s.title || null,
-    status: s.status, total_turns: s.total_turns,
-    artifacts: { transcript_txt: Boolean(s.artifacts?.transcript_txt), transcript_json: Boolean(s.artifacts?.transcript_json) }
+  const rows = items.map((s) => ({
+    id: s.id,
+    created_at: s.created_at,
+    title: s.title || null,
+    status: s.status,
+    total_turns: s.total_turns,
+    artifacts: {
+      transcript_txt: typeof s.artifacts?.transcript_txt === 'string' ? s.artifacts.transcript_txt : null,
+      transcript_json: typeof s.artifacts?.transcript_json === 'string' ? s.artifacts.transcript_json : null,
+      session_manifest:
+        typeof s.artifacts?.session_manifest === 'string' ? s.artifacts.session_manifest : null,
+    },
   }))
   // DEMO: merge client-stored demoHistory (if any) as minimal entries
   let demo: any[] = []
@@ -14,6 +22,13 @@ export async function GET() {
     const raw = (globalThis as any)?.localStorage?.getItem?.('demoHistory')
     if (raw) demo = JSON.parse(raw)
   } catch {}
-  const demoRows = (demo||[]).map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{ transcript_txt:false, transcript_json:false } }))
+  const demoRows = (demo||[]).map(d => ({
+    id: d.id,
+    created_at: d.created_at,
+    title: 'Demo session',
+    status: 'completed',
+    total_turns: 1,
+    artifacts: { transcript_txt: null, transcript_json: null, session_manifest: null },
+  }))
   return NextResponse.json({ items: [...demoRows, ...rows] })
 }
