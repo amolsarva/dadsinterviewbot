@@ -12,6 +12,19 @@ export default function Home() {
   const [turn, setTurn] = useState<number>(0)
   const runningRef = useRef(false)
   const inTurnRef = useRef(false)
+  const MAX_TURNS = 3
+
+  async function finalizeNow(){
+    if (!sessionId) return
+    try{
+      const res = await fetch(`/api/finalize-session`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ sessionId }) })
+      const out = await res.json()
+      m.pushLog('Finalized: ' + JSON.stringify(out, null, 2))
+      m.toDone()
+    }catch{
+      m.pushLog('Finalize failed')
+    }
+  }
 
   // Restore or create a persistent session id for blob-based flow
   useEffect(() => {
@@ -61,19 +74,25 @@ export default function Home() {
       const endIntent: boolean = askRes?.end_intent === true
       const endRegex = /(i[' ]?m done|stop for now|that's all|i'm finished|we're done|let's stop)/i
 
-      await fetch('/api/save-turn', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs, reply_text: reply, transcript, provider: 'google' })
-      }).then(r=>{ if(!r.ok) throw new Error('save-failed') })
+      try{
+        await fetch('/api/save-turn', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs, reply_text: reply, transcript, provider: 'google' })
+        }).then(r=>{ if(!r.ok) throw new Error('save-failed') })
+      }catch{
+        m.pushLog('Save turn failed, continuing')
+      }
 
-      setTurn(t => t + 1)
+      const nextTurn = turn + 1
+      setTurn(nextTurn)
 
       speak(reply)
       m.pushLog('Assistant reply ready → playing')
       setTimeout(() => {
         m.pushLog('Finished playing → ready')
         // Check for end intent or explicit stop phrases
-        const shouldEnd = endIntent || (transcript && endRegex.test(transcript))
+        const reachedMax = nextTurn >= MAX_TURNS
+        const shouldEnd = endIntent || reachedMax || (transcript && endRegex.test(transcript))
         if (!shouldEnd) {
           m.pushLog('Continue → recording')
           inTurnRef.current = false
@@ -81,6 +100,7 @@ export default function Home() {
         }
         if (shouldEnd) {
           inTurnRef.current = false
+          finalizeNow()
         }
       }, 600)
     } catch (e) {
@@ -118,29 +138,11 @@ export default function Home() {
 
         <div className="flex gap-3">
           <button
-            onClick={async () => {
-              if (!sessionId) return
-              m.setDisabled(true)
-              try {
-                const res = await fetch(`/api/finalize-session`, {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ sessionId })
-                })
-                const out = await res.json()
-                m.pushLog('Finalized: ' + JSON.stringify(out, null, 2))
-                m.toDone()
-              } catch (e) {
-                m.pushLog('Finalize failed')
-              } finally {
-                m.setDisabled(false)
-              }
-            }}
+            onClick={() => { if (!inTurnRef.current) runTurnLoop() }}
             className="text-sm bg-white/10 px-3 py-1 rounded-2xl"
           >
-            Finish Session
+            Next
           </button>
-          <button onClick={()=> speak('Okay, continuing when you are ready.')} className="text-sm bg-white/10 px-3 py-1 rounded-2xl">Speak</button>
         </div>
 
         <div className="w-full max-w-xl">
