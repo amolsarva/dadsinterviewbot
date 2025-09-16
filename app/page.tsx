@@ -2,7 +2,7 @@
 import { useInterviewMachine } from '@/lib/machine'
 import { speak } from '@/lib/tts'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { calibrateRMS, recordUntilSilence, blobToBase64 } from '../../src/lib/audio'
+import { calibrateRMS, recordUntilSilence, blobToBase64 } from '../src/lib/audio'
 
 const OPENING = `Hello and welcome to Dad’s Interview Bot. I’m your biographer companion. We’ll have gentle, short conversations to help you recall stories. When a question finishes, just answer in your own words, and when you pause I’ll ask a thoughtful follow-up. Take your time. Let’s begin.`
 
