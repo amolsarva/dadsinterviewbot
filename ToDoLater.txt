@@ -1,0 +1,9 @@
+Restore full 3+ turn interview flow (configurable max turns)
+Reinstate graceful end-intent handling with recap prompt
+Add robust blob storage with real VERCEL_BLOB_READ_WRITE_TOKEN
+Add email delivery via Resend/SendGrid with proper API keys
+History page: show per-turn audio and transcripts, support playback
+Resume from last session: seed opening with recap of last transcript
+UI polish: status chips, progress indicator, mic level meter
+Error hardening: retry asks/saves, exponential backoff, inline alerts
+Add E2E tests for first-turn flow, finalize, and history listing

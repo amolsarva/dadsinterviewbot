@@ -4,7 +4,8 @@ import { speak } from '@/lib/tts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 
-const OPENING = `Hello and welcome to Dad’s Interview Bot. I’m your biographer companion. We’ll have gentle, short conversations to help you recall stories. When a question finishes, just answer in your own words, and when you pause I’ll ask a thoughtful follow-up. Take your time. Let’s begin.`
+// DEMO/TEST MODE: Shortened greeting for faster testing
+const OPENING = `Start testing greeting. Answer a question.`
 
 export default function Home() {
   const m = useInterviewMachine()
@@ -12,7 +13,8 @@ export default function Home() {
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
   const inTurnRef = useRef(false)
-  const MAX_TURNS = 3
+  // DEMO/TEST MODE: only 1 turn before finalize
+  const MAX_TURNS = 1
 
   async function finalizeNow(){
     if (!sessionId) return
