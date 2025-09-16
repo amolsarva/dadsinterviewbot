@@ -1,5 +1,4 @@
 'use client'
-
 export function speak(text: string) {
   try {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return

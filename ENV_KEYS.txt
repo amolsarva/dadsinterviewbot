@@ -1,0 +1,12 @@
+This app runs *without* any environment variables (demo mode). 
+If you want real storage/email/AI later, here are the keys:
+- OPENAI_API_KEY: optional; enables real follow-up generation
+- VERCEL_BLOB_READ_WRITE_TOKEN: optional; writes artifacts to Vercel Blob
+- RESEND_API_KEY: optional; sends the summary email on finalize
+- DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co)
+- NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI
+
+Demo mode behavior without keys:
+- AI follow-ups are mocked.
+- Artifacts are generated as data: URLs (still visible in History/Session).
+- Email is skipped with a log note; no error thrown.

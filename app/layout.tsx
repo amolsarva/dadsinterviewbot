@@ -16,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </nav>
           </header>
           {children}
-          <footer className="mt-10 text-xs opacity-70">Built for family archiving — be kind to memories.</footer>
+          <footer className="mt-10 text-xs opacity-70">v1.3.1 — continuity-first build.</footer>
         </div>
       </body>
     </html>

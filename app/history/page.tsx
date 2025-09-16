@@ -3,7 +3,6 @@ import { listSessions } from '@/lib/data'
 
 export default async function HistoryPage() {
   const sessions = await listSessions()
-
   return (
     <main>
       <h2 className="text-lg font-semibold mb-4">Sessions</h2>

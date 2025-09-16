@@ -8,7 +8,6 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [greeted, setGreeted] = useState(false)
 
-  // Spacebar triggers primary ONLY when not typing and not disabled
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
@@ -24,7 +23,6 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKey)
   }, [m])
 
-  // Friendly greeting via browser TTS
   useEffect(() => {
     if (!greeted) {
       speak("Hi—I'm ready to listen. Press Start, then talk. When you're done, press Finish Session.")
@@ -32,7 +30,6 @@ export default function Home() {
     }
   }, [greeted])
 
-  // Create a session when recording starts
   useEffect(() => {
     if (m.state === 'recording' && !sessionId) {
       fetch('/api/session/start', { method: 'POST' })
@@ -88,9 +85,9 @@ export default function Home() {
         </div>
 
         <div className="w-full max-w-xl">
-          <label className="text-xs opacity-70">On‑screen Log (copy to share diagnostics):</label>
+          <label className="text-xs opacity-70">On-screen Log (copy to share diagnostics):</label>
           <textarea value={m.debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
-          <div className="mt-2 text-xs opacity-70">See also the <a className="underline" href="/diagnostics">Diagnostics page</a>.</div>
+          <div className="mt-2 text-xs opacity-70">Need more? Visit <a className="underline" href="/diagnostics">Diagnostics</a>.</div>
         </div>
       </div>
     </main>
