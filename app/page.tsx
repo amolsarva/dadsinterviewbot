@@ -35,7 +35,6 @@ export default function Home() {
     speak(OPENING)
     m.pushLog('Assistant reply ready → playing')
     setTimeout(() => {
-      m.primary()
       runTurnLoop().finally(() => { runningRef.current = false })
     }, 600)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,7 +44,6 @@ export default function Home() {
     if (!sessionId) return
     try {
       m.pushLog('Recording started')
-      m.primary()
       const baseline = await calibrateRMS(2.0)
       const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600, shouldForceStop: ()=> false })
       const b64 = await blobToBase64(rec.blob)
@@ -57,6 +55,8 @@ export default function Home() {
       }).then(r=>r.json()).catch(()=>({ reply:"Tell me one small detail you remember from that moment.", transcript:"", end_intent:false }))
       const reply: string = askRes?.reply || "Tell me one small detail you remember from that moment."
       const transcript: string = askRes?.transcript || ''
+      const endIntent: boolean = askRes?.end_intent === true
+      const endRegex = /(i[' ]?m done|stop for now|that's all|i'm finished|we're done|let's stop)/i
 
       await fetch('/api/save-turn', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -69,10 +69,12 @@ export default function Home() {
       m.pushLog('Assistant reply ready → playing')
       setTimeout(() => {
         m.pushLog('Finished playing → ready')
-        m.primary()
-        m.pushLog('Continue → recording')
-        m.primary()
-        runTurnLoop()
+        // Check for end intent or explicit stop phrases
+        const shouldEnd = endIntent || (transcript && endRegex.test(transcript))
+        if (!shouldEnd) {
+          m.pushLog('Continue → recording')
+          runTurnLoop()
+        }
       }, 600)
     } catch (e) {
       m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
