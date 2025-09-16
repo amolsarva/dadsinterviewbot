@@ -10,7 +10,7 @@ export default function Home() {
   const m = useInterviewMachine()
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
-  const runningRef = useRef(false)
+  const [hasStarted, setHasStarted] = useState(false)
   const inTurnRef = useRef(false)
   const MAX_TURNS = 3
 
@@ -42,17 +42,7 @@ export default function Home() {
     } catch {}
   }, [])
 
-  // Greet and begin the interview loop when ready
-  useEffect(() => {
-    if (!sessionId || runningRef.current) return
-    runningRef.current = true
-    speak(OPENING)
-    m.pushLog('Assistant reply ready → playing')
-    setTimeout(() => {
-      runTurnLoop().finally(() => { runningRef.current = false })
-    }, 600)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
+  // No auto-start; greeting is spoken on first Next click
 
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
@@ -86,63 +76,49 @@ export default function Home() {
       const nextTurn = turn + 1
       setTurn(nextTurn)
 
-      speak(reply)
-      m.pushLog('Assistant reply ready → playing')
-      setTimeout(() => {
+      const u = new SpeechSynthesisUtterance(reply)
+      u.rate = 1; u.pitch = 1
+      u.onend = () => {
         m.pushLog('Finished playing → ready')
-        // Check for end intent or explicit stop phrases
         const reachedMax = nextTurn >= MAX_TURNS
         const shouldEnd = endIntent || reachedMax || (transcript && endRegex.test(transcript))
-        if (!shouldEnd) {
-          m.pushLog('Continue → recording')
-          inTurnRef.current = false
-          runTurnLoop()
-        }
-        if (shouldEnd) {
-          inTurnRef.current = false
-          finalizeNow()
-        }
-      }, 600)
+        inTurnRef.current = false
+        if (shouldEnd) finalizeNow()
+      }
+      try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(u) } catch {}
+      m.pushLog('Assistant reply ready → playing')
     } catch (e) {
       m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
     }
   }, [m, sessionId, turn])
 
-  useEffect(() => {
-    if (m.state === 'recording' && !sessionId) {
-      fetch('/api/session/start', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => { setSessionId(d?.id); m.pushLog('Session started: ' + d?.id) })
-        .catch(() => m.pushLog('Failed to start session'))
+  // Single-button flow handler
+  const onNext = useCallback(() => {
+    if (!hasStarted) {
+      setHasStarted(true)
+      try {
+        const u = new SpeechSynthesisUtterance(OPENING)
+        u.rate = 1; u.pitch = 1
+        window.speechSynthesis.cancel(); window.speechSynthesis.speak(u)
+        m.pushLog('Assistant reply ready → playing')
+      } catch {}
+      return
     }
-  }, [m.state, sessionId])
+    if (!inTurnRef.current) runTurnLoop()
+  }, [hasStarted, runTurnLoop])
 
   return (
     <main className="mt-8">
       <div className="flex flex-col items-center gap-6">
-        <div className="w-52 h-52 rounded-full flex items-center justify-center"
-          style={{boxShadow: m.state === 'recording' ? '0 0 0 12px rgba(234,88,12,0.25)' : '0 0 0 0 rgba(0,0,0,0)', transition:'box-shadow 300ms'}}>
-          <button onClick={m.primary} disabled={m.disabled} className="text-lg bg-white/10 hover:bg-white/20 disabled:opacity-50">
-            {m.label}
-          </button>
-        </div>
-        <div className="text-sm opacity-80">
-          {m.state === 'idle' && 'Ready'}
-          {m.state === 'recording' && 'Recording…'}
-          {m.state === 'thinking' && 'Thinking…'}
-          {m.state === 'playing' && 'Playing reply…'}
-          {m.state === 'readyToContinue' && 'Ready to continue'}
-          {m.state === 'doneSuccess' && 'Saved & emailed (if configured)'}
-        </div>
+        <div className="text-sm opacity-80">{!hasStarted ? 'Ready' : 'Tap Next to continue'}</div>
 
         <div className="flex gap-3">
-          <button
-            onClick={() => { if (!inTurnRef.current) runTurnLoop() }}
-            className="text-sm bg-white/10 px-3 py-1 rounded-2xl"
-          >
-            Next
-          </button>
+          {m.state !== 'doneSuccess' ? (
+            <button onClick={onNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl">Next</button>
+          ) : (
+            <button onClick={()=>{ setHasStarted(false); setTurn(0); }} className="text-sm bg-white/10 px-3 py-1 rounded-2xl">Start Again</button>
+          )}
         </div>
 
         <div className="w-full max-w-xl">
