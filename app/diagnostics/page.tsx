@@ -32,6 +32,15 @@ export default function DiagnosticsPage() {
     } catch (e:any) { append('E2E failed: ' + (e?.message || 'error')) }
   }
 
+  async function sendTestEmail() {
+    append('→ /api/diagnostics/email')
+    try {
+      const res = await fetch('/api/diagnostics/email', { method: 'POST' })
+      const j = await res.json()
+      append(JSON.stringify(j, null, 2))
+    } catch (e:any) { append('Email test failed: ' + (e?.message || 'error')) }
+  }
+
   return (
     <main>
       <h2 className="text-lg font-semibold mb-3">Diagnostics</h2>
@@ -39,6 +48,7 @@ export default function DiagnosticsPage() {
         <button onClick={runHealth} className="bg-white/10 px-3 py-1 rounded-2xl">Run Health</button>
         <button onClick={runSmoke} className="bg-white/10 px-3 py-1 rounded-2xl">Run Smoke Test</button>
         <button onClick={runE2E} className="bg-white/10 px-3 py-1 rounded-2xl">Run End-to-End</button>
+        <button onClick={sendTestEmail} className="bg-white/10 px-3 py-1 rounded-2xl">Send Test Email</button>
       </div>
       <textarea value={log} readOnly className="w-full h-96 bg-black/30 p-2 rounded" />
     </main>
