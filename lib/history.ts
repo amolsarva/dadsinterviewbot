@@ -1,10 +1,21 @@
 import { list } from '@vercel/blob'
+import { getBlobToken } from './blob'
 
-type RawTurnBlob = { url: string; uploadedAt: string; name: string }
+type RawTurnBlob = { url: string; downloadUrl?: string; uploadedAt: string; name: string }
+
+type StoredArtifacts = {
+  manifest?: string | null
+  transcript_txt?: string | null
+  transcript_json?: string | null
+  session_manifest?: string | null
+  session_audio?: string | null
+}
 
 export type StoredTurn = {
   turn: number
   audio: string | null
+  assistantAudio: string | null
+  assistantAudioDurationMs: number
   manifest: string
   transcript: string
   assistantReply: string
@@ -20,14 +31,30 @@ export type StoredSession = {
   totalTurns: number
   totalDurationMs: number
   turns: StoredTurn[]
+  artifacts?: StoredArtifacts
 }
 
-type SessionEntry = StoredSession & { turnBlobs: RawTurnBlob[]; latestUploadedAt: string }
+type SessionEntry = StoredSession & {
+  turnBlobs: RawTurnBlob[]
+  latestUploadedAt: string
+  artifacts: StoredArtifacts
+}
 
 function ensureToken() {
-  const token = process.env.VERCEL_BLOB_READ_WRITE_TOKEN
-  if (!token) throw new Error('Missing VERCEL_BLOB_READ_WRITE_TOKEN')
+  const token = getBlobToken()
+  if (!token) throw new Error('Missing VERCEL_BLOB_READ_WRITE_TOKEN or BLOB_READ_WRITE_TOKEN')
   return token
+}
+
+function normalizeUploadedAt(uploadedAt: unknown): string {
+  if (!uploadedAt) return ''
+  if (typeof uploadedAt === 'string') return uploadedAt
+  if (uploadedAt instanceof Date) return uploadedAt.toISOString()
+  try {
+    return new Date(uploadedAt as string).toISOString()
+  } catch {
+    return String(uploadedAt)
+  }
 }
 
 async function enrich(entry: SessionEntry): Promise<StoredSession> {
@@ -37,7 +64,7 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
 
   for (const turn of entry.turnBlobs) {
     try {
-      const resp = await fetch(turn.url)
+      const resp = await fetch(turn.downloadUrl || turn.url)
       const json = await resp.json()
       const turnNumber = Number(json.turn) || turns.length + 1
       const created = json.createdAt || turn.uploadedAt || null
@@ -50,7 +77,9 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       turns.push({
         turn: turnNumber,
         audio: typeof json.userAudioUrl === 'string' ? json.userAudioUrl : null,
-        manifest: turn.url,
+        assistantAudio: typeof json.assistantAudioUrl === 'string' ? json.assistantAudioUrl : null,
+        assistantAudioDurationMs: Number(json.assistantAudioDurationMs) || 0,
+        manifest: turn.downloadUrl || turn.url,
         transcript: typeof json.transcript === 'string' ? json.transcript : '',
         assistantReply: typeof json.assistantReply === 'string' ? json.assistantReply : '',
         durationMs: duration,
@@ -75,6 +104,12 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       if (Number.isFinite(totalTurnsFromManifest)) {
         entry.totalTurns = totalTurnsFromManifest as number
       }
+      if (!entry.artifacts.transcript_txt && json?.artifacts?.transcript_txt) {
+        entry.artifacts.transcript_txt = json.artifacts.transcript_txt
+      }
+      if (!entry.artifacts.transcript_json && json?.artifacts?.transcript_json) {
+        entry.artifacts.transcript_json = json.artifacts.transcript_json
+      }
     } catch {
       // ignore manifest parse errors
     }
@@ -91,6 +126,13 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
     totalTurns: entry.totalTurns,
     totalDurationMs: entry.totalDurationMs,
     turns,
+    artifacts: {
+      manifest: entry.manifestUrl,
+      transcript_txt: entry.artifacts.transcript_txt ?? null,
+      transcript_json: entry.artifacts.transcript_json ?? null,
+      session_audio: entry.artifacts.session_audio ?? null,
+      session_manifest: entry.artifacts.session_manifest ?? null,
+    },
   }
 }
 
@@ -114,20 +156,37 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
         turns: [],
         turnBlobs: [],
         latestUploadedAt: '0',
+        artifacts: {},
       } as SessionEntry)
 
     if (/^turn-\d+\.json$/.test(name)) {
-      existing.turnBlobs.push({ url: blob.url, uploadedAt: blob.uploadedAt, name })
-      if (!existing.latestUploadedAt || blob.uploadedAt > existing.latestUploadedAt) {
-        existing.latestUploadedAt = blob.uploadedAt
+      const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
+      existing.turnBlobs.push({ url: blob.url, downloadUrl: blob.downloadUrl, uploadedAt, name })
+      if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
+        existing.latestUploadedAt = uploadedAt
       }
     }
 
     if (/^session-.+\.json$/.test(name)) {
-      existing.manifestUrl = blob.url
-      if (!existing.latestUploadedAt || blob.uploadedAt > existing.latestUploadedAt) {
-        existing.latestUploadedAt = blob.uploadedAt
+      const manifestUrl = blob.downloadUrl || blob.url
+      existing.manifestUrl = manifestUrl
+      existing.artifacts.session_manifest = manifestUrl
+      const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
+      if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
+        existing.latestUploadedAt = uploadedAt
       }
+    }
+
+    if (/^transcript-.+\.txt$/.test(name)) {
+      existing.artifacts.transcript_txt = blob.downloadUrl || blob.url
+    }
+
+    if (/^transcript-.+\.json$/.test(name)) {
+      existing.artifacts.transcript_json = blob.downloadUrl || blob.url
+    }
+
+    if (/^session-audio\./.test(name)) {
+      existing.artifacts.session_audio = blob.downloadUrl || blob.url
     }
 
     sessions.set(id, existing)

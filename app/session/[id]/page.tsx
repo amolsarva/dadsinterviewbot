@@ -26,8 +26,15 @@ export default async function SessionPage({ params }: { params: { id: string } }
       <div className="mt-4 flex flex-wrap gap-3 text-sm">
         {s.artifacts?.transcript_txt && <a className="underline" href={s.artifacts.transcript_txt}>Transcript (txt)</a>}
         {s.artifacts?.transcript_json && <a className="underline" href={s.artifacts.transcript_json}>Transcript (json)</a>}
-        {s.artifacts?.manifest && (
-          <a className="underline" href={s.artifacts.manifest}>Session manifest</a>
+        {(s.artifacts?.manifest || s.artifacts?.session_manifest) && (
+          <a className="underline" href={(s.artifacts.manifest || s.artifacts.session_manifest)!}>
+            Session manifest
+          </a>
+        )}
+        {s.artifacts?.session_audio && (
+          <a className="underline" href={s.artifacts.session_audio} target="_blank" rel="noreferrer">
+            Session audio
+          </a>
         )}
       </div>
     </main>
