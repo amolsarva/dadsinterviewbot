@@ -105,6 +105,38 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
 export async function listSessions(): Promise<Session[]> {
   return Array.from(mem.sessions.values()).sort((a,b)=> (a.created_at < b.created_at ? 1 : -1))
 }
+
+export function mergeSessionArtifacts(
+  id: string,
+  patch: {
+    artifacts?: Record<string, string | null | undefined>
+    totalTurns?: number
+    durationMs?: number
+    status?: Session['status']
+  },
+) {
+  const session = mem.sessions.get(id)
+  if (!session) return
+  if (patch.artifacts) {
+    const filteredEntries = Object.entries(patch.artifacts).filter(
+      ([, value]) => typeof value === 'string' && value.length > 0,
+    ) as [string, string][]
+    if (filteredEntries.length) {
+      session.artifacts = { ...(session.artifacts || {}), ...Object.fromEntries(filteredEntries) }
+    }
+  }
+  if (typeof patch.totalTurns === 'number' && Number.isFinite(patch.totalTurns)) {
+    session.total_turns = patch.totalTurns
+  }
+  if (typeof patch.durationMs === 'number' && Number.isFinite(patch.durationMs)) {
+    session.duration_ms = patch.durationMs
+  }
+  if (patch.status) {
+    session.status = patch.status
+  }
+  mem.sessions.set(id, session)
+}
+
 export async function getSession(id: string): Promise<Session | undefined> {
   const memSession = mem.sessions.get(id)
   if (memSession) return memSession
@@ -132,7 +164,17 @@ export async function getSession(id: string): Promise<Session | undefined> {
 
   const createdAt = stored.startedAt || stored.endedAt || new Date().toISOString()
   const artifacts: Record<string, string> = {}
-  if (stored.manifestUrl) artifacts.manifest = stored.manifestUrl
+  if (stored.artifacts?.manifest) {
+    artifacts.manifest = stored.artifacts.manifest
+  } else if (stored.manifestUrl) {
+    artifacts.manifest = stored.manifestUrl
+  }
+  if (stored.artifacts?.transcript_txt) {
+    artifacts.transcript_txt = stored.artifacts.transcript_txt
+  }
+  if (stored.artifacts?.transcript_json) {
+    artifacts.transcript_json = stored.artifacts.transcript_json
+  }
 
   return {
     id: stored.sessionId,

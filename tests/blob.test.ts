@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
   delete process.env.VERCEL_BLOB_READ_WRITE_TOKEN
+  delete process.env.BLOB_READ_WRITE_TOKEN
   vi.resetModules()
   vi.restoreAllMocks()
 })
 
 describe('putBlobFromBuffer', () => {
   it('uses public access when uploading with a token', async () => {
-    process.env.VERCEL_BLOB_READ_WRITE_TOKEN = 'test-token'
+    process.env.BLOB_READ_WRITE_TOKEN = 'test-token'
     const putSpy = vi.fn(async () => ({
       url: 'https://blob.test/resource',
       downloadUrl: 'https://blob.test/resource?download=1',

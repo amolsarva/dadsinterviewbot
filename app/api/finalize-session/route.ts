@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { list } from '@vercel/blob'
-import { putBlobFromBuffer } from '@/lib/blob'
+import { getBlobToken, putBlobFromBuffer } from '@/lib/blob'
 import { sendSummaryEmail } from '@/lib/email'
-import { getSession } from '@/lib/data'
+import { getSession, mergeSessionArtifacts } from '@/lib/data'
 import { z } from 'zod'
 
 type TurnSummary = {
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { sessionId, email } = schema.parse(body)
 
-    const token = process.env.VERCEL_BLOB_READ_WRITE_TOKEN
+    const token = getBlobToken()
     let turnBlobs: Awaited<ReturnType<typeof list>>['blobs'] = []
     if (token) {
       try {
@@ -149,20 +149,18 @@ export async function POST(req: NextRequest) {
       })),
     }
 
-    const transcriptTxtUrl = (
-      await putBlobFromBuffer(
-        `sessions/${sessionId}/transcript-${sessionId}.txt`,
-        Buffer.from(transcriptText, 'utf8'),
-        'text/plain; charset=utf-8'
-      )
-    ).url
-    const transcriptJsonUrl = (
-      await putBlobFromBuffer(
-        `sessions/${sessionId}/transcript-${sessionId}.json`,
-        Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
-        'application/json'
-      )
-    ).url
+    const transcriptTxtUpload = await putBlobFromBuffer(
+      `sessions/${sessionId}/transcript-${sessionId}.txt`,
+      Buffer.from(transcriptText, 'utf8'),
+      'text/plain; charset=utf-8'
+    )
+    const transcriptTxtUrl = transcriptTxtUpload.downloadUrl || transcriptTxtUpload.url
+    const transcriptJsonUpload = await putBlobFromBuffer(
+      `sessions/${sessionId}/transcript-${sessionId}.json`,
+      Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
+      'application/json'
+    )
+    const transcriptJsonUrl = transcriptJsonUpload.downloadUrl || transcriptJsonUpload.url
 
     const manifest = {
       sessionId,
@@ -186,14 +184,24 @@ export async function POST(req: NextRequest) {
       },
     }
 
-    const manifestUrl = (
-      await putBlobFromBuffer(
-        `sessions/${sessionId}/session-${sessionId}.json`,
-        Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
-        'application/json',
-        { access: 'public' }
-      )
-    ).url
+    const manifestUpload = await putBlobFromBuffer(
+      `sessions/${sessionId}/session-${sessionId}.json`,
+      Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
+      'application/json',
+      { access: 'public' }
+    )
+    const manifestUrl = manifestUpload.downloadUrl || manifestUpload.url
+
+    mergeSessionArtifacts(sessionId, {
+      artifacts: {
+        manifest: manifestUrl,
+        transcript_txt: transcriptTxtUrl,
+        transcript_json: transcriptJsonUrl,
+      },
+      totalTurns: turns.length,
+      durationMs: totalDuration,
+      status: 'completed',
+    })
 
     let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { skipped: true }
     emailStatus = { skipped: true }
@@ -223,6 +231,14 @@ export async function POST(req: NextRequest) {
       } catch (e: any) {
         emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
       }
+    }
+
+    if ('ok' in emailStatus && emailStatus.ok) {
+      mergeSessionArtifacts(sessionId, { status: 'emailed' })
+    } else if ('skipped' in emailStatus && emailStatus.skipped) {
+      mergeSessionArtifacts(sessionId, { status: 'completed' })
+    } else {
+      mergeSessionArtifacts(sessionId, { status: 'error' })
     }
 
     return NextResponse.json({
