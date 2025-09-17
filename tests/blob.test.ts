@@ -7,21 +7,28 @@ afterEach(() => {
 })
 
 describe('putBlobFromBuffer', () => {
-  it('uses private access when uploading with a token', async () => {
+  it('uses public access when uploading with a token', async () => {
     process.env.VERCEL_BLOB_READ_WRITE_TOKEN = 'test-token'
-    const putSpy = vi.fn(async () => ({ url: 'https://blob.test/resource' }))
+    const putSpy = vi.fn(async () => ({
+      url: 'https://blob.test/resource',
+      downloadUrl: 'https://blob.test/resource?download=1',
+    }))
     vi.doMock('@vercel/blob', () => ({
       put: putSpy,
       list: vi.fn(),
     }))
     const { putBlobFromBuffer } = await import('../lib/blob')
-    await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
+    const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
     expect(putSpy).toHaveBeenCalledWith(
       'path/file.txt',
       expect.any(Buffer),
-      expect.objectContaining({ access: 'private', token: 'test-token', contentType: 'text/plain' })
+      expect.objectContaining({ access: 'public', token: 'test-token', contentType: 'text/plain' })
     )
+    expect(result).toEqual({
+      url: 'https://blob.test/resource',
+      downloadUrl: 'https://blob.test/resource?download=1',
+    })
   })
 
   it('falls back to a data URL when no token is available', async () => {
