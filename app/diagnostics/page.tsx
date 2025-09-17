@@ -7,9 +7,9 @@ type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: strin
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
-  smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
-  e2e: { label: 'End-to-end test', path: '/api/diagnostics/e2e', method: 'POST' },
-  email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
+  smoke: { label: 'Smoke test', path: '/diag-api/smoke', method: 'POST' },
+  e2e: { label: 'End-to-end test', path: '/diag-api/e2e', method: 'POST' },
+  email: { label: 'Email test', path: '/diag-api/email', method: 'POST' },
 }
 
 const TEST_ORDER: TestKey[] = ['health', 'smoke', 'e2e', 'email']
