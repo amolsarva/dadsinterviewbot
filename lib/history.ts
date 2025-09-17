@@ -30,6 +30,17 @@ function ensureToken() {
   return token
 }
 
+function normalizeUploadedAt(uploadedAt: unknown): string {
+  if (!uploadedAt) return ''
+  if (typeof uploadedAt === 'string') return uploadedAt
+  if (uploadedAt instanceof Date) return uploadedAt.toISOString()
+  try {
+    return new Date(uploadedAt as string).toISOString()
+  } catch {
+    return String(uploadedAt)
+  }
+}
+
 async function enrich(entry: SessionEntry): Promise<StoredSession> {
   entry.turnBlobs.sort((a, b) => a.name.localeCompare(b.name))
   const turns: StoredTurn[] = []
@@ -117,16 +128,18 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
       } as SessionEntry)
 
     if (/^turn-\d+\.json$/.test(name)) {
-      existing.turnBlobs.push({ url: blob.url, uploadedAt: blob.uploadedAt, name })
-      if (!existing.latestUploadedAt || blob.uploadedAt > existing.latestUploadedAt) {
-        existing.latestUploadedAt = blob.uploadedAt
+      const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
+      existing.turnBlobs.push({ url: blob.url, uploadedAt, name })
+      if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
+        existing.latestUploadedAt = uploadedAt
       }
     }
 
     if (/^session-.+\.json$/.test(name)) {
       existing.manifestUrl = blob.url
-      if (!existing.latestUploadedAt || blob.uploadedAt > existing.latestUploadedAt) {
-        existing.latestUploadedAt = blob.uploadedAt
+      const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
+      if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
+        existing.latestUploadedAt = uploadedAt
       }
     }
 
