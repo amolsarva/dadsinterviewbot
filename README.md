@@ -2,6 +2,9 @@
 
 This folder is ready to drop into your existing repo and push.
 
+## Interview Guide Prompt
+- Use [`docs/interview-guide.md`](docs/interview-guide.md) as the canonical prompt when preparing the bot (or yourself) to run long-form elder interviews. It follows Elizabeth Keating’s *The Essential Questions* structure so you can practice before wiring it into the app.
+
 ## Zero-config
 - No env vars required. App runs in **demo mode**.
 - Artifacts are data URLs (visible in History/Session). Email is skipped gracefully.
