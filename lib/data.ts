@@ -1,5 +1,6 @@
 import { putBlobFromBuffer } from './blob'
 import { sendSummaryEmail } from './email'
+import { fetchStoredSession } from './history'
 
 type Session = {
   id: string
@@ -66,8 +67,8 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
   const txtBuf = Buffer.from(txt, 'utf8')
   const jsonBuf = Buffer.from(JSON.stringify(jsonObj, null, 2), 'utf8')
 
-  const txtBlob = await putBlobFromBuffer(`transcripts/${s.id}.txt`, txtBuf, 'text/plain; charset=utf-8')
-  const jsonBlob = await putBlobFromBuffer(`transcripts/${s.id}.json`, jsonBuf, 'application/json')
+  const txtBlob = await putBlobFromBuffer(`transcripts/${s.id}.txt`, txtBuf, 'text/plain; charset=utf-8', { access: 'public' })
+  const jsonBlob = await putBlobFromBuffer(`transcripts/${s.id}.json`, jsonBuf, 'application/json', { access: 'public' })
 
   s.artifacts = { transcript_txt: txtBlob.url, transcript_json: jsonBlob.url }
   s.total_turns = turns.length
@@ -104,4 +105,43 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
 export async function listSessions(): Promise<Session[]> {
   return Array.from(mem.sessions.values()).sort((a,b)=> (a.created_at < b.created_at ? 1 : -1))
 }
-export async function getSession(id: string): Promise<Session | undefined> { return mem.sessions.get(id) }
+export async function getSession(id: string): Promise<Session | undefined> {
+  const memSession = mem.sessions.get(id)
+  if (memSession) return memSession
+
+  const stored = await fetchStoredSession(id)
+  if (!stored) return undefined
+
+  const turns: Turn[] = []
+  for (const entry of stored.turns.sort((a, b) => a.turn - b.turn)) {
+    const pad = String(entry.turn).padStart(4, '0')
+    turns.push({
+      id: `user-${pad}`,
+      role: 'user',
+      text: entry.transcript || '',
+      audio_blob_url: entry.audio || undefined,
+    })
+    if (entry.assistantReply) {
+      turns.push({
+        id: `assistant-${pad}`,
+        role: 'assistant',
+        text: entry.assistantReply,
+      })
+    }
+  }
+
+  const createdAt = stored.startedAt || stored.endedAt || new Date().toISOString()
+  const artifacts: Record<string, string> = {}
+  if (stored.manifestUrl) artifacts.manifest = stored.manifestUrl
+
+  return {
+    id: stored.sessionId,
+    created_at: createdAt,
+    email_to: '',
+    status: 'completed',
+    duration_ms: stored.totalDurationMs,
+    total_turns: turns.length,
+    artifacts: Object.keys(artifacts).length ? artifacts : undefined,
+    turns,
+  }
+}

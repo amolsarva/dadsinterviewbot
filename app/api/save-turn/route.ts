@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     const audioPath = `sessions/${parsed.sessionId}/user-${pad}.${extGuess}`
     const manifestPath = `sessions/${parsed.sessionId}/turn-${pad}.json`
 
-    const userAudio = await putBlobFromBuffer(audioPath, buffer, mime)
+    const userAudio = await putBlobFromBuffer(audioPath, buffer, mime, { access: 'public' })
     const manifestBody = {
       sessionId: parsed.sessionId,
       turn: turnNumber,
@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
     const manifest = await putBlobFromBuffer(
       manifestPath,
       Buffer.from(JSON.stringify(manifestBody, null, 2), 'utf8'),
-      'application/json'
+      'application/json',
+      { access: 'public' }
     )
 
     return NextResponse.json({ ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url })

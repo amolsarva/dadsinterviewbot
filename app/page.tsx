@@ -143,7 +143,12 @@ export default function Home() {
         inTurnRef.current = false
         if (shouldEnd) finalizeNow()
       }
-      try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(u) } catch {}
+      try {
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+        // TODO(later): offer an opt-in flag here that pipes the assistant response through
+        // the OpenAI NeuralHD voices for higher fidelity playback once the backend wiring is ready.
+      } catch {}
       m.pushLog('Assistant reply ready → playing')
     } catch (e) {
       m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
@@ -160,7 +165,10 @@ export default function Home() {
       try {
         const u = new SpeechSynthesisUtterance(OPENING)
         u.rate = 1; u.pitch = 1
-        window.speechSynthesis.cancel(); window.speechSynthesis.speak(u)
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+        // REMINDER: consider progressive playback (streaming audio chunks) so the UI stays responsive
+        // when we switch to OpenAI-powered TTS.
         m.pushLog('Assistant reply ready → playing')
       } catch {}
       return

@@ -26,6 +26,7 @@ export default function App(){
   function speak(text, onend){
     const u = new SpeechSynthesisUtterance(text); u.rate=1; u.pitch=1; u.onend=onend
     window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); setState('assistant:speaking')
+    // TODO(later): reuse the OpenAI speech helper here once we have a node-side relay endpoint.
   }
 
   async function runUserTurn(){
@@ -63,6 +64,7 @@ export default function App(){
   async function finalizeSession(){
     try{
       window.speechSynthesis.cancel(); setState('assistant:thinking')
+      // REMINDER: capture latency metrics so we can compare browser TTS vs OpenAI Neural voices.
       const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
       const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
       setState('idle'); const sent = j.emailStatus && (j.emailStatus.ok || j.emailStatus.skipped)

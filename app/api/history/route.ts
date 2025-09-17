@@ -1,13 +1,39 @@
 import { NextResponse } from 'next/server'
 import { listSessions } from '@/lib/data'
+import { fetchStoredSessions } from '@/lib/history'
 
 export async function GET() {
   const items = await listSessions()
   const rows = items.map(s => ({
-    id: s.id, created_at: s.created_at, title: s.title || null,
-    status: s.status, total_turns: s.total_turns,
-    artifacts: { transcript_txt: Boolean(s.artifacts?.transcript_txt), transcript_json: Boolean(s.artifacts?.transcript_json) }
+    id: s.id,
+    created_at: s.created_at,
+    title: s.title || null,
+    status: s.status,
+    total_turns: s.total_turns,
+    artifacts: {
+      transcript_txt: Boolean(s.artifacts?.transcript_txt),
+      transcript_json: Boolean(s.artifacts?.transcript_json),
+    },
+    manifestUrl: s.artifacts?.manifest || null,
+    firstAudioUrl: s.turns?.find(t => t.audio_blob_url)?.audio_blob_url || null,
   }))
+
+  const { items: stored } = await fetchStoredSessions({ limit: 50 })
+  for (const session of stored) {
+    if (rows.some(r => r.id === session.sessionId)) continue
+    rows.push({
+      id: session.sessionId,
+      created_at: session.startedAt || session.endedAt || new Date().toISOString(),
+      title: null,
+      status: 'completed',
+      total_turns: session.totalTurns,
+      artifacts: { transcript_txt: false, transcript_json: Boolean(session.manifestUrl) },
+      manifestUrl: session.manifestUrl,
+      firstAudioUrl: session.turns.find(t => Boolean(t.audio))?.audio || null,
+    })
+  }
+
+  rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   // DEMO: merge client-stored demoHistory (if any) as minimal entries
   let demo: any[] = []
   try {

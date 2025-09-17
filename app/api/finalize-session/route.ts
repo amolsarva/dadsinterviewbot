@@ -80,7 +80,8 @@ export async function POST(req: NextRequest) {
       await putBlobFromBuffer(
         `sessions/${sessionId}/session-${sessionId}.json`,
         Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
-        'application/json'
+        'application/json',
+        { access: 'public' }
       )
     ).url
 

@@ -1,7 +1,16 @@
 "use client"
 import { useEffect, useState } from 'react'
 
-type Row = { id: string, created_at: string, title: string|null, status: string, total_turns: number, artifacts: { transcript_txt: boolean, transcript_json: boolean } }
+type Row = {
+  id: string
+  created_at: string
+  title: string | null
+  status: string
+  total_turns: number
+  artifacts: { transcript_txt: boolean; transcript_json: boolean }
+  manifestUrl?: string | null
+  firstAudioUrl?: string | null
+}
 
 export default function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([])
@@ -45,8 +54,18 @@ export default function HistoryPage() {
                   <div className="text-xs opacity-70">{new Date(s.created_at).toLocaleString()}</div>
                   <div className="text-xs opacity-70">Turns: {s.total_turns} • Status: {s.status}</div>
                 </div>
-                <div className="space-x-2 text-sm">
+                <div className="flex flex-wrap gap-2 text-sm">
                   <a className="underline" href={`/session/${s.id}`}>Open</a>
+                  {s.manifestUrl && (
+                    <a className="underline" href={s.manifestUrl} target="_blank" rel="noreferrer">
+                      Session manifest
+                    </a>
+                  )}
+                  {s.firstAudioUrl && (
+                    <a className="underline" href={s.firstAudioUrl} target="_blank" rel="noreferrer">
+                      First turn audio
+                    </a>
+                  )}
                   {s.artifacts?.transcript_txt && <a className="underline" href="#">Transcript (txt)</a>}
                   {s.artifacts?.transcript_json && <a className="underline" href="#">Transcript (json)</a>}
                 </div>
