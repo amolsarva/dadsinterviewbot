@@ -7,7 +7,7 @@ type Row = {
   title: string | null
   status: string
   total_turns: number
-  artifacts: { transcript_txt: boolean; transcript_json: boolean }
+  artifacts: { transcript_txt?: string | null; transcript_json?: string | null }
   manifestUrl?: string | null
   firstAudioUrl?: string | null
 }
@@ -25,7 +25,7 @@ export default function HistoryPage() {
           const raw = localStorage.getItem('demoHistory')
           if (raw) {
             const list = JSON.parse(raw) as { id:string, created_at:string }[]
-            demoRows = list.map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{ transcript_txt:false, transcript_json:false } }))
+            demoRows = list.map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{} }))
           }
         } catch {}
         setRows([...(demoRows||[]), ...(serverRows||[])])
@@ -66,8 +66,16 @@ export default function HistoryPage() {
                       First turn audio
                     </a>
                   )}
-                  {s.artifacts?.transcript_txt && <a className="underline" href="#">Transcript (txt)</a>}
-                  {s.artifacts?.transcript_json && <a className="underline" href="#">Transcript (json)</a>}
+                  {s.artifacts?.transcript_txt && (
+                    <a className="underline" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
+                      Transcript (txt)
+                    </a>
+                  )}
+                  {s.artifacts?.transcript_json && (
+                    <a className="underline" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
+                      Transcript (json)
+                    </a>
+                  )}
                 </div>
               </div>
             </li>

@@ -1,5 +1,9 @@
 import { put, list } from '@vercel/blob'
 
+export function getBlobToken() {
+  return process.env.VERCEL_BLOB_READ_WRITE_TOKEN || process.env.BLOB_READ_WRITE_TOKEN
+}
+
 export async function putBlobFromBuffer(
   path: string,
   buf: Buffer,
@@ -11,12 +15,13 @@ export async function putBlobFromBuffer(
   } = {}
 ) {
   const access = options.access ?? 'public'
-  if (!process.env.VERCEL_BLOB_READ_WRITE_TOKEN) {
+  const token = getBlobToken()
+  if (!token) {
     return { url: `data:${contentType};base64,` + buf.toString('base64') }
   }
   const res = await put(path, buf, {
     access,
-    token: process.env.VERCEL_BLOB_READ_WRITE_TOKEN,
+    token,
     contentType,
     addRandomSuffix: options.addRandomSuffix,
     cacheControlMaxAge: options.cacheControlMaxAge,
@@ -26,8 +31,9 @@ export async function putBlobFromBuffer(
 
 export async function blobHealth() {
   try {
-    if (!process.env.VERCEL_BLOB_READ_WRITE_TOKEN) return { ok: false, reason: 'no token' }
-    await list({ token: process.env.VERCEL_BLOB_READ_WRITE_TOKEN })
+    const token = getBlobToken()
+    if (!token) return { ok: false, reason: 'no token' }
+    await list({ token })
     return { ok: true }
   } catch (e:any) {
     return { ok: false, reason: e?.message || 'error' }
