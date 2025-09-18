@@ -13,10 +13,7 @@ Add E2E tests for first-turn flow, finalize, and history listing
 Integrate OpenAI Realtime Voice (WS client, server token endpoint, TTS backoff)
 Add interactive voice barge-in, VAD, and interruptible TTS playback
 Offer selectable providers (OpenAI/Google) for STT+LLM, runtime switch in UI
-<<<<<<< ours
 Document interview flow expectations inside the product and keep [`docs/interview-guide.md`](docs/interview-guide.md) handy when training the agent.
-=======
 
 - [ ] Prototype the OpenAI Neural/NeuralHD TTS integration using the helper in `lib/openaiTts.ts`, then replace the browser SpeechSynthesis fallback once streaming playback + latency checks look good.
 - [ ] Add a UI toggle that lets users choose between native browser TTS and OpenAI voices (remember offline fallback + quota exhaustion case).
->>>>>>> theirs

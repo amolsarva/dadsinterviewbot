@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearFoxes, listFoxes } from '../lib/foxes'
 
 const putBlobMock = vi.fn(async (path: string, _buf: Buffer, _type: string, _options?: unknown) => ({
   url: `https://blob.test/${path}`,
@@ -17,6 +18,7 @@ describe('finalizeSession', () => {
     vi.resetModules()
     putBlobMock.mockClear()
     sendEmailMock.mockReset()
+    clearFoxes()
   })
 
   it('reports success when email provider succeeds', async () => {
@@ -59,5 +61,23 @@ describe('finalizeSession', () => {
     expect(result.emailStatus).toEqual({ ok: false, provider: 'resend', error: 'bad' })
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('error')
+    const foxes = listFoxes()
+    expect(foxes.some((fox) => fox.id === 'theory-4-email-status-error')).toBe(true)
+  })
+
+  it('persists session audio artifacts when provided', async () => {
+    const data = await import('../lib/data')
+    sendEmailMock.mockResolvedValue({ skipped: true })
+    const session = await data.createSession({ email_to: 'user@example.com' })
+
+    await data.appendTurn(session.id, { role: 'assistant', text: 'hello again' })
+
+    await data.finalizeSession(session.id, {
+      clientDurationMs: 1234,
+      sessionAudioUrl: 'https://blob.test/sessions/123/session-audio.webm',
+    })
+
+    const stored = await data.getSession(session.id)
+    expect(stored?.artifacts?.session_audio).toBe('https://blob.test/sessions/123/session-audio.webm')
   })
 })
