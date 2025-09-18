@@ -110,6 +110,12 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       if (!entry.artifacts.transcript_json && json?.artifacts?.transcript_json) {
         entry.artifacts.transcript_json = json.artifacts.transcript_json
       }
+      if (!entry.artifacts.session_audio && json?.artifacts?.session_audio) {
+        entry.artifacts.session_audio = json.artifacts.session_audio
+      }
+      if (!entry.artifacts.session_manifest && json?.artifacts?.session_manifest) {
+        entry.artifacts.session_manifest = json.artifacts.session_manifest
+      }
     } catch {
       // ignore manifest parse errors
     }
@@ -131,7 +137,7 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       transcript_txt: entry.artifacts.transcript_txt ?? null,
       transcript_json: entry.artifacts.transcript_json ?? null,
       session_audio: entry.artifacts.session_audio ?? null,
-      session_manifest: entry.artifacts.session_manifest ?? null,
+      session_manifest: entry.artifacts.session_manifest ?? entry.manifestUrl ?? null,
     },
   }
 }

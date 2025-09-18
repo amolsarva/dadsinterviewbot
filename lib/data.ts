@@ -13,6 +13,7 @@ export type Session = {
   artifacts?: Record<string, string>
   turns?: Turn[]
 }
+
 export type Turn = {
   id: string
   role: 'user' | 'assistant'

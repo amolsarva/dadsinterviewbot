@@ -39,13 +39,13 @@ export async function POST(req: NextRequest) {
     const token = getBlobToken()
     let turnBlobs: Awaited<ReturnType<typeof listBlobs>>['blobs'] = []
     let manifestListFailed = false
-    try {
-      const prefix = `sessions/${sessionId}/`
-      const listed = await listBlobs({ prefix, limit: 2000 })
-      turnBlobs = listed.blobs.filter((b) => /turn-\d+\.json$/.test(b.pathname))
-      turnBlobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
-    } catch (err) {
-      if (token) {
+    if (token) {
+      try {
+        const prefix = `sessions/${sessionId}/`
+        const listed = await listBlobs({ prefix, limit: 2000 })
+        turnBlobs = listed.blobs.filter((b) => /turn-\d+\.json$/.test(b.pathname))
+        turnBlobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
+      } catch (err) {
         console.warn('Failed to list blob turns', err)
         manifestListFailed = true
       }
@@ -217,13 +217,13 @@ export async function POST(req: NextRequest) {
     const transcriptTxtUpload = await putBlobFromBuffer(
       `sessions/${sessionId}/transcript-${sessionId}.txt`,
       Buffer.from(transcriptText, 'utf8'),
-      'text/plain; charset=utf-8'
+      'text/plain; charset=utf-8',
     )
     const transcriptTxtUrl = transcriptTxtUpload.downloadUrl || transcriptTxtUpload.url
     const transcriptJsonUpload = await putBlobFromBuffer(
       `sessions/${sessionId}/transcript-${sessionId}.json`,
       Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
-      'application/json'
+      'application/json',
     )
     const transcriptJsonUrl = transcriptJsonUpload.downloadUrl || transcriptJsonUpload.url
 
@@ -258,7 +258,7 @@ export async function POST(req: NextRequest) {
       `sessions/${sessionId}/session-${sessionId}.json`,
       Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
       'application/json',
-      { access: 'public' }
+      { access: 'public' },
     )
     const manifestUrl = manifestUpload.downloadUrl || manifestUpload.url
     manifest.artifacts.session_manifest = manifestUrl

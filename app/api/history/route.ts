@@ -33,11 +33,18 @@ export async function GET() {
       artifacts: {
         transcript_txt: session.artifacts?.transcript_txt || null,
         transcript_json: session.artifacts?.transcript_json || null,
-        session_manifest: session.artifacts?.session_manifest || session.artifacts?.manifest || session.manifestUrl || null,
+        session_manifest:
+          session.artifacts?.session_manifest ||
+          session.artifacts?.manifest ||
+          session.manifestUrl ||
+          null,
         session_audio: session.artifacts?.session_audio || null,
       },
       manifestUrl:
-        session.artifacts?.session_manifest || session.artifacts?.manifest || session.manifestUrl || null,
+        session.artifacts?.session_manifest ||
+        session.artifacts?.manifest ||
+        session.manifestUrl ||
+        null,
       firstAudioUrl: session.turns.find(t => Boolean(t.audio))?.audio || null,
       sessionAudioUrl: session.artifacts?.session_audio || null,
     })

@@ -16,11 +16,14 @@ type MemoryBlobRecord = {
 }
 
 const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
+const TOKEN_FLAG_KEY = '__dads_interview_blob_token_flagged__'
+
 const globalAny = globalThis as any
-const tokenFlagKey = '__dads_interview_blob_token_flagged__'
+
 if (!globalAny[GLOBAL_STORE_KEY]) {
   globalAny[GLOBAL_STORE_KEY] = new Map<string, MemoryBlobRecord>()
 }
+
 const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
 
 function buildInlineDataUrl(contentType: string, buffer: Buffer): string {
@@ -31,8 +34,8 @@ function buildInlineDataUrl(contentType: string, buffer: Buffer): string {
 
 export function getBlobToken() {
   const token = process.env.VERCEL_BLOB_READ_WRITE_TOKEN || process.env.BLOB_READ_WRITE_TOKEN
-  if (!token && !globalAny[tokenFlagKey]) {
-    globalAny[tokenFlagKey] = true
+  if (!token && !globalAny[TOKEN_FLAG_KEY]) {
+    globalAny[TOKEN_FLAG_KEY] = true
     flagFox({
       id: 'theory-2-blob-token-missing',
       theory: 2,
