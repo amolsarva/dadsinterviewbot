@@ -7,8 +7,10 @@ type StoredArtifacts = {
   manifest?: string | null
   transcript_txt?: string | null
   transcript_json?: string | null
+
   session_manifest?: string | null
   session_audio?: string | null
+
 }
 
 export type StoredTurn = {
@@ -77,8 +79,10 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       turns.push({
         turn: turnNumber,
         audio: typeof json.userAudioUrl === 'string' ? json.userAudioUrl : null,
+
         assistantAudio: typeof json.assistantAudioUrl === 'string' ? json.assistantAudioUrl : null,
         assistantAudioDurationMs: Number(json.assistantAudioDurationMs) || 0,
+
         manifest: turn.downloadUrl || turn.url,
         transcript: typeof json.transcript === 'string' ? json.transcript : '',
         assistantReply: typeof json.assistantReply === 'string' ? json.assistantReply : '',
@@ -110,12 +114,14 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       if (!entry.artifacts.transcript_json && json?.artifacts?.transcript_json) {
         entry.artifacts.transcript_json = json.artifacts.transcript_json
       }
+
       if (!entry.artifacts.session_audio && json?.artifacts?.session_audio) {
         entry.artifacts.session_audio = json.artifacts.session_audio
       }
       if (!entry.artifacts.session_manifest && json?.artifacts?.session_manifest) {
         entry.artifacts.session_manifest = json.artifacts.session_manifest
       }
+
     } catch {
       // ignore manifest parse errors
     }
@@ -136,8 +142,10 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       manifest: entry.manifestUrl,
       transcript_txt: entry.artifacts.transcript_txt ?? null,
       transcript_json: entry.artifacts.transcript_json ?? null,
+
       session_audio: entry.artifacts.session_audio ?? null,
       session_manifest: entry.artifacts.session_manifest ?? entry.manifestUrl ?? null,
+
     },
   }
 }
@@ -174,9 +182,11 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
     }
 
     if (/^session-.+\.json$/.test(name)) {
+
       const manifestUrl = blob.downloadUrl || blob.url
       existing.manifestUrl = manifestUrl
       existing.artifacts.session_manifest = manifestUrl
+
       const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
       if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
         existing.latestUploadedAt = uploadedAt
@@ -191,9 +201,11 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
       existing.artifacts.transcript_json = blob.downloadUrl || blob.url
     }
 
+
     if (/^session-audio\./.test(name)) {
       existing.artifacts.session_audio = blob.downloadUrl || blob.url
     }
+
 
     sessions.set(id, existing)
   }

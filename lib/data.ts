@@ -327,6 +327,39 @@ export async function listSessions(): Promise<Session[]> {
   return Array.from(seen.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
 }
 
+
+export function mergeSessionArtifacts(
+  id: string,
+  patch: {
+    artifacts?: Record<string, string | null | undefined>
+    totalTurns?: number
+    durationMs?: number
+    status?: Session['status']
+  },
+) {
+  const session = mem.sessions.get(id)
+  if (!session) return
+  if (patch.artifacts) {
+    const filteredEntries = Object.entries(patch.artifacts).filter(
+      ([, value]) => typeof value === 'string' && value.length > 0,
+    ) as [string, string][]
+    if (filteredEntries.length) {
+      session.artifacts = { ...(session.artifacts || {}), ...Object.fromEntries(filteredEntries) }
+    }
+  }
+  if (typeof patch.totalTurns === 'number' && Number.isFinite(patch.totalTurns)) {
+    session.total_turns = patch.totalTurns
+  }
+  if (typeof patch.durationMs === 'number' && Number.isFinite(patch.durationMs)) {
+    session.duration_ms = patch.durationMs
+  }
+  if (patch.status) {
+    session.status = patch.status
+  }
+  mem.sessions.set(id, session)
+}
+
+
 export async function getSession(id: string): Promise<Session | undefined> {
   const inMemory = mem.sessions.get(id)
   if (inMemory) return inMemory
@@ -434,9 +467,11 @@ export function buildSessionFromManifest(
     }
   }
 
+
   const totals = typeof data.totals === 'object' && data.totals ? (data.totals as any) : {}
   const totalTurns = Number(totals.turns) || highestTurnNumber || Math.ceil(turns.length / 2)
   const durationMs = Number(totals.durationMs) || 0
+
 
   const session: RememberedSession = {
     id: sessionId,

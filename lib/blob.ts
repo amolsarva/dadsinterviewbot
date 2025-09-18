@@ -56,6 +56,10 @@ export function clearFallbackBlobs() {
   memoryStore.clear()
 }
 
+export function getBlobToken() {
+  return process.env.VERCEL_BLOB_READ_WRITE_TOKEN || process.env.BLOB_READ_WRITE_TOKEN
+}
+
 export async function putBlobFromBuffer(
   path: string,
   buf: Buffer,
@@ -64,6 +68,7 @@ export async function putBlobFromBuffer(
 ) {
   const access = options.access ?? 'public'
   const token = getBlobToken()
+
 
   if (!token) {
     const bufferCopy = Buffer.from(buf)
@@ -80,6 +85,7 @@ export async function putBlobFromBuffer(
       url: dataUrl,
       downloadUrl: dataUrl,
     }
+
   }
 
   const result = await put(path, buf, {
@@ -132,9 +138,11 @@ export async function blobHealth() {
   }
 
   try {
+
     await vercelList({ limit: 1, token })
     return { ok: true, mode: 'vercel' }
   } catch (e: any) {
+
     return { ok: false, reason: e?.message || 'error' }
   }
 }

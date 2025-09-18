@@ -7,12 +7,14 @@ type Row = {
   title: string | null
   status: string
   total_turns: number
+
   artifacts: {
     transcript_txt?: string | null
     transcript_json?: string | null
     session_manifest?: string | null
     session_audio?: string | null
   }
+
   manifestUrl?: string | null
   firstAudioUrl?: string | null
   sessionAudioUrl?: string | null
@@ -72,6 +74,7 @@ export default function HistoryPage() {
                     <a className="underline" href={`/session/${s.id}`}>
                       Open
                     </a>
+
                     {(s.manifestUrl || s.artifacts?.session_manifest) && (
                       <a
                         className="underline"
@@ -108,6 +111,7 @@ export default function HistoryPage() {
                       </a>
                     )}
                   </div>
+
                 </div>
               </div>
             </li>

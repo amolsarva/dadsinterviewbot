@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+
 import { getBlobToken, listBlobs, putBlobFromBuffer } from '@/lib/blob'
 import { sendSummaryEmail } from '@/lib/email'
 import { getSession, mergeSessionArtifacts, rememberSessionManifest } from '@/lib/data'
 import { flagFox, listFoxes } from '@/lib/foxes'
+
 import { z } from 'zod'
 
 function summarizeLink(value: string | null | undefined, label: string, missing = 'unavailable') {
@@ -37,8 +39,10 @@ export async function POST(req: NextRequest) {
     const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs } = schema.parse(body)
 
     const token = getBlobToken()
+
     let turnBlobs: Awaited<ReturnType<typeof listBlobs>>['blobs'] = []
     let manifestListFailed = false
+
     if (token) {
       try {
         const prefix = `sessions/${sessionId}/`
@@ -217,13 +221,17 @@ export async function POST(req: NextRequest) {
     const transcriptTxtUpload = await putBlobFromBuffer(
       `sessions/${sessionId}/transcript-${sessionId}.txt`,
       Buffer.from(transcriptText, 'utf8'),
+
       'text/plain; charset=utf-8',
+
     )
     const transcriptTxtUrl = transcriptTxtUpload.downloadUrl || transcriptTxtUpload.url
     const transcriptJsonUpload = await putBlobFromBuffer(
       `sessions/${sessionId}/transcript-${sessionId}.json`,
       Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
+
       'application/json',
+
     )
     const transcriptJsonUrl = transcriptJsonUpload.downloadUrl || transcriptJsonUpload.url
 
@@ -258,6 +266,7 @@ export async function POST(req: NextRequest) {
       `sessions/${sessionId}/session-${sessionId}.json`,
       Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
       'application/json',
+
       { access: 'public' },
     )
     const manifestUrl = manifestUpload.downloadUrl || manifestUpload.url
@@ -289,6 +298,7 @@ export async function POST(req: NextRequest) {
       },
       totalTurns: turns.length,
       durationMs: sessionAudioDurationMs ?? totalDuration,
+
       status: 'completed',
     })
 
@@ -348,6 +358,7 @@ export async function POST(req: NextRequest) {
       mergeSessionArtifacts(sessionId, { status: 'completed' })
     } else {
       mergeSessionArtifacts(sessionId, { status: 'error' })
+
       flagFox({
         id: 'theory-4-email-status-error-api',
         theory: 4,
@@ -365,6 +376,7 @@ export async function POST(req: NextRequest) {
         message: 'Session audio uploaded as inline data URL.',
         details: { sessionId },
       })
+
     }
 
     return NextResponse.json({
