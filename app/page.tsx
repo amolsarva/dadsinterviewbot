@@ -18,12 +18,18 @@ export default function Home() {
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
   const [disabledNext, setDisabledNext] = useState(false)
+  const [finishRequested, setFinishRequested] = useState(false)
   const inTurnRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
   const sessionAudioUrlRef = useRef<string | null>(null)
   const sessionAudioDurationRef = useRef<number>(0)
+  const finishRequestedRef = useRef(false)
 
-  const MAX_TURNS = 1
+  const MAX_TURNS = Number.POSITIVE_INFINITY
+
+  useEffect(() => {
+    finishRequestedRef.current = finishRequested
+  }, [finishRequested])
 
   useEffect(() => {
     try {
@@ -283,6 +289,8 @@ export default function Home() {
     } catch {
       m.pushLog('Finalize failed')
     } finally {
+      finishRequestedRef.current = false
+      setFinishRequested(false)
       setDisabledNext(false)
     }
   }, [m, sessionId])
@@ -325,7 +333,8 @@ export default function Home() {
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
-      const endRegex = /(i[' ]?m done|stop for now|that's all|i'm finished|we're done|let's stop)/i
+      const endRegex =
+        /(i[' ]?m done|i am done|stop for now|that's all|i[' ]?m finished|i am finished|we're done|let's stop|lets stop|all done|that's it|im done now|i[' ]?m good|i am done now)/i
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
       try {
@@ -377,7 +386,8 @@ export default function Home() {
 
       m.pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
-      const shouldEnd = endIntent || reachedMax || (transcript && endRegex.test(transcript))
+      const shouldEnd =
+        finishRequestedRef.current || endIntent || reachedMax || (transcript && endRegex.test(transcript))
       inTurnRef.current = false
 
       if (shouldEnd) {
@@ -394,6 +404,8 @@ export default function Home() {
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
+    setFinishRequested(false)
+    finishRequestedRef.current = false
     setHasStarted(true)
     setDisabledNext(true)
     try {
@@ -410,6 +422,17 @@ export default function Home() {
     }
   }, [ensureSessionRecorder, hasStarted, m, playAssistantResponse, playWithSpeechSynthesis])
 
+  const requestFinish = useCallback(async () => {
+    if (finishRequestedRef.current) return
+    setFinishRequested(true)
+    m.pushLog('Finish requested by user')
+    if (inTurnRef.current) {
+      m.pushLog('Finishing after the current turn completes')
+      return
+    }
+    await finalizeNow()
+  }, [finalizeNow, m])
+
   const onNext = useCallback(async () => {
     if (disabledNext) return
     if (!hasStarted) {
@@ -424,7 +447,15 @@ export default function Home() {
   return (
     <main className="mt-8">
       <div className="flex flex-col items-center gap-6">
-        <div className="text-sm opacity-80">{!hasStarted ? 'Ready' : 'Tap Next to continue'}</div>
+        <div className="text-sm opacity-80">
+          {!hasStarted
+            ? 'Ready'
+            : finishRequested
+              ? 'Wrapping up the session'
+              : disabledNext
+                ? 'Working...'
+                : 'Tap Next to continue'}
+        </div>
 
         <div className="flex gap-3">
           {m.state !== 'doneSuccess' ? (
@@ -442,10 +473,21 @@ export default function Home() {
                 sessionAudioDurationRef.current = 0
                 setHasStarted(false)
                 setTurn(0)
+                setFinishRequested(false)
+                finishRequestedRef.current = false
               }}
               className="text-sm bg-white/10 px-3 py-1 rounded-2xl"
             >
               Start Again
+            </button>
+          )}
+          {m.state !== 'doneSuccess' && (
+            <button
+              onClick={requestFinish}
+              disabled={!hasStarted || finishRequested}
+              className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50"
+            >
+              I'm finished
             </button>
           )}
         </div>
