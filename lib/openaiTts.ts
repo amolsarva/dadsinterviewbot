@@ -43,7 +43,7 @@ export async function synthesizeSpeechWithOpenAi({
     model,
     voice,
     input: text,
-    format,
+    response_format: format,
     speed,
   })
 
