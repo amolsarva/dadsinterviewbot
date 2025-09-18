@@ -36,6 +36,10 @@ export async function POST() {
       finalizeSession(session.id, { clientDurationMs: 5000 })
     )
 
+    if ('skipped' in result && result.skipped) {
+      return NextResponse.json({ ok: true, sessionId: session.id, skipped: true, foxes: listFoxes() })
+    }
+
     return NextResponse.json({
       ok: true,
       sessionId: session.id,

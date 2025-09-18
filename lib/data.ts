@@ -107,7 +107,20 @@ export async function appendTurn(id: string, turn: Partial<Turn>) {
   return t
 }
 
-export async function finalizeSession(id: string, body: { clientDurationMs: number; sessionAudioUrl?: string | null }) {
+export type FinalizeSessionResult =
+  | {
+      ok: true
+      session: Session
+      emailed: boolean
+      emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { ok: false; provider: 'unknown'; error: string }
+      skipped?: false
+    }
+  | { ok: true; skipped: true; reason: 'session_not_found'; emailed?: false }
+
+export async function finalizeSession(
+  id: string,
+  body: { clientDurationMs: number; sessionAudioUrl?: string | null },
+): Promise<FinalizeSessionResult> {
   const s = mem.sessions.get(id)
   if (!s) {
     flagFox({
@@ -117,9 +130,7 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
       message: 'Finalization attempted after session disappeared from memory.',
       details: { sessionId: id, bootedAt: memBootedAt, storedSessions: mem.sessions.size },
     })
-    const error = new Error('Session not found')
-    ;(error as any).code = 'SESSION_NOT_FOUND'
-    throw error
+    return { ok: true, skipped: true, reason: 'session_not_found' }
   }
 
   s.duration_ms = Math.max(0, Number.isFinite(body.clientDurationMs) ? body.clientDurationMs : 0)
@@ -245,7 +256,7 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
 
   mem.sessions.set(id, s)
 
-  const emailed = 'ok' in emailStatus && emailStatus.ok
+  const emailed = !!('ok' in emailStatus && emailStatus.ok)
   return { ok: true, session: s, emailed, emailStatus }
 }
 

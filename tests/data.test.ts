@@ -28,6 +28,9 @@ describe('finalizeSession', () => {
     await data.appendTurn(session.id, { role: 'user', text: 'hello' })
 
     const result = await data.finalizeSession(session.id, { clientDurationMs: 1000 })
+    if (!('session' in result)) {
+      throw new Error('Expected session result')
+    }
 
     expect(result.emailed).toBe(true)
     expect(result.emailStatus).toEqual({ ok: true, provider: 'resend' })
@@ -42,6 +45,9 @@ describe('finalizeSession', () => {
     await data.appendTurn(session.id, { role: 'assistant', text: 'hi again' })
 
     const result = await data.finalizeSession(session.id, { clientDurationMs: 200 })
+    if (!('session' in result)) {
+      throw new Error('Expected session result')
+    }
 
     expect(result.emailed).toBe(false)
     expect(result.emailStatus).toEqual({ skipped: true })
@@ -56,6 +62,9 @@ describe('finalizeSession', () => {
     await data.appendTurn(session.id, { role: 'user', text: 'hi there' })
 
     const result = await data.finalizeSession(session.id, { clientDurationMs: 0 })
+    if (!('session' in result)) {
+      throw new Error('Expected session result')
+    }
 
     expect(result.emailed).toBe(false)
     expect(result.emailStatus).toEqual({ ok: false, provider: 'resend', error: 'bad' })
@@ -72,10 +81,14 @@ describe('finalizeSession', () => {
 
     await data.appendTurn(session.id, { role: 'assistant', text: 'hello again' })
 
-    await data.finalizeSession(session.id, {
+    const result = await data.finalizeSession(session.id, {
       clientDurationMs: 1234,
       sessionAudioUrl: 'https://blob.test/sessions/123/session-audio.webm',
     })
+
+    if (!('session' in result)) {
+      throw new Error('Expected session result')
+    }
 
     const stored = await data.getSession(session.id)
     expect(stored?.artifacts?.session_audio).toBe('https://blob.test/sessions/123/session-audio.webm')
