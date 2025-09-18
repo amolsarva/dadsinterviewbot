@@ -136,14 +136,14 @@ export async function POST(req: NextRequest) {
             if (target) {
               target.assistantReply = entry.text
             } else {
-            turns.push({
-              turn: currentTurn,
-              audio: null,
-              assistantAudio: null,
-              assistantAudioDurationMs: 0,
-              manifest: '',
-              transcript: '',
-              assistantReply: entry.text,
+              turns.push({
+                turn: currentTurn,
+                audio: null,
+                assistantAudio: null,
+                assistantAudioDurationMs: 0,
+                manifest: '',
+                transcript: '',
+                assistantReply: entry.text,
                 durationMs: 0,
                 createdAt: inMemory.created_at,
               })

@@ -69,44 +69,44 @@ export default function HistoryPage() {
                     />
                   )}
                   <div className="flex flex-wrap gap-2">
-                  <a className="underline" href={`/session/${s.id}`}>
-                    Open
-                  </a>
-                  {(s.manifestUrl || s.artifacts?.session_manifest) && (
-                    <a
-                      className="underline"
-                      href={(s.manifestUrl || s.artifacts?.session_manifest) ?? undefined}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Session manifest
+                    <a className="underline" href={`/session/${s.id}`}>
+                      Open
                     </a>
-                  )}
-                  {s.firstAudioUrl && (
-                    <a className="underline" href={s.firstAudioUrl} target="_blank" rel="noreferrer">
-                      First turn audio
-                    </a>
-                  )}
-                  {s.artifacts?.transcript_txt && (
-                    <a className="underline" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
-                      Transcript (txt)
-                    </a>
-                  )}
-                  {s.artifacts?.transcript_json && (
-                    <a className="underline" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
-                      Transcript (json)
-                    </a>
-                  )}
-                  {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
-                    <a
-                      className="underline"
-                      href={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Download session audio
-                    </a>
-                  )}
+                    {(s.manifestUrl || s.artifacts?.session_manifest) && (
+                      <a
+                        className="underline"
+                        href={(s.manifestUrl || s.artifacts?.session_manifest) ?? undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Session manifest
+                      </a>
+                    )}
+                    {s.firstAudioUrl && (
+                      <a className="underline" href={s.firstAudioUrl} target="_blank" rel="noreferrer">
+                        First turn audio
+                      </a>
+                    )}
+                    {s.artifacts?.transcript_txt && (
+                      <a className="underline" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
+                        Transcript (txt)
+                      </a>
+                    )}
+                    {s.artifacts?.transcript_json && (
+                      <a className="underline" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
+                        Transcript (json)
+                      </a>
+                    )}
+                    {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
+                      <a
+                        className="underline"
+                        href={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Download session audio
+                      </a>
+                    )}
                   </div>
                 </div>
               </div>

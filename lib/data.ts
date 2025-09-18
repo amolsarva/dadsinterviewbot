@@ -121,15 +121,51 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
     ;(error as any).code = 'SESSION_NOT_FOUND'
     throw error
   }
-  const turns = s.turns || []
-  const safeDuration = Math.max(0, Math.min(body.clientDurationMs || 0, 6 * 60 * 60 * 1000))
-  s.duration_ms = safeDuration
+
+  s.duration_ms = Math.max(0, Number.isFinite(body.clientDurationMs) ? body.clientDurationMs : 0)
   s.status = 'completed'
 
-  const txt = turns.map((t) => `${t.role}: ${t.text}`).join('\n')
-  const jsonObj = { sessionId: s.id, created_at: s.created_at, total_turns: turns.length, turns }
-  const txtBuf = Buffer.from(txt, 'utf8')
-  const jsonBuf = Buffer.from(JSON.stringify(jsonObj, null, 2), 'utf8')
+  const userTurns = (s.turns || []).filter((t) => t.role === 'user')
+  const assistantTurns = (s.turns || []).filter((t) => t.role === 'assistant')
+
+  const turns = userTurns.map((userTurn, index) => {
+    const assistantTurn = assistantTurns[index]
+    return {
+      id: userTurn.id,
+      role: 'user' as const,
+      text: userTurn.text,
+      audio: userTurn.audio_blob_url || null,
+      assistant: assistantTurn
+        ? { id: assistantTurn.id, text: assistantTurn.text, audio: assistantTurn.audio_blob_url || null }
+        : null,
+    }
+  })
+
+  const transcriptLines: string[] = []
+  for (const turn of turns) {
+    transcriptLines.push(`User: ${turn.text}`)
+    if (turn.assistant) {
+      transcriptLines.push(`Assistant: ${turn.assistant.text}`)
+    }
+  }
+
+  const txtBuf = Buffer.from(transcriptLines.join('\n'), 'utf8')
+  const jsonBuf = Buffer.from(
+    JSON.stringify(
+      {
+        sessionId: s.id,
+        created_at: s.created_at,
+        turns: turns.map((turn, index) => ({
+          index,
+          user: { text: turn.text, audio: turn.audio },
+          assistant: turn.assistant ? { text: turn.assistant.text, audio: turn.assistant.audio } : null,
+        })),
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  )
 
   const txtBlob = await putBlobFromBuffer(`transcripts/${s.id}.txt`, txtBuf, 'text/plain; charset=utf-8', {
     access: 'public',
@@ -154,7 +190,7 @@ export async function finalizeSession(id: string, body: { clientDurationMs: numb
     created_at: s.created_at,
     email: s.email_to,
     totals: { turns: turns.length, durationMs: s.duration_ms },
-    turns: turns.map((t) => ({ id: t.id, role: t.role, text: t.text, audio: t.audio_blob_url || null })),
+    turns: turns.map((t) => ({ id: t.id, role: t.role, text: t.text, audio: t.audio || null })),
     artifacts: s.artifacts,
     status: s.status,
   }
