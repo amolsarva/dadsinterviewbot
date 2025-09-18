@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { putBlobFromBuffer } from '@/lib/blob'
+import { mergeSessionArtifacts } from '@/lib/data'
 
 const schema = z.object({
   sessionId: z.string().min(1),
@@ -24,6 +25,12 @@ export async function POST(request: NextRequest) {
     )
 
     const url = blob.downloadUrl || blob.url
+
+    mergeSessionArtifacts(sessionId, {
+      artifacts: { session_audio: url },
+      durationMs: typeof duration_ms === 'number' ? duration_ms : undefined,
+    })
+
     return NextResponse.json({ ok: true, url, durationMs: duration_ms ?? null })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err?.message || 'save_failed' }, { status: 400 })

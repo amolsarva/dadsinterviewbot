@@ -60,7 +60,15 @@ export default function HistoryPage() {
                   <div className="text-xs opacity-70">{new Date(s.created_at).toLocaleString()}</div>
                   <div className="text-xs opacity-70">Turns: {s.total_turns} • Status: {s.status}</div>
                 </div>
-                <div className="flex flex-wrap gap-2 text-sm">
+                <div className="flex flex-col gap-2 text-sm max-w-xl">
+                  {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
+                    <audio
+                      controls
+                      src={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
+                      className="w-full"
+                    />
+                  )}
+                  <div className="flex flex-wrap gap-2">
                   <a className="underline" href={`/session/${s.id}`}>
                     Open
                   </a>
@@ -96,9 +104,10 @@ export default function HistoryPage() {
                       target="_blank"
                       rel="noreferrer"
                     >
-                      Session audio
+                      Download session audio
                     </a>
                   )}
+                  </div>
                 </div>
               </div>
             </li>

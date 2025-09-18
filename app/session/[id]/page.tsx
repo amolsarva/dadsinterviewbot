@@ -14,12 +14,23 @@ export default async function SessionPage({ params }: { params: { id: string } }
           <span> • Duration: {Math.round(s.duration_ms / 1000)}s</span>
         )}
       </div>
+      {s.artifacts?.session_audio && (
+        <div className="mb-4">
+          <div className="text-xs opacity-70 mb-1">Session audio</div>
+          <audio controls src={s.artifacts.session_audio} className="w-full max-w-xl" />
+        </div>
+      )}
       <div className="space-y-2">
         {s.turns?.map(t => (
           <div key={t.id} className="bg-white/5 rounded p-2">
             <div className="text-xs opacity-70">{t.role}</div>
             <div className="whitespace-pre-wrap">{t.text}</div>
-            {t.audio_blob_url && <audio controls src={t.audio_blob_url} className="w-full mt-1" />}
+            {t.audio_blob_url && (
+              <div className="mt-1 space-y-1">
+                <div className="text-[10px] uppercase tracking-wide opacity-60">Turn audio</div>
+                <audio controls src={t.audio_blob_url} className="w-full" />
+              </div>
+            )}
           </div>
         ))}
       </div>
