@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { list } from '@vercel/blob'
-import { putBlobFromBuffer } from '@/lib/blob'
+import { getBlobToken, listBlobs, putBlobFromBuffer } from '@/lib/blob'
 import { sendSummaryEmail } from '@/lib/email'
-import { getSession } from '@/lib/data'
+import { getSession, mergeSessionArtifacts, rememberSessionManifest } from '@/lib/data'
 import { z } from 'zod'
+
+function summarizeLink(value: string | null | undefined, label: string, missing = 'unavailable') {
+  if (!value) return `${label}: ${missing}`
+  if (value.startsWith('data:')) return `${label}: [inline]`
+  return `${label}: ${value}`
+}
 
 type TurnSummary = {
   turn: number
   audio: string | null
+  assistantAudio: string | null
+  assistantAudioDurationMs: number
   manifest: string
   transcript: string
   assistantReply: string
@@ -19,22 +26,24 @@ type TurnSummary = {
 const schema = z.object({
   sessionId: z.string().min(1),
   email: z.string().email().optional(),
+  sessionAudioUrl: z.string().min(1).optional(),
+  sessionAudioDurationMs: z.number().nonnegative().optional(),
 })
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { sessionId, email } = schema.parse(body)
+    const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs } = schema.parse(body)
 
-    const token = process.env.VERCEL_BLOB_READ_WRITE_TOKEN
-    let turnBlobs: Awaited<ReturnType<typeof list>>['blobs'] = []
-    if (token) {
-      try {
-        const prefix = `sessions/${sessionId}/`
-        const listed = await list({ prefix, limit: 2000, token })
-        turnBlobs = listed.blobs.filter((b) => /turn-\d+\.json$/.test(b.pathname))
-        turnBlobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
-      } catch (err) {
+    const token = getBlobToken()
+    let turnBlobs: Awaited<ReturnType<typeof listBlobs>>['blobs'] = []
+    try {
+      const prefix = `sessions/${sessionId}/`
+      const listed = await listBlobs({ prefix, limit: 2000 })
+      turnBlobs = listed.blobs.filter((b) => /turn-\d+\.json$/.test(b.pathname))
+      turnBlobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
+    } catch (err) {
+      if (token) {
         console.warn('Failed to list blob turns', err)
       }
     }
@@ -52,6 +61,9 @@ export async function POST(req: NextRequest) {
           const turnNumber = Number(json.turn) || 0
           const transcript = typeof json.transcript === 'string' ? json.transcript : ''
           const assistantReply = typeof json.assistantReply === 'string' ? json.assistantReply : ''
+          const assistantAudioUrl =
+            typeof json.assistantAudioUrl === 'string' ? json.assistantAudioUrl : null
+          const assistantAudioDurationMs = Number(json.assistantAudioDurationMs) || 0
           const createdRaw = json.createdAt || blob.uploadedAt || null
           const created =
             typeof createdRaw === 'string'
@@ -68,6 +80,8 @@ export async function POST(req: NextRequest) {
           turns.push({
             turn: turnNumber,
             audio: json.userAudioUrl || null,
+            assistantAudio: assistantAudioUrl,
+            assistantAudioDurationMs,
             manifest: blob.downloadUrl || blob.url,
             transcript,
             assistantReply,
@@ -92,6 +106,8 @@ export async function POST(req: NextRequest) {
             turns.push({
               turn: currentTurn,
               audio: entry.audio_blob_url || null,
+              assistantAudio: null,
+              assistantAudioDurationMs: 0,
               manifest: '',
               transcript: entry.text,
               assistantReply: '',
@@ -103,12 +119,14 @@ export async function POST(req: NextRequest) {
             if (target) {
               target.assistantReply = entry.text
             } else {
-              turns.push({
-                turn: currentTurn,
-                audio: null,
-                manifest: '',
-                transcript: '',
-                assistantReply: entry.text,
+            turns.push({
+              turn: currentTurn,
+              audio: null,
+              assistantAudio: null,
+              assistantAudioDurationMs: 0,
+              manifest: '',
+              transcript: '',
+              assistantReply: entry.text,
                 durationMs: 0,
                 createdAt: inMemory.created_at,
               })
@@ -123,13 +141,23 @@ export async function POST(req: NextRequest) {
 
     turns.sort((a, b) => a.turn - b.turn)
 
-    const conversationLines: { role: 'user' | 'assistant'; text: string; turn: number; audio?: string | null }[] = []
+    const conversationLines: {
+      role: 'user' | 'assistant'
+      text: string
+      turn: number
+      audio?: string | null
+    }[] = []
     for (const entry of turns) {
       if (entry.transcript) {
         conversationLines.push({ role: 'user', text: entry.transcript, turn: entry.turn, audio: entry.audio })
       }
       if (entry.assistantReply) {
-        conversationLines.push({ role: 'assistant', text: entry.assistantReply, turn: entry.turn })
+        conversationLines.push({
+          role: 'assistant',
+          text: entry.assistantReply,
+          turn: entry.turn,
+          audio: entry.assistantAudio || undefined,
+        })
       }
     }
 
@@ -149,20 +177,18 @@ export async function POST(req: NextRequest) {
       })),
     }
 
-    const transcriptTxtUrl = (
-      await putBlobFromBuffer(
-        `sessions/${sessionId}/transcript-${sessionId}.txt`,
-        Buffer.from(transcriptText, 'utf8'),
-        'text/plain; charset=utf-8'
-      )
-    ).url
-    const transcriptJsonUrl = (
-      await putBlobFromBuffer(
-        `sessions/${sessionId}/transcript-${sessionId}.json`,
-        Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
-        'application/json'
-      )
-    ).url
+    const transcriptTxtUpload = await putBlobFromBuffer(
+      `sessions/${sessionId}/transcript-${sessionId}.txt`,
+      Buffer.from(transcriptText, 'utf8'),
+      'text/plain; charset=utf-8'
+    )
+    const transcriptTxtUrl = transcriptTxtUpload.downloadUrl || transcriptTxtUpload.url
+    const transcriptJsonUpload = await putBlobFromBuffer(
+      `sessions/${sessionId}/transcript-${sessionId}.json`,
+      Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
+      'application/json'
+    )
+    const transcriptJsonUrl = transcriptJsonUpload.downloadUrl || transcriptJsonUpload.url
 
     const manifest = {
       sessionId,
@@ -173,6 +199,8 @@ export async function POST(req: NextRequest) {
       turns: turns.map((t) => ({
         turn: t.turn,
         audio: t.audio,
+        assistantAudio: t.assistantAudio,
+        assistantAudioDurationMs: t.assistantAudioDurationMs,
         manifest: t.manifest,
         transcript: t.transcript,
         assistantReply: t.assistantReply,
@@ -183,17 +211,49 @@ export async function POST(req: NextRequest) {
       artifacts: {
         transcript_txt: transcriptTxtUrl,
         transcript_json: transcriptJsonUrl,
+        session_manifest: '',
+        manifest: '',
+        session_audio: sessionAudioUrl || null,
       },
     }
 
-    const manifestUrl = (
-      await putBlobFromBuffer(
-        `sessions/${sessionId}/session-${sessionId}.json`,
-        Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
-        'application/json',
-        { access: 'public' }
-      )
-    ).url
+    const manifestUpload = await putBlobFromBuffer(
+      `sessions/${sessionId}/session-${sessionId}.json`,
+      Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
+      'application/json',
+      { access: 'public' }
+    )
+    const manifestUrl = manifestUpload.downloadUrl || manifestUpload.url
+    manifest.artifacts.session_manifest = manifestUrl
+    manifest.artifacts.manifest = manifestUrl
+
+    rememberSessionManifest(
+      {
+        ...manifest,
+        artifacts: {
+          ...manifest.artifacts,
+          session_manifest: manifestUrl,
+          manifest: manifestUrl,
+          session_audio: sessionAudioUrl || null,
+        },
+      },
+      sessionId,
+      startedAt || endedAt || new Date().toISOString(),
+      manifestUrl,
+    )
+
+    mergeSessionArtifacts(sessionId, {
+      artifacts: {
+        session_manifest: manifestUrl,
+        manifest: manifestUrl,
+        transcript_txt: transcriptTxtUrl,
+        transcript_json: transcriptJsonUrl,
+        session_audio: sessionAudioUrl || undefined,
+      },
+      totalTurns: turns.length,
+      durationMs: sessionAudioDurationMs ?? totalDuration,
+      status: 'completed',
+    })
 
     let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { skipped: true }
     emailStatus = { skipped: true }
@@ -201,18 +261,22 @@ export async function POST(req: NextRequest) {
     const targetEmail = email || process.env.DEFAULT_NOTIFY_EMAIL
     if (targetEmail) {
       const lines = turns
-        .map(
-          (t) =>
-            `Turn ${t.turn}: ${t.transcript || '[no transcript]'}\nAssistant: ${t.assistantReply || '[no reply]'}\nAudio: ${
-              t.audio || 'unavailable'
-            }\nManifest: ${t.manifest || 'unavailable'}`
+        .map((t) =>
+          [
+            `Turn ${t.turn}: ${t.transcript || '[no transcript]'}`,
+            `Assistant: ${t.assistantReply || '[no reply]'}`,
+            summarizeLink(t.audio, 'Audio'),
+            summarizeLink(t.assistantAudio, 'Assistant audio'),
+            summarizeLink(t.manifest, 'Manifest'),
+          ].join('\n'),
         )
         .join('\n\n')
       const bodyParts = [
         'Your session is finalized. Here are your links.',
-        `Session manifest: ${manifestUrl}`,
-        `Transcript (txt): ${transcriptTxtUrl}`,
-        `Transcript (json): ${transcriptJsonUrl}`,
+        summarizeLink(manifestUrl, 'Session manifest'),
+        summarizeLink(transcriptTxtUrl, 'Transcript (txt)'),
+        summarizeLink(transcriptJsonUrl, 'Transcript (json)'),
+        summarizeLink(sessionAudioUrl || null, 'Session audio', 'pending'),
       ]
       if (lines) {
         bodyParts.push('', lines)
@@ -225,12 +289,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if ('ok' in emailStatus && emailStatus.ok) {
+      mergeSessionArtifacts(sessionId, { status: 'emailed' })
+    } else if ('skipped' in emailStatus && emailStatus.skipped) {
+      mergeSessionArtifacts(sessionId, { status: 'completed' })
+    } else {
+      mergeSessionArtifacts(sessionId, { status: 'error' })
+    }
+
     return NextResponse.json({
       ok: true,
       manifestUrl,
       totalTurns: turns.length,
-      totalDurationMs: totalDuration,
-      artifacts: { transcript_txt: transcriptTxtUrl, transcript_json: transcriptJsonUrl },
+      totalDurationMs: sessionAudioDurationMs ?? totalDuration,
+      artifacts: {
+        transcript_txt: transcriptTxtUrl,
+        transcript_json: transcriptJsonUrl,
+        session_audio: sessionAudioUrl || null,
+      },
+      sessionAudioUrl: sessionAudioUrl || null,
+      sessionAudioDurationMs: sessionAudioDurationMs ?? null,
       emailStatus,
     })
   } catch (e: any) {
