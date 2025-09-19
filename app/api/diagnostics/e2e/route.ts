@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { appendTurn, createSession, finalizeSession } from '@/lib/data'
+import { listFoxes } from '@/lib/foxes'
 
 export const runtime = 'nodejs'
 
@@ -35,13 +36,14 @@ export async function POST() {
       finalizeSession(session.id, { clientDurationMs: 1500 })
     )
 
-    return NextResponse.json({ ok: true, sessionId: session.id, result })
+    return NextResponse.json({ ok: true, sessionId: session.id, result, foxes: listFoxes() })
   } catch (error: any) {
     return NextResponse.json(
       {
         ok: false,
         error: error?.message || 'e2e_failed',
         stage: error?.diagnosticStage || 'unknown',
+        foxes: listFoxes(),
       },
       { status: 500 }
     )

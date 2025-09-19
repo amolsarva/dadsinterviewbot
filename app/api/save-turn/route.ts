@@ -11,6 +11,9 @@ const schema = z.object({
   reply_text: z.string().default(''),
   transcript: z.string().default(''),
   provider: z.string().default('google'),
+  assistant_wav: z.string().optional(),
+  assistant_mime: z.string().default('audio/mpeg'),
+  assistant_duration_ms: z.union([z.number(), z.string()]).default(0),
 })
 
 export async function POST(req: NextRequest) {
@@ -31,6 +34,16 @@ export async function POST(req: NextRequest) {
     const manifestPath = `sessions/${parsed.sessionId}/turn-${pad}.json`
 
     const userAudio = await putBlobFromBuffer(audioPath, buffer, mime, { access: 'public' })
+    let assistantAudioUrl: string | null = null
+    if (parsed.assistant_wav) {
+      const assistantBuffer = Buffer.from(parsed.assistant_wav, 'base64')
+      const assistantMime = parsed.assistant_mime || 'audio/mpeg'
+      const assistantExt = assistantMime.split('/')[1]?.split(';')[0] || 'mp3'
+      const assistantPath = `sessions/${parsed.sessionId}/assistant-${pad}.${assistantExt}`
+      const assistantBlob = await putBlobFromBuffer(assistantPath, assistantBuffer, assistantMime, { access: 'public' })
+      assistantAudioUrl = assistantBlob.downloadUrl || assistantBlob.url
+    }
+
     const manifestBody = {
       sessionId: parsed.sessionId,
       turn: turnNumber,
@@ -41,6 +54,8 @@ export async function POST(req: NextRequest) {
       assistantReply: parsed.reply_text,
       provider: parsed.provider,
       endIntent: false,
+      assistantAudioUrl,
+      assistantAudioDurationMs: Number(parsed.assistant_duration_ms) || 0,
     }
     const manifest = await putBlobFromBuffer(
       manifestPath,

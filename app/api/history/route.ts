@@ -13,9 +13,14 @@ export async function GET() {
     artifacts: {
       transcript_txt: s.artifacts?.transcript_txt || null,
       transcript_json: s.artifacts?.transcript_json || null,
+
+      session_manifest: s.artifacts?.session_manifest || s.artifacts?.manifest || null,
+      session_audio: s.artifacts?.session_audio || null,
+
     },
-    manifestUrl: s.artifacts?.manifest || null,
+    manifestUrl: s.artifacts?.session_manifest || s.artifacts?.manifest || null,
     firstAudioUrl: s.turns?.find(t => t.audio_blob_url)?.audio_blob_url || null,
+    sessionAudioUrl: s.artifacts?.session_audio || null,
   }))
 
   const { items: stored } = await fetchStoredSessions({ limit: 50 })
@@ -30,9 +35,22 @@ export async function GET() {
       artifacts: {
         transcript_txt: session.artifacts?.transcript_txt || null,
         transcript_json: session.artifacts?.transcript_json || null,
+
+        session_manifest:
+          session.artifacts?.session_manifest ||
+          session.artifacts?.manifest ||
+          session.manifestUrl ||
+          null,
+        session_audio: session.artifacts?.session_audio || null,
       },
-      manifestUrl: session.artifacts?.manifest || session.manifestUrl,
+      manifestUrl:
+        session.artifacts?.session_manifest ||
+        session.artifacts?.manifest ||
+        session.manifestUrl ||
+        null,
+
       firstAudioUrl: session.turns.find(t => Boolean(t.audio))?.audio || null,
+      sessionAudioUrl: session.artifacts?.session_audio || null,
     })
   }
 
