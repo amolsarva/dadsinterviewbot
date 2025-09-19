@@ -109,7 +109,13 @@ export default function Home() {
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
   const [phase, setPhase] = useState<
-    'initializing' | 'speaking' | 'listening' | 'thinking' | 'idle' | 'finished'
+    | 'initializing'
+    | 'calibrating'
+    | 'speaking'
+    | 'listening'
+    | 'thinking'
+    | 'idle'
+    | 'finished'
   >('initializing')
   const [finishRequested, setFinishRequested] = useState(false)
   const inTurnRef = useRef(false)
@@ -426,17 +432,34 @@ export default function Home() {
 
     try {
       while (!finishRequestedRef.current) {
+        setPhase('calibrating')
+        pushLog('Calibrating microphone')
+        let baseline = 0.05
+        try {
+          const measured = await calibrateRMS(0.75)
+          if (Number.isFinite(measured) && measured > 0.00001) {
+            baseline = measured
+          }
+        } catch {
+          pushLog('Calibration failed, using fallback baseline')
+        }
+
+        if (finishRequestedRef.current) {
+          pushLog('Calibration interrupted by finish request')
+          break
+        }
+
         setPhase('listening')
-        pushLog('Recording started')
+        pushLog(`Recording started (baseline ≈ ${baseline.toFixed(3)})`)
         let b64 = ''
         let recDuration = 0
         try {
-          const baseline = await calibrateRMS(0.5)
           const rec = await recordUntilSilence({
-            baseline,
+            baseline: Math.max(0.01, baseline),
             minDurationMs: 600,
             silenceMs: 800,
             graceMs: 200,
+            maxWaitMs: 5000,
             shouldForceStop: () => finishRequestedRef.current,
           })
           b64 = await blobToBase64(rec.blob)
@@ -445,7 +468,15 @@ export default function Home() {
           const silent = new Blob([new Uint8Array(1)], { type: 'audio/webm' })
           b64 = await blobToBase64(silent)
           recDuration = 500
+          pushLog('Recording failed, substituting silence')
         }
+
+        if (finishRequestedRef.current) {
+          pushLog('Recording interrupted → finishing')
+          setPhase('thinking')
+          break
+        }
+
         pushLog('Recording stopped → thinking')
         setPhase('thinking')
 
@@ -557,7 +588,7 @@ export default function Home() {
       await playWithSpeechSynthesis(OPENING)
     } finally {
       if (!finishRequestedRef.current) {
-        setPhase('listening')
+        setPhase('calibrating')
         runTurnLoop().catch(() => {})
       }
     }
@@ -590,6 +621,9 @@ export default function Home() {
             {phase === 'listening' && (
               <span className="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.75)] animate-pulse" />
             )}
+            {phase === 'calibrating' && (
+              <span className="w-3 h-3 rounded-full bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.75)] animate-pulse" />
+            )}
             {phase === 'speaking' && (
               <span className="w-3 h-3 rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.75)] animate-pulse" />
             )}
@@ -610,6 +644,8 @@ export default function Home() {
                 ? 'Welcome'
                 : finishRequested
                   ? 'Wrapping up the session'
+                  : phase === 'calibrating'
+                    ? 'Getting ready to listen'
                   : phase === 'speaking'
                     ? 'Speaking'
                     : phase === 'thinking'
