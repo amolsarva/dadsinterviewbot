@@ -13,7 +13,10 @@ type AssistantPlayback = {
 }
 
 export default function Home() {
-  const m = useInterviewMachine()
+  const machineState = useInterviewMachine((state) => state.state)
+  const debugLog = useInterviewMachine((state) => state.debugLog)
+  const pushLog = useInterviewMachine((state) => state.pushLog)
+  const toDone = useInterviewMachine((state) => state.toDone)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
@@ -32,24 +35,48 @@ export default function Home() {
   }, [finishRequested])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
     try {
-      fetch('/api/session/start', { method: 'POST' })
-        .then((r) => r.json())
-        .then((d) => {
-          const id = d?.id || crypto.randomUUID()
-          sessionStorage.setItem('sessionId', id)
-          setSessionId(id)
-          m.pushLog('Session started: ' + id)
-        })
-        .catch(() => {
-          const existing = sessionStorage.getItem('sessionId')
-          const id = existing || crypto.randomUUID()
-          sessionStorage.setItem('sessionId', id)
-          setSessionId(id)
-          m.pushLog('Session started (fallback): ' + id)
-        })
+      const existing = sessionStorage.getItem('sessionId')
+      if (existing) {
+        setSessionId(existing)
+        pushLog('Session resumed: ' + existing)
+        return
+      }
     } catch {}
-  }, [m])
+
+    const controller = new AbortController()
+    let cancelled = false
+
+    async function startSession() {
+      try {
+        const res = await fetch('/api/session/start', { method: 'POST', signal: controller.signal })
+        const data = await res.json().catch(() => ({}))
+        if (controller.signal.aborted || cancelled) return
+        const id = (typeof data?.id === 'string' && data.id) || crypto.randomUUID()
+        sessionStorage.setItem('sessionId', id)
+        setSessionId(id)
+        pushLog('Session started: ' + id)
+      } catch (error) {
+        if (controller.signal.aborted || cancelled) return
+        let existing: string | null = null
+        try {
+          existing = sessionStorage.getItem('sessionId')
+        } catch {}
+        const id = existing || crypto.randomUUID()
+        sessionStorage.setItem('sessionId', id)
+        setSessionId(id)
+        pushLog('Session started (fallback): ' + id)
+      }
+    }
+
+    startSession()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [pushLog])
 
   useEffect(() => {
     return () => {
@@ -116,7 +143,7 @@ export default function Home() {
   const playAssistantResponse = useCallback(
     async (text: string): Promise<AssistantPlayback> => {
       if (!text) return { base64: null, mime: 'audio/mpeg', durationMs: 0 }
-      m.pushLog('Assistant reply ready → playing')
+      pushLog('Assistant reply ready → playing')
       try {
         const res = await fetch('/api/tts', {
           method: 'POST',
@@ -136,7 +163,7 @@ export default function Home() {
             const playback = await recorder.playAssistantBase64(data.audioBase64, mime)
             durationMs = playback?.durationMs ?? 0
           } catch (err) {
-            m.pushLog('Recorder playback failed, falling back to direct audio')
+            pushLog('Recorder playback failed, falling back to direct audio')
             durationMs = await playWithAudioElement(data.audioBase64, mime)
           }
         } else {
@@ -144,12 +171,12 @@ export default function Home() {
         }
         return { base64: data.audioBase64, mime, durationMs }
       } catch (err) {
-        m.pushLog('TTS unavailable, using speech synthesis fallback')
+        pushLog('TTS unavailable, using speech synthesis fallback')
         const durationMs = await playWithSpeechSynthesis(text)
         return { base64: null, mime: 'audio/mpeg', durationMs }
       }
     },
-    [m, playWithAudioElement, playWithSpeechSynthesis],
+    [playWithAudioElement, playWithSpeechSynthesis, pushLog],
   )
 
   const finalizeNow = useCallback(async () => {
@@ -183,11 +210,11 @@ export default function Home() {
                 sessionAudioDurationMs = saveJson.durationMs
               }
             } else {
-              m.pushLog('Failed to store session audio')
+              pushLog('Failed to store session audio')
             }
           }
         } catch (err) {
-          m.pushLog('Session audio capture failed')
+          pushLog('Session audio capture failed')
           try {
             recorderRef.current?.cancel()
           } catch {}
@@ -206,26 +233,26 @@ export default function Home() {
 
       async function inspect(label: string, response: Response | null, options?: { optional?: boolean }) {
         if (!response) {
-          m.pushLog(`${label} failed: no response`)
+          pushLog(`${label} failed: no response`)
           return false
         }
         let payload: any = null
         let logged = false
         try {
           payload = await response.clone().json()
-          m.pushLog(`${label}: ` + JSON.stringify(payload))
+          pushLog(`${label}: ` + JSON.stringify(payload))
           logged = true
         } catch {
           try {
             const text = await response.clone().text()
             if (text.trim().length) {
-              m.pushLog(`${label}: ${text}`)
+              pushLog(`${label}: ${text}`)
               logged = true
             }
           } catch {}
         }
         if (!logged) {
-          m.pushLog(`${label}: status ${response.status}`)
+          pushLog(`${label}: status ${response.status}`)
         }
 
         const payloadError = payload && typeof payload.error === 'string' ? payload.error : null
@@ -234,10 +261,10 @@ export default function Home() {
 
         if (!response.ok || (payload && payload.ok === false)) {
           if (shouldIgnoreMissingSession) {
-            m.pushLog(`${label} skipped (stateless runtime)`)
+            pushLog(`${label} skipped (stateless runtime)`)
             return true
           }
-          m.pushLog(`${label} not ok (status ${response.status})`)
+          pushLog(`${label} not ok (status ${response.status})`)
           return false
         }
         return true
@@ -252,7 +279,7 @@ export default function Home() {
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'request_failed'
-        m.pushLog(`Finalized (blob) failed: ${message}`)
+        pushLog(`Finalized (blob) failed: ${message}`)
         throw err
       }
 
@@ -272,7 +299,7 @@ export default function Home() {
         memOk = await inspect('Finalized (mem)', memRes, { optional: true })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'request_failed'
-        m.pushLog(`Finalized (mem) failed: ${message}`)
+        pushLog(`Finalized (mem) failed: ${message}`)
         memOk = false
       }
 
@@ -285,15 +312,15 @@ export default function Home() {
         localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0, 50)))
       } catch {}
 
-      m.toDone()
+      toDone()
     } catch {
-      m.pushLog('Finalize failed')
+      pushLog('Finalize failed')
     } finally {
       finishRequestedRef.current = false
       setFinishRequested(false)
       setDisabledNext(false)
     }
-  }, [m, sessionId])
+  }, [pushLog, sessionId, toDone])
 
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
@@ -301,7 +328,7 @@ export default function Home() {
     inTurnRef.current = true
     setDisabledNext(true)
     try {
-      m.pushLog('Recording started')
+      pushLog('Recording started')
       let b64 = ''
       let recDuration = 0
       try {
@@ -320,7 +347,7 @@ export default function Home() {
         b64 = await blobToBase64(silent)
         recDuration = 500
       }
-      m.pushLog('Recording stopped → thinking')
+      pushLog('Recording stopped → thinking')
 
       const askRes = await fetch('/api/ask-audio', {
         method: 'POST',
@@ -384,7 +411,7 @@ export default function Home() {
       const nextTurn = turn + 1
       setTurn(nextTurn)
 
-      m.pushLog('Finished playing → ready')
+      pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
       const shouldEnd =
         finishRequestedRef.current || endIntent || reachedMax || (transcript && endRegex.test(transcript))
@@ -396,11 +423,11 @@ export default function Home() {
         setDisabledNext(false)
       }
     } catch (e) {
-      m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
+      pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
       setDisabledNext(false)
     }
-  }, [MAX_TURNS, finalizeNow, m, playAssistantResponse, sessionId, turn])
+  }, [MAX_TURNS, finalizeNow, playAssistantResponse, pushLog, sessionId, turn])
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
@@ -412,7 +439,7 @@ export default function Home() {
       try {
         await ensureSessionRecorder()
       } catch {
-        m.pushLog('Session recorder unavailable; proceeding without combined audio')
+        pushLog('Session recorder unavailable; proceeding without combined audio')
       }
       await playAssistantResponse(OPENING)
     } catch {
@@ -420,18 +447,18 @@ export default function Home() {
     } finally {
       setDisabledNext(false)
     }
-  }, [ensureSessionRecorder, hasStarted, m, playAssistantResponse, playWithSpeechSynthesis])
+  }, [ensureSessionRecorder, hasStarted, playAssistantResponse, playWithSpeechSynthesis, pushLog])
 
   const requestFinish = useCallback(async () => {
     if (finishRequestedRef.current) return
     setFinishRequested(true)
-    m.pushLog('Finish requested by user')
+    pushLog('Finish requested by user')
     if (inTurnRef.current) {
-      m.pushLog('Finishing after the current turn completes')
+      pushLog('Finishing after the current turn completes')
       return
     }
     await finalizeNow()
-  }, [finalizeNow, m])
+  }, [finalizeNow, pushLog])
 
   const onNext = useCallback(async () => {
     if (disabledNext) return
@@ -458,7 +485,7 @@ export default function Home() {
         </div>
 
         <div className="flex gap-3">
-          {m.state !== 'doneSuccess' ? (
+          {machineState !== 'doneSuccess' ? (
             <button onClick={onNext} disabled={disabledNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50">
               Next
             </button>
@@ -481,7 +508,7 @@ export default function Home() {
               Start Again
             </button>
           )}
-          {m.state !== 'doneSuccess' && (
+          {machineState !== 'doneSuccess' && (
             <button
               onClick={requestFinish}
               disabled={!hasStarted || finishRequested}
@@ -494,7 +521,7 @@ export default function Home() {
 
         <div className="w-full max-w-xl">
           <label className="text-xs opacity-70">On-screen Log (copy to share diagnostics):</label>
-          <textarea value={m.debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
+          <textarea value={debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
           <div className="mt-2 text-xs opacity-70">
             Need more? Visit <a className="underline" href="/diagnostics">Diagnostics</a>.
           </div>
