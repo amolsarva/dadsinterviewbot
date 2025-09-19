@@ -38,6 +38,16 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs } = schema.parse(body)
 
+    const envBaseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      process.env.APP_URL ||
+      process.env.SITE_URL ||
+      ''
+    const requestOrigin = req.nextUrl?.origin || ''
+    const baseUrl = (requestOrigin || envBaseUrl).replace(/\/$/, '')
+    const sessionPageUrl = baseUrl ? `${baseUrl}/session/${sessionId}` : null
+
     const token = getBlobToken()
 
     let turnBlobs: Awaited<ReturnType<typeof listBlobs>>['blobs'] = []
@@ -329,6 +339,7 @@ export async function POST(req: NextRequest) {
         .join('\n\n')
       const bodyParts = [
         'Your session is finalized. Here are your links.',
+        sessionPageUrl ? `Session history: ${sessionPageUrl}` : null,
         summarizeLink(manifestUrl, 'Session manifest'),
         summarizeLink(transcriptTxtUrl, 'Transcript (txt)'),
         summarizeLink(transcriptJsonUrl, 'Transcript (json)'),
