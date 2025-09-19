@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createSession, appendTurn, finalizeSession } from '@/lib/data'
+import { listFoxes } from '@/lib/foxes'
 
 export const runtime = 'nodejs'
 
@@ -35,11 +36,16 @@ export async function POST() {
       finalizeSession(session.id, { clientDurationMs: 5000 })
     )
 
+    if ('skipped' in result && result.skipped) {
+      return NextResponse.json({ ok: true, sessionId: session.id, skipped: true, foxes: listFoxes() })
+    }
+
     return NextResponse.json({
       ok: true,
       sessionId: session.id,
       artifacts: result.session.artifacts,
       emailed: result.emailed,
+      foxes: listFoxes(),
     })
   } catch (error: any) {
     return NextResponse.json(
@@ -47,6 +53,7 @@ export async function POST() {
         ok: false,
         error: error?.message || 'smoke_failed',
         stage: error?.diagnosticStage || 'unknown',
+        foxes: listFoxes(),
       },
       { status: 500 }
     )

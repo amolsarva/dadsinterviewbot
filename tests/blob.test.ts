@@ -41,5 +41,24 @@ describe('putBlobFromBuffer', () => {
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
     expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
+    expect(result.downloadUrl).toBe(result.url)
+  })
+})
+
+describe('listBlobs', () => {
+  it('returns fallback entries when no token is present', async () => {
+    vi.doMock('@vercel/blob', () => ({
+      put: vi.fn(),
+      list: vi.fn(),
+    }))
+    const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
+    clearFallbackBlobs()
+
+    await putBlobFromBuffer('sessions/test/item.json', Buffer.from('{}'), 'application/json')
+    const result = await listBlobs({ prefix: 'sessions/test/' })
+
+    expect(result.blobs).toHaveLength(1)
+    expect(result.blobs[0].pathname).toBe('sessions/test/item.json')
+    expect(result.blobs[0].downloadUrl).toEqual(result.blobs[0].url)
   })
 })
