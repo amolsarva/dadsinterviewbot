@@ -3,6 +3,16 @@
 
 export type RecordResult = { blob: Blob; durationMs: number }
 
+export type RecordOptions = {
+  baseline: number
+  minDurationMs?: number
+  maxDurationMs?: number
+  silenceMs?: number
+  graceMs?: number
+  shouldForceStop?: () => boolean
+  maxWaitMs?: number
+}
+
 async function getModule(): Promise<any> {
   // Dynamic import so it only loads client-side
   try {
@@ -21,7 +31,7 @@ export async function calibrateRMS(seconds = 2.0): Promise<number> {
   return typeof mod.calibrateRMS === 'function' ? await mod.calibrateRMS(seconds) : 0
 }
 
-export async function recordUntilSilence(args: any): Promise<RecordResult> {
+export async function recordUntilSilence(args: RecordOptions): Promise<RecordResult> {
   const mod = await getModule()
   if (typeof mod.recordUntilSilence !== 'function') throw new Error('Audio recording unavailable')
   return await mod.recordUntilSilence(args)
