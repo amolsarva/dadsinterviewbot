@@ -24,6 +24,7 @@ export class SessionRecorder {
   private chunks: Blob[] = []
   private mimeType: string = 'audio/webm'
   private startedAt = 0
+  private playbackSource: AudioBufferSourceNode | null = null
 
   async start(): Promise<void> {
     if (typeof window === 'undefined') throw new Error('SessionRecorder unavailable')
@@ -77,6 +78,8 @@ export class SessionRecorder {
   async stop(): Promise<SessionRecordingResult> {
     if (!this.recorder) throw new Error('Recorder not started')
 
+    this.stopPlayback()
+
     if (this.recorder.state === 'inactive') {
       return { blob: new Blob([], { type: this.mimeType }), mimeType: this.mimeType, durationMs: 0 }
     }
@@ -99,6 +102,7 @@ export class SessionRecorder {
   }
 
   cancel() {
+    this.stopPlayback()
     if (this.recorder && this.recorder.state !== 'inactive') {
       try {
         this.recorder.stop()
@@ -107,24 +111,54 @@ export class SessionRecorder {
     this.cleanup()
   }
 
+  stopPlayback() {
+    if (this.playbackSource) {
+      const source = this.playbackSource
+      this.playbackSource = null
+      try {
+        source.stop()
+      } catch {}
+      try {
+        source.disconnect()
+      } catch {}
+    }
+  }
+
   private playAudioBuffer(audioBuffer: AudioBuffer): Promise<PlaybackResult> {
     if (!this.audioCtx || !this.destination) throw new Error('Recorder not started')
+    this.stopPlayback()
     const source = this.audioCtx.createBufferSource()
     source.buffer = audioBuffer
     source.connect(this.audioCtx.destination)
     source.connect(this.destination)
     const durationMs = Math.round(audioBuffer.duration * 1000)
     return new Promise<PlaybackResult>((resolve, reject) => {
-      source.onended = () => resolve({ durationMs })
+      this.playbackSource = source
+      source.onended = () => {
+        if (this.playbackSource === source) {
+          this.playbackSource = null
+        }
+        try {
+          source.disconnect()
+        } catch {}
+        resolve({ durationMs })
+      }
       try {
         source.start()
       } catch (err) {
+        if (this.playbackSource === source) {
+          this.playbackSource = null
+        }
+        try {
+          source.disconnect()
+        } catch {}
         reject(err instanceof Error ? err : new Error('play_failed'))
       }
     })
   }
 
   private cleanup() {
+    this.stopPlayback()
     try {
       if (this.micSource && this.destination) {
         this.micSource.disconnect(this.destination)

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { synthesizeSpeechWithOpenAi } from '@/lib/openaiTts'
+import { synthesizeSpeechWithOpenAi, type OpenAiTtsVoice } from '@/lib/openaiTts'
 
 const schema = z.object({
   text: z.string().min(1),
@@ -15,11 +15,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { text, voice, format = 'mp3', model, speed } = schema.parse(body)
 
-    const buffer = await synthesizeSpeechWithOpenAi({ text, voice: voice as any, format, model, speed })
+    const cleanedVoice =
+      typeof voice === 'string' && voice.trim().length > 0 ? (voice.trim() as OpenAiTtsVoice) : undefined
+
+    const chosenVoice = cleanedVoice ?? 'alloy'
+
+    const buffer = await synthesizeSpeechWithOpenAi({ text, voice: chosenVoice, format, model, speed })
     const audioBase64 = buffer.toString('base64')
     const mime = format === 'mp3' ? 'audio/mpeg' : `audio/${format}`
 
-    return NextResponse.json({ ok: true, audioBase64, mime, format })
+    return NextResponse.json({ ok: true, audioBase64, mime, format, voice: chosenVoice })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err?.message || 'tts_failed' }, { status: 400 })
   }

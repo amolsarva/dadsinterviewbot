@@ -11,7 +11,7 @@ export async function calibrateRMS(seconds=2.0){
   stream.getTracks().forEach(t=>t.stop()); await ctx.close(); return med
 }
 
-export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurationMs=180000, silenceMs=1600, graceMs=600, shouldForceStop=()=>false}){
+export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurationMs=180000, silenceMs=1600, graceMs=600, shouldForceStop=()=>false, maxWaitMs=5000}){
   const stream = await navigator.mediaDevices.getUserMedia({audio:true})
   const ctx = new AudioContext(); const src = ctx.createMediaStreamSource(stream); const {input,output}=createBandpass(ctx); src.connect(input)
   const an = ctx.createAnalyser(); an.fftSize=2048; output.connect(an)
@@ -19,18 +19,29 @@ export async function recordUntilSilence({baseline, minDurationMs=1200, maxDurat
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm'
   const rec = new MediaRecorder(stream,{mimeType:mime}); const chunks=[]; rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)}
   let started=false, startedAt=0, lastLoud=performance.now(), quietStreak=0, loudStreak=0
+  const createdAt=performance.now()
+  let resolved=false
   const data = new Float32Array(an.fftSize)
   return await new Promise((resolve)=>{
-    rec.onstop=()=>{ const blob=new Blob(chunks,{type:mime}); const durationMs=Math.max(0,performance.now()-startedAt); cleanup(); resolve({blob,durationMs}) }
+    rec.onstop=()=>{ if(resolved) return; resolved=true; const blob=new Blob(chunks,{type:mime}); const durationMs=started?Math.max(0,performance.now()-startedAt):0; cleanup(); resolve({blob,durationMs}) }
     proc.onaudioprocess=()=>{
-      an.getFloatTimeDomainData(data); const level = baseline>0 ? rms(data)/baseline : 0; const now = performance.now()
-      if(!started){ if(level>=3.0){ if(++loudStreak>=3){ started=true; startedAt=now; rec.start() } } else loudStreak=0 }
-      else{ if(level<2.0) quietStreak++; else { quietStreak=0; lastLoud=now }
-        const elapsed=now-startedAt, silenceElapsed=now-lastLoud
-        if(elapsed>=maxDurationMs) rec.stop()
-        else if(shouldForceStop() && elapsed>=minDurationMs) rec.stop()
-        else if(elapsed>=minDurationMs && quietStreak>=8 && silenceElapsed>=(silenceMs+graceMs)) rec.stop()
+      if(resolved) return
+      an.getFloatTimeDomainData(data); const level = baseline>0 ? rms(data)/baseline : rms(data); const now = performance.now()
+      if(!started){
+        if(shouldForceStop()){ resolved=true; cleanup(); resolve({blob:new Blob([], {type:mime}), durationMs:0}); return }
+        if(level>=3.0){ if(++loudStreak>=3){ started=true; startedAt=now; lastLoud=now; rec.start() } }
+        else{
+          loudStreak=0
+          if(maxWaitMs && now-createdAt>=maxWaitMs){ started=true; startedAt=now; lastLoud=now; rec.start() }
+        }
+        return
       }
+      const elapsed=now-startedAt
+      if(shouldForceStop()){ if(elapsed>=Math.min(minDurationMs,400)) rec.stop(); return }
+      if(level<2.0) quietStreak++; else { quietStreak=0; lastLoud=now }
+      const silenceElapsed=now-lastLoud
+      if(elapsed>=maxDurationMs) rec.stop()
+      else if(elapsed>=minDurationMs && quietStreak>=8 && silenceElapsed>=(silenceMs+graceMs)) rec.stop()
     }
     function cleanup(){ try{proc.disconnect(); output.disconnect()}catch{} try{stream.getTracks().forEach(t=>t.stop())}catch{} try{ctx.close()}catch{} }
   })
