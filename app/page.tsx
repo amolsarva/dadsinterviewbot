@@ -4,6 +4,94 @@ import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 
+const SESSION_STORAGE_KEY = 'sessionId'
+
+type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
+
+type SessionInitResult = {
+  id: string
+  source: SessionInitSource
+}
+
+type NetworkSessionResult = {
+  id: string
+  source: Extract<SessionInitSource, 'network' | 'fallback'>
+}
+
+let inMemorySessionId: string | null = null
+let sessionStartPromise: Promise<NetworkSessionResult> | null = null
+
+const createLocalSessionId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return Math.random().toString(36).slice(2)
+}
+
+const readStoredSessionId = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = window.sessionStorage.getItem(SESSION_STORAGE_KEY)
+    return stored && typeof stored === 'string' ? stored : null
+  } catch {
+    return null
+  }
+}
+
+const persistSessionId = (id: string) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, id)
+  } catch {}
+}
+
+const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
+  if (typeof window === 'undefined') {
+    const fallbackId = createLocalSessionId()
+    return { id: fallbackId, source: 'fallback' as const }
+  }
+
+  try {
+    const res = await fetch('/api/session/start', { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
+    const source: NetworkSessionResult['source'] =
+      typeof data?.id === 'string' && data.id ? 'network' : 'fallback'
+    inMemorySessionId = id
+    persistSessionId(id)
+    return { id, source }
+  } catch {
+    let id = readStoredSessionId()
+    if (!id) {
+      id = createLocalSessionId()
+    }
+    inMemorySessionId = id
+    persistSessionId(id)
+    return { id, source: 'fallback' as const }
+  }
+}
+
+const ensureSessionIdOnce = async (): Promise<SessionInitResult> => {
+  if (inMemorySessionId) {
+    return { id: inMemorySessionId, source: 'memory' }
+  }
+
+  const stored = readStoredSessionId()
+  if (stored) {
+    inMemorySessionId = stored
+    return { id: stored, source: 'storage' }
+  }
+
+  if (!sessionStartPromise) {
+    sessionStartPromise = requestNewSessionId().finally(() => {
+      sessionStartPromise = null
+    })
+  }
+
+  const result = await sessionStartPromise
+  return result
+}
+
 const OPENING = `Start testing greeting. Answer a question.`
 
 type AssistantPlayback = {
@@ -28,6 +116,7 @@ export default function Home() {
   const sessionAudioDurationRef = useRef<number>(0)
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
+  const lastAnnouncedSessionIdRef = useRef<string | null>(null)
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
@@ -39,45 +128,39 @@ export default function Home() {
     if (sessionInitRef.current) return
     sessionInitRef.current = true
     if (typeof window === 'undefined') return
-    try {
-      const existing = sessionStorage.getItem('sessionId')
-      if (existing) {
-        setSessionId(existing)
-        pushLog('Session resumed: ' + existing)
-        return
-      }
-    } catch {}
 
-    const controller = new AbortController()
     let cancelled = false
 
-    async function startSession() {
-      try {
-        const res = await fetch('/api/session/start', { method: 'POST', signal: controller.signal })
-        const data = await res.json().catch(() => ({}))
-        if (controller.signal.aborted || cancelled) return
-        const id = (typeof data?.id === 'string' && data.id) || crypto.randomUUID()
-        sessionStorage.setItem('sessionId', id)
-        setSessionId(id)
-        pushLog('Session started: ' + id)
-      } catch (error) {
-        if (controller.signal.aborted || cancelled) return
-        let existing: string | null = null
-        try {
-          existing = sessionStorage.getItem('sessionId')
-        } catch {}
-        const id = existing || crypto.randomUUID()
-        sessionStorage.setItem('sessionId', id)
-        setSessionId(id)
-        pushLog('Session started (fallback): ' + id)
-      }
-    }
+    ensureSessionIdOnce()
+      .then((result) => {
+        if (cancelled) return
+        setSessionId(result.id)
 
-    startSession()
+        if (lastAnnouncedSessionIdRef.current === result.id) return
+        lastAnnouncedSessionIdRef.current = result.id
+
+        if (result.source === 'network') {
+          pushLog('Session started: ' + result.id)
+        } else if (result.source === 'fallback') {
+          pushLog('Session started (fallback): ' + result.id)
+        } else {
+          pushLog('Session resumed: ' + result.id)
+        }
+      })
+      .catch(() => {
+        if (cancelled) return
+        const fallbackId = createLocalSessionId()
+        inMemorySessionId = fallbackId
+        persistSessionId(fallbackId)
+        setSessionId(fallbackId)
+        if (lastAnnouncedSessionIdRef.current !== fallbackId) {
+          lastAnnouncedSessionIdRef.current = fallbackId
+          pushLog('Session started (fallback): ' + fallbackId)
+        }
+      })
 
     return () => {
       cancelled = true
-      controller.abort()
     }
   }, [pushLog])
 
