@@ -27,6 +27,7 @@ export default function Home() {
   const sessionAudioUrlRef = useRef<string | null>(null)
   const sessionAudioDurationRef = useRef<number>(0)
   const finishRequestedRef = useRef(false)
+  const sessionInitRef = useRef(false)
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
@@ -35,6 +36,8 @@ export default function Home() {
   }, [finishRequested])
 
   useEffect(() => {
+    if (sessionInitRef.current) return
+    sessionInitRef.current = true
     if (typeof window === 'undefined') return
     try {
       const existing = sessionStorage.getItem('sessionId')
