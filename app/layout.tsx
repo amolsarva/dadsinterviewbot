@@ -2,6 +2,32 @@ import './globals.css'
 import React from 'react'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const commitSha =
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA ?? ''
+  const commitMessage =
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ?? process.env.VERCEL_GIT_COMMIT_MESSAGE ?? 'local changes'
+  const commitTimestamp =
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_TIMESTAMP ?? process.env.VERCEL_GIT_COMMIT_TIMESTAMP ?? null
+  const repoOwner =
+    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_OWNER ?? process.env.VERCEL_GIT_REPO_OWNER ?? ''
+  const repoSlug =
+    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_SLUG ?? process.env.VERCEL_GIT_REPO_SLUG ?? ''
+
+  const shortSha = commitSha ? commitSha.slice(0, 7) : 'local'
+  const commitUrl = commitSha && repoOwner && repoSlug ? `https://github.com/${repoOwner}/${repoSlug}/commit/${commitSha}` : null
+
+  let formattedTime = 'just now (Eastern Time)'
+  if (commitTimestamp) {
+    const parsed = new Date(commitTimestamp)
+    if (!Number.isNaN(parsed.valueOf())) {
+      formattedTime = `${new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(parsed)} Eastern Time`
+    }
+  }
+
   return (
     <html lang="en">
       <body className="min-h-screen">
@@ -16,7 +42,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </nav>
           </header>
           {children}
-          <footer className="mt-10 text-xs opacity-70">v1.3.1 — continuity-first build.</footer>
+          <footer className="mt-10 text-xs opacity-70">
+            {commitUrl ? (
+              <a href={commitUrl} className="underline">
+                {shortSha} — {commitMessage}
+              </a>
+            ) : (
+              <span>
+                {shortSha} — {commitMessage}
+              </span>
+            )}{' '}
+            · {formattedTime}
+          </footer>
         </div>
       </body>
     </html>

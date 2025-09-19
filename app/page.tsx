@@ -4,6 +4,94 @@ import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 
+const SESSION_STORAGE_KEY = 'sessionId'
+
+type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
+
+type SessionInitResult = {
+  id: string
+  source: SessionInitSource
+}
+
+type NetworkSessionResult = {
+  id: string
+  source: Extract<SessionInitSource, 'network' | 'fallback'>
+}
+
+let inMemorySessionId: string | null = null
+let sessionStartPromise: Promise<NetworkSessionResult> | null = null
+
+const createLocalSessionId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return Math.random().toString(36).slice(2)
+}
+
+const readStoredSessionId = () => {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = window.sessionStorage.getItem(SESSION_STORAGE_KEY)
+    return stored && typeof stored === 'string' ? stored : null
+  } catch {
+    return null
+  }
+}
+
+const persistSessionId = (id: string) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, id)
+  } catch {}
+}
+
+const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
+  if (typeof window === 'undefined') {
+    const fallbackId = createLocalSessionId()
+    return { id: fallbackId, source: 'fallback' as const }
+  }
+
+  try {
+    const res = await fetch('/api/session/start', { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
+    const source: NetworkSessionResult['source'] =
+      typeof data?.id === 'string' && data.id ? 'network' : 'fallback'
+    inMemorySessionId = id
+    persistSessionId(id)
+    return { id, source }
+  } catch {
+    let id = readStoredSessionId()
+    if (!id) {
+      id = createLocalSessionId()
+    }
+    inMemorySessionId = id
+    persistSessionId(id)
+    return { id, source: 'fallback' as const }
+  }
+}
+
+const ensureSessionIdOnce = async (): Promise<SessionInitResult> => {
+  if (inMemorySessionId) {
+    return { id: inMemorySessionId, source: 'memory' }
+  }
+
+  const stored = readStoredSessionId()
+  if (stored) {
+    inMemorySessionId = stored
+    return { id: stored, source: 'storage' }
+  }
+
+  if (!sessionStartPromise) {
+    sessionStartPromise = requestNewSessionId().finally(() => {
+      sessionStartPromise = null
+    })
+  }
+
+  const result = await sessionStartPromise
+  return result
+}
+
 const OPENING = `Start testing greeting. Answer a question.`
 
 type AssistantPlayback = {
@@ -13,7 +101,10 @@ type AssistantPlayback = {
 }
 
 export default function Home() {
-  const m = useInterviewMachine()
+  const machineState = useInterviewMachine((state) => state.state)
+  const debugLog = useInterviewMachine((state) => state.debugLog)
+  const pushLog = useInterviewMachine((state) => state.pushLog)
+  const toDone = useInterviewMachine((state) => state.toDone)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
@@ -24,6 +115,8 @@ export default function Home() {
   const sessionAudioUrlRef = useRef<string | null>(null)
   const sessionAudioDurationRef = useRef<number>(0)
   const finishRequestedRef = useRef(false)
+  const sessionInitRef = useRef(false)
+  const lastAnnouncedSessionIdRef = useRef<string | null>(null)
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
@@ -32,24 +125,44 @@ export default function Home() {
   }, [finishRequested])
 
   useEffect(() => {
-    try {
-      fetch('/api/session/start', { method: 'POST' })
-        .then((r) => r.json())
-        .then((d) => {
-          const id = d?.id || crypto.randomUUID()
-          sessionStorage.setItem('sessionId', id)
-          setSessionId(id)
-          m.pushLog('Session started: ' + id)
-        })
-        .catch(() => {
-          const existing = sessionStorage.getItem('sessionId')
-          const id = existing || crypto.randomUUID()
-          sessionStorage.setItem('sessionId', id)
-          setSessionId(id)
-          m.pushLog('Session started (fallback): ' + id)
-        })
-    } catch {}
-  }, [m])
+    if (sessionInitRef.current) return
+    sessionInitRef.current = true
+    if (typeof window === 'undefined') return
+
+    let cancelled = false
+
+    ensureSessionIdOnce()
+      .then((result) => {
+        if (cancelled) return
+        setSessionId(result.id)
+
+        if (lastAnnouncedSessionIdRef.current === result.id) return
+        lastAnnouncedSessionIdRef.current = result.id
+
+        if (result.source === 'network') {
+          pushLog('Session started: ' + result.id)
+        } else if (result.source === 'fallback') {
+          pushLog('Session started (fallback): ' + result.id)
+        } else {
+          pushLog('Session resumed: ' + result.id)
+        }
+      })
+      .catch(() => {
+        if (cancelled) return
+        const fallbackId = createLocalSessionId()
+        inMemorySessionId = fallbackId
+        persistSessionId(fallbackId)
+        setSessionId(fallbackId)
+        if (lastAnnouncedSessionIdRef.current !== fallbackId) {
+          lastAnnouncedSessionIdRef.current = fallbackId
+          pushLog('Session started (fallback): ' + fallbackId)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [pushLog])
 
   useEffect(() => {
     return () => {
@@ -116,7 +229,7 @@ export default function Home() {
   const playAssistantResponse = useCallback(
     async (text: string): Promise<AssistantPlayback> => {
       if (!text) return { base64: null, mime: 'audio/mpeg', durationMs: 0 }
-      m.pushLog('Assistant reply ready → playing')
+      pushLog('Assistant reply ready → playing')
       try {
         const res = await fetch('/api/tts', {
           method: 'POST',
@@ -136,7 +249,7 @@ export default function Home() {
             const playback = await recorder.playAssistantBase64(data.audioBase64, mime)
             durationMs = playback?.durationMs ?? 0
           } catch (err) {
-            m.pushLog('Recorder playback failed, falling back to direct audio')
+            pushLog('Recorder playback failed, falling back to direct audio')
             durationMs = await playWithAudioElement(data.audioBase64, mime)
           }
         } else {
@@ -144,12 +257,12 @@ export default function Home() {
         }
         return { base64: data.audioBase64, mime, durationMs }
       } catch (err) {
-        m.pushLog('TTS unavailable, using speech synthesis fallback')
+        pushLog('TTS unavailable, using speech synthesis fallback')
         const durationMs = await playWithSpeechSynthesis(text)
         return { base64: null, mime: 'audio/mpeg', durationMs }
       }
     },
-    [m, playWithAudioElement, playWithSpeechSynthesis],
+    [playWithAudioElement, playWithSpeechSynthesis, pushLog],
   )
 
   const finalizeNow = useCallback(async () => {
@@ -183,11 +296,11 @@ export default function Home() {
                 sessionAudioDurationMs = saveJson.durationMs
               }
             } else {
-              m.pushLog('Failed to store session audio')
+              pushLog('Failed to store session audio')
             }
           }
         } catch (err) {
-          m.pushLog('Session audio capture failed')
+          pushLog('Session audio capture failed')
           try {
             recorderRef.current?.cancel()
           } catch {}
@@ -206,26 +319,26 @@ export default function Home() {
 
       async function inspect(label: string, response: Response | null, options?: { optional?: boolean }) {
         if (!response) {
-          m.pushLog(`${label} failed: no response`)
+          pushLog(`${label} failed: no response`)
           return false
         }
         let payload: any = null
         let logged = false
         try {
           payload = await response.clone().json()
-          m.pushLog(`${label}: ` + JSON.stringify(payload))
+          pushLog(`${label}: ` + JSON.stringify(payload))
           logged = true
         } catch {
           try {
             const text = await response.clone().text()
             if (text.trim().length) {
-              m.pushLog(`${label}: ${text}`)
+              pushLog(`${label}: ${text}`)
               logged = true
             }
           } catch {}
         }
         if (!logged) {
-          m.pushLog(`${label}: status ${response.status}`)
+          pushLog(`${label}: status ${response.status}`)
         }
 
         const payloadError = payload && typeof payload.error === 'string' ? payload.error : null
@@ -234,10 +347,10 @@ export default function Home() {
 
         if (!response.ok || (payload && payload.ok === false)) {
           if (shouldIgnoreMissingSession) {
-            m.pushLog(`${label} skipped (stateless runtime)`)
+            pushLog(`${label} skipped (stateless runtime)`)
             return true
           }
-          m.pushLog(`${label} not ok (status ${response.status})`)
+          pushLog(`${label} not ok (status ${response.status})`)
           return false
         }
         return true
@@ -252,7 +365,7 @@ export default function Home() {
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'request_failed'
-        m.pushLog(`Finalized (blob) failed: ${message}`)
+        pushLog(`Finalized (blob) failed: ${message}`)
         throw err
       }
 
@@ -272,7 +385,7 @@ export default function Home() {
         memOk = await inspect('Finalized (mem)', memRes, { optional: true })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'request_failed'
-        m.pushLog(`Finalized (mem) failed: ${message}`)
+        pushLog(`Finalized (mem) failed: ${message}`)
         memOk = false
       }
 
@@ -285,15 +398,15 @@ export default function Home() {
         localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0, 50)))
       } catch {}
 
-      m.toDone()
+      toDone()
     } catch {
-      m.pushLog('Finalize failed')
+      pushLog('Finalize failed')
     } finally {
       finishRequestedRef.current = false
       setFinishRequested(false)
       setDisabledNext(false)
     }
-  }, [m, sessionId])
+  }, [pushLog, sessionId, toDone])
 
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
@@ -301,7 +414,7 @@ export default function Home() {
     inTurnRef.current = true
     setDisabledNext(true)
     try {
-      m.pushLog('Recording started')
+      pushLog('Recording started')
       let b64 = ''
       let recDuration = 0
       try {
@@ -320,7 +433,7 @@ export default function Home() {
         b64 = await blobToBase64(silent)
         recDuration = 500
       }
-      m.pushLog('Recording stopped → thinking')
+      pushLog('Recording stopped → thinking')
 
       const askRes = await fetch('/api/ask-audio', {
         method: 'POST',
@@ -384,7 +497,7 @@ export default function Home() {
       const nextTurn = turn + 1
       setTurn(nextTurn)
 
-      m.pushLog('Finished playing → ready')
+      pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
       const shouldEnd =
         finishRequestedRef.current || endIntent || reachedMax || (transcript && endRegex.test(transcript))
@@ -396,11 +509,11 @@ export default function Home() {
         setDisabledNext(false)
       }
     } catch (e) {
-      m.pushLog('There was a problem saving or asking. Check /api/health and env keys.')
+      pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
       setDisabledNext(false)
     }
-  }, [MAX_TURNS, finalizeNow, m, playAssistantResponse, sessionId, turn])
+  }, [MAX_TURNS, finalizeNow, playAssistantResponse, pushLog, sessionId, turn])
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
@@ -412,7 +525,7 @@ export default function Home() {
       try {
         await ensureSessionRecorder()
       } catch {
-        m.pushLog('Session recorder unavailable; proceeding without combined audio')
+        pushLog('Session recorder unavailable; proceeding without combined audio')
       }
       await playAssistantResponse(OPENING)
     } catch {
@@ -420,18 +533,18 @@ export default function Home() {
     } finally {
       setDisabledNext(false)
     }
-  }, [ensureSessionRecorder, hasStarted, m, playAssistantResponse, playWithSpeechSynthesis])
+  }, [ensureSessionRecorder, hasStarted, playAssistantResponse, playWithSpeechSynthesis, pushLog])
 
   const requestFinish = useCallback(async () => {
     if (finishRequestedRef.current) return
     setFinishRequested(true)
-    m.pushLog('Finish requested by user')
+    pushLog('Finish requested by user')
     if (inTurnRef.current) {
-      m.pushLog('Finishing after the current turn completes')
+      pushLog('Finishing after the current turn completes')
       return
     }
     await finalizeNow()
-  }, [finalizeNow, m])
+  }, [finalizeNow, pushLog])
 
   const onNext = useCallback(async () => {
     if (disabledNext) return
@@ -458,7 +571,7 @@ export default function Home() {
         </div>
 
         <div className="flex gap-3">
-          {m.state !== 'doneSuccess' ? (
+          {machineState !== 'doneSuccess' ? (
             <button onClick={onNext} disabled={disabledNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50">
               Next
             </button>
@@ -481,7 +594,7 @@ export default function Home() {
               Start Again
             </button>
           )}
-          {m.state !== 'doneSuccess' && (
+          {machineState !== 'doneSuccess' && (
             <button
               onClick={requestFinish}
               disabled={!hasStarted || finishRequested}
@@ -494,7 +607,7 @@ export default function Home() {
 
         <div className="w-full max-w-xl">
           <label className="text-xs opacity-70">On-screen Log (copy to share diagnostics):</label>
-          <textarea value={m.debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
+          <textarea value={debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
           <div className="mt-2 text-xs opacity-70">
             Need more? Visit <a className="underline" href="/diagnostics">Diagnostics</a>.
           </div>
