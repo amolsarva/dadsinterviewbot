@@ -3,8 +3,26 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
+import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
+import { detectCompletionIntent } from '@/lib/intents'
 
 const SESSION_STORAGE_KEY = 'sessionId'
+const EMAIL_STORAGE_KEY = 'defaultEmail'
+const EMAIL_ENABLED_KEY = 'sendSummaryEmails'
+const DEFAULT_NOTIFY_EMAIL = 'a@sarva.co'
+const HARD_TURN_LIMIT_MS = 90_000
+const DEFAULT_BASELINE = 0.004
+const MIN_BASELINE = 0.0004
+const MAX_BASELINE = 0.05
+const BASELINE_SPIKE_FACTOR = 2.8
+
+const clampBaseline = (value: number | null | undefined) => {
+  if (!Number.isFinite(value ?? NaN) || !value) {
+    return DEFAULT_BASELINE
+  }
+  const clamped = Math.min(Math.max(value, MIN_BASELINE), MAX_BASELINE)
+  return clamped
+}
 
 type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
 
@@ -45,6 +63,20 @@ const persistSessionId = (id: string) => {
   } catch {}
 }
 
+const readEmailPreferences = () => {
+  if (typeof window === 'undefined') {
+    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+  }
+  try {
+    const email = window.localStorage.getItem(EMAIL_STORAGE_KEY) || DEFAULT_NOTIFY_EMAIL
+    const rawEnabled = window.localStorage.getItem(EMAIL_ENABLED_KEY)
+    const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
+    return { email, emailsEnabled }
+  } catch {
+    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+  }
+}
+
 const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
   if (typeof window === 'undefined') {
     const fallbackId = createLocalSessionId()
@@ -52,7 +84,12 @@ const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
   }
 
   try {
-    const res = await fetch('/api/session/start', { method: 'POST' })
+    const { email, emailsEnabled } = readEmailPreferences()
+    const res = await fetch('/api/session/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, emailsEnabled }),
+    })
     const data = await res.json().catch(() => ({}))
     const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
     const source: NetworkSessionResult['source'] =
@@ -92,7 +129,77 @@ const ensureSessionIdOnce = async (): Promise<SessionInitResult> => {
   return result
 }
 
-const OPENING = `Start testing greeting. Answer a question.`
+const INTRO_FALLBACK =
+  'Welcome back. I remember everything you have trusted me with. Tell me one new detail you would like to explore now.'
+
+const STATE_VISUALS: Record<
+  | 'idle'
+  | 'calibrating'
+  | 'recording'
+  | 'thinking'
+  | 'speakingPrep'
+  | 'playing'
+  | 'readyToContinue'
+  | 'doneSuccess',
+  { icon: string; badge: string; title: string; description: string; gradient: string }
+> = {
+  idle: {
+    icon: '✨',
+    badge: 'Ready',
+    title: 'Ready to begin',
+    description: 'I’ll start the conversation for you—just settle in and listen.',
+    gradient: 'from-sky-400/40 via-blue-500/30 to-indigo-500/40',
+  },
+  calibrating: {
+    icon: '🎚️',
+    badge: 'Preparing',
+    title: 'Getting ready to listen',
+    description: 'Give me a moment to measure the room noise before I start recording.',
+    gradient: 'from-cyan-400/40 via-sky-400/40 to-indigo-400/40',
+  },
+  recording: {
+    icon: '🎤',
+    badge: 'Listening',
+    title: 'Listening',
+    description: 'I’m capturing every detail you say. Speak naturally and tap the ring when you’d like me to stop listening.',
+    gradient: 'from-emerald-400/40 via-lime-300/40 to-emerald-500/40',
+  },
+  thinking: {
+    icon: '🤔',
+    badge: 'Thinking',
+    title: 'Thinking',
+    description: 'Give me a brief moment while I make sense of what you shared.',
+    gradient: 'from-fuchsia-400/40 via-purple-500/40 to-indigo-600/40',
+  },
+  speakingPrep: {
+    icon: '🔄',
+    badge: 'Warming up',
+    title: 'Preparing to speak',
+    description: 'Spinning up my voice so I can respond clearly.',
+    gradient: 'from-amber-300/40 via-amber-400/40 to-orange-500/40',
+  },
+  playing: {
+    icon: '💬',
+    badge: 'Speaking',
+    title: 'Speaking',
+    description: 'Sharing what I heard and how we can keep going.',
+    gradient: 'from-amber-400/40 via-orange-500/40 to-amber-600/40',
+  },
+  readyToContinue: {
+    icon: '✨',
+    badge: 'Ready',
+    title: 'Ready for more',
+    description: 'Just start speaking whenever you’re ready for the next part.',
+    gradient: 'from-sky-400/40 via-cyan-400/40 to-blue-500/40',
+  },
+  doneSuccess: {
+    icon: '✅',
+    badge: 'Complete',
+    title: 'Session complete',
+    description: 'Review your links or start another memory when you feel inspired.',
+    gradient: 'from-slate-400/40 via-slate-500/40 to-slate-600/40',
+  },
+}
 
 type AssistantPlayback = {
   base64: string | null
@@ -108,17 +215,38 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
-  const [disabledNext, setDisabledNext] = useState(false)
   const [finishRequested, setFinishRequested] = useState(false)
+  const [manualStopRequested, setManualStopRequested] = useState(false)
   const inTurnRef = useRef(false)
+  const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
   const sessionAudioUrlRef = useRef<string | null>(null)
   const sessionAudioDurationRef = useRef<number>(0)
+  const baselineRef = useRef<number | null>(null)
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
+  const conversationRef = useRef<SummarizableTurn[]>([])
+  const autoAdvanceTimeoutRef = useRef<number | null>(null)
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
+
+  const updateMachineState = useCallback(
+    (
+      next:
+        | 'idle'
+        | 'calibrating'
+        | 'recording'
+        | 'thinking'
+        | 'speakingPrep'
+        | 'playing'
+        | 'readyToContinue'
+        | 'doneSuccess',
+    ) => {
+      useInterviewMachine.setState((prev) => (prev.state === next ? prev : { ...prev, state: next }))
+    },
+    [],
+  )
 
   useEffect(() => {
     finishRequestedRef.current = finishRequested
@@ -170,6 +298,10 @@ export default function Home() {
         recorderRef.current?.cancel()
       } catch {}
       recorderRef.current = null
+      if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
+        window.clearTimeout(autoAdvanceTimeoutRef.current)
+      }
+      autoAdvanceTimeoutRef.current = null
     }
   }, [])
 
@@ -188,53 +320,114 @@ export default function Home() {
     }
   }, [])
 
-  const playWithAudioElement = useCallback(async (base64: string, mime: string) => {
-    if (typeof window === 'undefined') return 0
-    return await new Promise<number>((resolve) => {
-      try {
-        const src = `data:${mime};base64,${base64}`
-        const audio = new Audio(src)
-        audio.onended = () => {
-          resolve(Math.round((audio.duration || 0) * 1000))
-        }
-        audio.onerror = () => resolve(0)
-        audio.play().catch(() => resolve(0))
-      } catch {
-        resolve(0)
-      }
-    })
-  }, [])
-
-  const playWithSpeechSynthesis = useCallback(async (text: string) => {
-    if (typeof window === 'undefined') return 0
-    return await new Promise<number>((resolve) => {
-      try {
-        if (!('speechSynthesis' in window)) {
+  const playWithAudioElement = useCallback(
+    async (
+      base64: string,
+      mime: string,
+      options?: {
+        onStart?: () => void
+      },
+    ) => {
+      if (typeof window === 'undefined') return 0
+      return await new Promise<number>((resolve) => {
+        try {
+          const src = `data:${mime};base64,${base64}`
+          const audio = new Audio(src)
+          const triggerStart = () => {
+            if (!options?.onStart) return
+            try {
+              options.onStart()
+            } catch {}
+          }
+          let started = false
+          const ensureStarted = () => {
+            if (started) return
+            started = true
+            triggerStart()
+          }
+          audio.onended = () => {
+            resolve(Math.round((audio.duration || 0) * 1000))
+          }
+          audio.onerror = () => resolve(0)
+          audio.onplay = ensureStarted
+          audio.onplaying = ensureStarted
+          const playPromise = audio.play()
+          if (playPromise && typeof playPromise.then === 'function') {
+            playPromise
+              .then(() => {
+                ensureStarted()
+              })
+              .catch(() => {
+                resolve(0)
+              })
+          } else {
+            ensureStarted()
+          }
+        } catch {
           resolve(0)
-          return
         }
-        const utterance = new SpeechSynthesisUtterance(text)
-        utterance.rate = 1
-        utterance.pitch = 1
-        utterance.onend = () => resolve(0)
-        utterance.onerror = () => resolve(0)
-        window.speechSynthesis.cancel()
-        window.speechSynthesis.speak(utterance)
-      } catch {
-        resolve(0)
-      }
-    })
-  }, [])
+      })
+    },
+    [],
+  )
+
+  const playWithSpeechSynthesis = useCallback(
+    async (
+      text: string,
+      options?: {
+        onStart?: () => void
+      },
+    ) => {
+      if (typeof window === 'undefined') return 0
+      return await new Promise<number>((resolve) => {
+        try {
+          if (!('speechSynthesis' in window)) {
+            resolve(0)
+            return
+          }
+          const utterance = new SpeechSynthesisUtterance(text)
+          utterance.rate = 1
+          utterance.pitch = 1
+          const triggerStart = () => {
+            if (!options?.onStart) return
+            try {
+              options.onStart()
+            } catch {}
+          }
+          let started = false
+          const ensureStarted = () => {
+            if (started) return
+            started = true
+            triggerStart()
+          }
+          utterance.onstart = ensureStarted
+          utterance.onend = () => resolve(0)
+          utterance.onerror = () => resolve(0)
+          window.speechSynthesis.cancel()
+          window.speechSynthesis.speak(utterance)
+          ensureStarted()
+        } catch {
+          resolve(0)
+        }
+      })
+    },
+    [],
+  )
 
   const playAssistantResponse = useCallback(
-    async (text: string): Promise<AssistantPlayback> => {
+    async (
+      text: string,
+      options?: {
+        onPlaybackStart?: () => void
+      },
+    ): Promise<AssistantPlayback> => {
       if (!text) return { base64: null, mime: 'audio/mpeg', durationMs: 0 }
       pushLog('Assistant reply ready → playing')
       try {
         const res = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, speed: 1.22 }),
         })
         if (!res.ok) throw new Error('tts_failed')
         const data = await res.json()
@@ -246,19 +439,30 @@ export default function Home() {
         const recorder = recorderRef.current
         if (recorder) {
           try {
+            if (options?.onPlaybackStart) {
+              try {
+                options.onPlaybackStart()
+              } catch {}
+            }
             const playback = await recorder.playAssistantBase64(data.audioBase64, mime)
             durationMs = playback?.durationMs ?? 0
           } catch (err) {
             pushLog('Recorder playback failed, falling back to direct audio')
-            durationMs = await playWithAudioElement(data.audioBase64, mime)
+            durationMs = await playWithAudioElement(data.audioBase64, mime, {
+              onStart: options?.onPlaybackStart,
+            })
           }
         } else {
-          durationMs = await playWithAudioElement(data.audioBase64, mime)
+          durationMs = await playWithAudioElement(data.audioBase64, mime, {
+            onStart: options?.onPlaybackStart,
+          })
         }
         return { base64: data.audioBase64, mime, durationMs }
       } catch (err) {
         pushLog('TTS unavailable, using speech synthesis fallback')
-        const durationMs = await playWithSpeechSynthesis(text)
+        const durationMs = await playWithSpeechSynthesis(text, {
+          onStart: options?.onPlaybackStart,
+        })
         return { base64: null, mime: 'audio/mpeg', durationMs }
       }
     },
@@ -267,7 +471,9 @@ export default function Home() {
 
   const finalizeNow = useCallback(async () => {
     if (!sessionId) return
-    setDisabledNext(true)
+    setManualStopRequested(false)
+    manualStopRef.current = false
+    updateMachineState('thinking')
     try {
       let sessionAudioUrl = sessionAudioUrlRef.current
       let sessionAudioDurationMs = sessionAudioDurationRef.current
@@ -311,10 +517,16 @@ export default function Home() {
       sessionAudioUrlRef.current = sessionAudioUrl
       sessionAudioDurationRef.current = sessionAudioDurationMs
 
+      const { email: preferredEmail, emailsEnabled } = readEmailPreferences()
+      const trimmedEmail = preferredEmail && preferredEmail.trim().length ? preferredEmail.trim() : undefined
+      const emailForSession = emailsEnabled ? trimmedEmail : undefined
+
       const payload = {
         sessionId,
         sessionAudioUrl: sessionAudioUrl || undefined,
         sessionAudioDurationMs: sessionAudioDurationMs || undefined,
+        email: emailForSession,
+        emailsEnabled,
       }
 
       async function inspect(label: string, response: Response | null, options?: { optional?: boolean }) {
@@ -394,37 +606,91 @@ export default function Home() {
       try {
         const demo = JSON.parse(localStorage.getItem('demoHistory') || '[]')
         const stamp = new Date().toISOString()
-        demo.unshift({ id: sessionId, created_at: stamp })
+        const summaryTitle =
+          generateSessionTitle(conversationRef.current, {
+            fallback: `Session on ${new Date(stamp).toLocaleDateString()}`,
+          }) || null
+        demo.unshift({ id: sessionId, created_at: stamp, title: summaryTitle })
         localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0, 50)))
       } catch {}
 
       toDone()
     } catch {
       pushLog('Finalize failed')
+      updateMachineState('readyToContinue')
     } finally {
+      conversationRef.current = []
       finishRequestedRef.current = false
       setFinishRequested(false)
-      setDisabledNext(false)
     }
-  }, [pushLog, sessionId, toDone])
+  }, [pushLog, sessionId, toDone, updateMachineState])
+
+  const requestManualStop = useCallback(() => {
+    if (!inTurnRef.current) return
+    if (manualStopRef.current) return
+    manualStopRef.current = true
+    setManualStopRequested(true)
+    pushLog('Manual stop requested')
+  }, [manualStopRef, pushLog])
 
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
     if (inTurnRef.current) return
+    if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimeoutRef.current)
+      autoAdvanceTimeoutRef.current = null
+    }
     inTurnRef.current = true
-    setDisabledNext(true)
+    manualStopRef.current = false
+    setManualStopRequested(false)
+    updateMachineState('calibrating')
+    pushLog('Calibrating microphone baseline')
     try {
-      pushLog('Recording started')
       let b64 = ''
       let recDuration = 0
+      let baselineToUse = baselineRef.current ?? DEFAULT_BASELINE
+      const calibrateDuration = baselineRef.current ? 0.6 : 0.9
       try {
-        const baseline = await calibrateRMS(0.5)
+        const measured = clampBaseline(await calibrateRMS(calibrateDuration))
+        const previous = baselineRef.current
+        if (previous && measured > previous * BASELINE_SPIKE_FACTOR) {
+          pushLog(
+            `Baseline spike detected (${measured.toFixed(4)}). Reusing previous value ${previous.toFixed(4)}.`,
+          )
+          baselineToUse = previous
+        } else {
+          baselineToUse = measured
+          baselineRef.current = measured
+          pushLog(`Baseline ready: ${measured.toFixed(4)}`)
+        }
+      } catch (err) {
+        const previous = baselineRef.current
+        if (previous) {
+          baselineToUse = previous
+          pushLog(`Baseline calibration failed. Reusing previous value ${previous.toFixed(4)}.`)
+        } else {
+          baselineToUse = DEFAULT_BASELINE
+          pushLog(`Baseline calibration failed. Using default value ${baselineToUse.toFixed(4)}.`)
+        }
+      }
+
+      updateMachineState('recording')
+      pushLog(`Recording started (baseline ${baselineToUse.toFixed(4)})`)
+      try {
+        const hardStopAt = Date.now() + HARD_TURN_LIMIT_MS
         const rec = await recordUntilSilence({
-          baseline,
-          minDurationMs: 600,
-          silenceMs: 800,
-          graceMs: 200,
-          shouldForceStop: () => false,
+          baseline: baselineToUse,
+          minDurationMs: 800,
+          maxDurationMs: HARD_TURN_LIMIT_MS,
+          silenceMs: 900,
+          graceMs: 300,
+          startRatio: 2.4,
+          stopRatio: 1.5,
+          shouldForceStop: () => {
+            if (finishRequestedRef.current) return true
+            if (manualStopRef.current) return true
+            return Date.now() >= hardStopAt
+          },
         })
         b64 = await blobToBase64(rec.blob)
         recDuration = rec.durationMs || 0
@@ -433,7 +699,13 @@ export default function Home() {
         b64 = await blobToBase64(silent)
         recDuration = 500
       }
+      if (recDuration < 100) {
+        pushLog(`Warning: captured very short audio (${Math.round(recDuration)}ms).`)
+      }
+      manualStopRef.current = false
+      setManualStopRequested(false)
       pushLog('Recording stopped → thinking')
+      updateMachineState('thinking')
 
       const askRes = await fetch('/api/ask-audio', {
         method: 'POST',
@@ -446,13 +718,43 @@ export default function Home() {
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
-      const endRegex =
-        /(i[' ]?m done|i am done|stop for now|that's all|i[' ]?m finished|i am finished|we're done|let's stop|lets stop|all done|that's it|im done now|i[' ]?m good|i am done now)/i
+      if (transcript) {
+        conversationRef.current.push({ role: 'user', text: transcript })
+      }
+      if (reply) {
+        conversationRef.current.push({ role: 'assistant', text: reply })
+      }
+
+      const completionIntent = detectCompletionIntent(transcript)
+      const completionDetected = completionIntent.shouldStop && completionIntent.confidence !== 'low'
+      if (completionIntent.shouldStop) {
+        const match = completionIntent.matchedPhrases.join(', ')
+        const suffix = match.length ? `: ${match}` : ''
+        if (completionDetected) {
+          pushLog(`Completion intent detected (${completionIntent.confidence})${suffix}`)
+        } else {
+          pushLog(`Low-confidence completion intent ignored (${completionIntent.confidence})${suffix}`)
+        }
+      }
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
+      let playbackStarted = false
+      pushLog('Preparing assistant audio')
+      updateMachineState('speakingPrep')
       try {
-        assistantPlayback = await playAssistantResponse(reply)
+        assistantPlayback = await playAssistantResponse(reply, {
+          onPlaybackStart: () => {
+            playbackStarted = true
+            updateMachineState('playing')
+          },
+        })
+        if (!playbackStarted) {
+          updateMachineState('playing')
+        }
       } catch {
+        if (!playbackStarted) {
+          updateMachineState('playing')
+        }
         assistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
       }
 
@@ -500,40 +802,153 @@ export default function Home() {
       pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
       const shouldEnd =
-        finishRequestedRef.current || endIntent || reachedMax || (transcript && endRegex.test(transcript))
+        finishRequestedRef.current || endIntent || reachedMax || completionDetected
       inTurnRef.current = false
 
       if (shouldEnd) {
+        if (!finishRequestedRef.current) {
+          finishRequestedRef.current = true
+          setFinishRequested(true)
+        }
         await finalizeNow()
       } else {
-        setDisabledNext(false)
+        updateMachineState('readyToContinue')
+        if (!finishRequestedRef.current && typeof window !== 'undefined') {
+          if (autoAdvanceTimeoutRef.current !== null) {
+            window.clearTimeout(autoAdvanceTimeoutRef.current)
+          }
+          autoAdvanceTimeoutRef.current = window.setTimeout(() => {
+            autoAdvanceTimeoutRef.current = null
+            if (!finishRequestedRef.current) {
+              runTurnLoop().catch(() => {})
+            }
+          }, 700)
+        }
       }
     } catch (e) {
       pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
-      setDisabledNext(false)
+      manualStopRef.current = false
+      setManualStopRequested(false)
+      updateMachineState('readyToContinue')
     }
-  }, [MAX_TURNS, finalizeNow, playAssistantResponse, pushLog, sessionId, turn])
+  }, [
+    MAX_TURNS,
+    finalizeNow,
+    manualStopRef,
+    playAssistantResponse,
+    pushLog,
+    sessionId,
+    turn,
+    updateMachineState,
+  ])
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
+    if (!sessionId) return
+    conversationRef.current = []
     setFinishRequested(false)
     finishRequestedRef.current = false
+    setManualStopRequested(false)
+    manualStopRef.current = false
     setHasStarted(true)
-    setDisabledNext(true)
+    let introMessage = ''
     try {
       try {
         await ensureSessionRecorder()
       } catch {
         pushLog('Session recorder unavailable; proceeding without combined audio')
       }
-      await playAssistantResponse(OPENING)
+
+      try {
+        const res = await fetch(`/api/session/${sessionId}/intro`, { method: 'POST' })
+        const json = await res.json().catch(() => null)
+        if (res.ok && typeof json?.message === 'string' && json.message.trim().length) {
+          introMessage = json.message.trim()
+        }
+      } catch (err) {
+        pushLog('Intro prompt unavailable; using fallback greeting')
+      }
+
+      if (!introMessage) {
+        introMessage = INTRO_FALLBACK
+      }
+
+      conversationRef.current.push({ role: 'assistant', text: introMessage })
+
+      try {
+        await fetch(`/api/session/${sessionId}/turn`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ role: 'assistant', text: introMessage }),
+        })
+      } catch {}
+
+      pushLog('Intro message ready → playing')
+      let introPlaybackStarted = false
+      updateMachineState('speakingPrep')
+      try {
+        await playAssistantResponse(introMessage, {
+          onPlaybackStart: () => {
+            introPlaybackStarted = true
+            updateMachineState('playing')
+          },
+        })
+      } catch {
+        try {
+          await playWithSpeechSynthesis(introMessage, {
+            onStart: () => {
+              introPlaybackStarted = true
+              updateMachineState('playing')
+            },
+          })
+        } catch {}
+      } finally {
+        if (!introPlaybackStarted) {
+          updateMachineState('playing')
+        }
+      }
     } catch {
-      await playWithSpeechSynthesis(OPENING)
+      let introFallbackStarted = false
+      updateMachineState('speakingPrep')
+      try {
+        await playWithSpeechSynthesis(INTRO_FALLBACK, {
+          onStart: () => {
+            introFallbackStarted = true
+            updateMachineState('playing')
+          },
+        })
+      } catch {}
+      if (!introFallbackStarted) {
+        updateMachineState('playing')
+      }
     } finally {
-      setDisabledNext(false)
+      if (!finishRequestedRef.current) {
+        updateMachineState('readyToContinue')
+      }
+      if (!finishRequestedRef.current && typeof window !== 'undefined') {
+        if (autoAdvanceTimeoutRef.current !== null) {
+          window.clearTimeout(autoAdvanceTimeoutRef.current)
+        }
+        autoAdvanceTimeoutRef.current = window.setTimeout(() => {
+          autoAdvanceTimeoutRef.current = null
+          if (!finishRequestedRef.current) {
+            runTurnLoop().catch(() => {})
+          }
+        }, 700)
+      }
     }
-  }, [ensureSessionRecorder, hasStarted, playAssistantResponse, playWithSpeechSynthesis, pushLog])
+  }, [
+    ensureSessionRecorder,
+    hasStarted,
+    manualStopRef,
+    playAssistantResponse,
+    playWithSpeechSynthesis,
+    pushLog,
+    runTurnLoop,
+    sessionId,
+    updateMachineState,
+  ])
 
   const requestFinish = useCallback(async () => {
     if (finishRequestedRef.current) return
@@ -541,75 +956,197 @@ export default function Home() {
     pushLog('Finish requested by user')
     if (inTurnRef.current) {
       pushLog('Finishing after the current turn completes')
+      requestManualStop()
       return
     }
     await finalizeNow()
-  }, [finalizeNow, pushLog])
+  }, [finalizeNow, pushLog, requestManualStop])
 
-  const onNext = useCallback(async () => {
-    if (disabledNext) return
+  useEffect(() => {
+    if (!sessionId) return
+    if (hasStarted) return
+    startSession().catch(() => {})
+  }, [hasStarted, sessionId, startSession])
+
+  const handleHeroPress = useCallback(() => {
+    if (machineState === 'recording') {
+      requestManualStop()
+    }
+  }, [machineState, requestManualStop])
+
+  const visual = STATE_VISUALS[machineState] ?? STATE_VISUALS.idle
+  const isInitialState = !hasStarted && machineState === 'idle'
+  const heroBadge = finishRequested ? 'Finishing' : manualStopRequested ? 'Stopping' : visual.badge
+  const heroIcon = finishRequested ? '📁' : manualStopRequested ? '⏹️' : visual.icon
+  const heroTitle = finishRequested
+    ? 'Wrapping up'
+    : manualStopRequested
+      ? 'Stopping the recording'
+      : isInitialState
+        ? 'Ready to begin'
+        : visual.title
+  const heroDescription = (() => {
+    if (finishRequested) {
+      return 'Hold tight while I save your conversation and prepare your history.'
+    }
+    if (manualStopRequested) {
+      return 'Closing this turn—give me a moment to capture what you said.'
+    }
+    if (isInitialState) {
+      return 'I’ll start with a welcome and remember every word you share.'
+    }
+    switch (machineState) {
+      case 'calibrating':
+        return 'Measuring the room noise so I can tell when you start speaking.'
+      case 'recording':
+        return 'Speak naturally. Tap the glowing ring whenever you want me to stop listening.'
+      case 'thinking':
+        return 'Working through what you just said—this only takes a moment.'
+      case 'speakingPrep':
+        return 'Warming up my voice so I can respond clearly.'
+      case 'playing':
+        return 'Sharing what I heard and how we can keep going.'
+      case 'readyToContinue':
+        return 'I’m ready whenever you are—just start speaking.'
+      default:
+        return visual.description
+    }
+  })()
+  const heroGradient = finishRequested
+    ? 'from-amber-400/40 via-amber-500/40 to-orange-500/40'
+    : manualStopRequested
+      ? 'from-rose-400/40 via-rose-500/40 to-red-500/40'
+      : visual.gradient
+  const heroAriaLabel = finishRequested
+    ? 'Wrapping up the session'
+    : manualStopRequested
+      ? 'Stopping the recording'
+      : machineState === 'recording'
+        ? 'Listening. Tap to finish your turn.'
+        : machineState === 'calibrating'
+          ? 'Calibrating the microphone baseline'
+          : machineState === 'speakingPrep'
+            ? 'Preparing to speak'
+            : 'Session status indicator'
+  const statusMessage = (() => {
     if (!hasStarted) {
-      await startSession()
-      return
+      return 'Let me welcome you first—I’ll begin automatically.'
     }
-    if (!inTurnRef.current) {
-      await runTurnLoop()
+    if (finishRequested) {
+      return 'Wrapping up your session.'
     }
-  }, [disabledNext, hasStarted, runTurnLoop, startSession])
+    if (manualStopRequested) {
+      return 'Stopping the recording now.'
+    }
+    switch (machineState) {
+      case 'calibrating':
+        return 'Measuring the room noise before we begin.'
+      case 'recording':
+        return 'Listening now. Take your time and tap the ring when you’re finished.'
+      case 'thinking':
+        return 'Processing what you shared…'
+      case 'speakingPrep':
+        return 'Getting ready to speak with you.'
+      case 'playing':
+        return 'Sharing what I heard back to you.'
+      case 'readyToContinue':
+        return 'Ready when you are—just start speaking.'
+      case 'doneSuccess':
+        return 'Session saved. Tap Start Again to record another memory.'
+      default:
+        return 'Preparing to begin—I’ll speak first.'
+    }
+  })()
 
   return (
-    <main className="mt-8">
-      <div className="flex flex-col items-center gap-6">
-        <div className="text-sm opacity-80">
-          {!hasStarted
-            ? 'Ready'
-            : finishRequested
-              ? 'Wrapping up the session'
-              : disabledNext
-                ? 'Working...'
-                : 'Tap Next to continue'}
+    <main className="mt-6 flex justify-center px-4 pb-16">
+      <div className="flex w-full max-w-4xl flex-col items-center gap-12">
+        <div className="flex w-full flex-col items-center gap-8">
+          <div className="relative w-full max-w-[min(90vw,460px)]">
+            <button
+              type="button"
+              onClick={handleHeroPress}
+              className="group relative aspect-square w-full overflow-hidden rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white/60"
+              aria-label={heroAriaLabel}
+            >
+              <span className="absolute inset-0 rounded-full bg-black/20 blur-3xl" aria-hidden="true" />
+              <span
+                className={`absolute inset-[8%] rounded-full bg-gradient-to-br ${heroGradient} animate-soft-pulse shadow-[0_0_80px_rgba(255,255,255,0.18)]`}
+                aria-hidden="true"
+              />
+              <span className="absolute inset-[12%] rounded-full border border-white/15 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+              <span className="absolute inset-[18%] rounded-full border border-white/10 animate-slow-ripple" aria-hidden="true" />
+              <span
+                className="absolute inset-[18%] rounded-full border border-white/5 animate-slow-ripple"
+                style={{ animationDelay: '1.2s' }}
+                aria-hidden="true"
+              />
+              <span className="absolute inset-[18%] flex flex-col items-center justify-center px-8 text-center">
+                <span className="text-5xl md:text-6xl" aria-hidden="true">
+                  {heroIcon}
+                </span>
+                <span className="mt-4 text-[11px] uppercase tracking-[0.45em] text-white/50">{heroBadge}</span>
+                <span className="mt-3 text-3xl font-semibold md:text-4xl">{heroTitle}</span>
+                <span className="mt-4 text-sm text-white/70 md:text-base">{heroDescription}</span>
+              </span>
+            </button>
+          </div>
+
+          <div className="flex flex-col items-center gap-4 text-center">
+            <div className="text-sm text-white/70">{statusMessage}</div>
+            {machineState === 'doneSuccess' ? (
+              <button
+                onClick={() => {
+                  try {
+                    recorderRef.current?.cancel()
+                  } catch {}
+                  recorderRef.current = null
+                  sessionAudioUrlRef.current = null
+                  sessionAudioDurationRef.current = 0
+                  conversationRef.current = []
+                  setHasStarted(false)
+                  setTurn(0)
+                  setFinishRequested(false)
+                  finishRequestedRef.current = false
+                  manualStopRef.current = false
+                  setManualStopRequested(false)
+                  updateMachineState('idle')
+                }}
+                className="rounded-full bg-white px-8 py-3 text-lg font-semibold text-black shadow-lg transition hover:bg-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
+              >
+                Start Again
+              </button>
+            ) : null}
+            {machineState !== 'doneSuccess' && (
+              <button
+                onClick={requestFinish}
+                disabled={!hasStarted || finishRequested}
+                className="rounded-full border border-white/20 bg-white/5 px-5 py-2 text-sm font-medium text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/40 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
+              >
+                I’m finished
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex gap-3">
-          {machineState !== 'doneSuccess' ? (
-            <button onClick={onNext} disabled={disabledNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50">
-              Next
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                try {
-                  recorderRef.current?.cancel()
-                } catch {}
-                recorderRef.current = null
-                sessionAudioUrlRef.current = null
-                sessionAudioDurationRef.current = 0
-                setHasStarted(false)
-                setTurn(0)
-                setFinishRequested(false)
-                finishRequestedRef.current = false
-              }}
-              className="text-sm bg-white/10 px-3 py-1 rounded-2xl"
-            >
-              Start Again
-            </button>
-          )}
-          {machineState !== 'doneSuccess' && (
-            <button
-              onClick={requestFinish}
-              disabled={!hasStarted || finishRequested}
-              className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50"
-            >
-              I'm finished
-            </button>
-          )}
-        </div>
-
-        <div className="w-full max-w-xl">
-          <label className="text-xs opacity-70">On-screen Log (copy to share diagnostics):</label>
-          <textarea value={debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
-          <div className="mt-2 text-xs opacity-70">
-            Need more? Visit <a className="underline" href="/diagnostics">Diagnostics</a>.
+        <div className="w-full max-w-2xl">
+          <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-white/40">
+            <span>Diagnostics log</span>
+            <a className="text-xs font-medium uppercase tracking-[0.2em] text-white/50 underline hover:text-white/80" href="/diagnostics">
+              Open
+            </a>
+          </div>
+          <textarea
+            value={debugLog.join('\n')}
+            readOnly
+            className="mt-2 h-28 w-full resize-none rounded border border-white/10 bg-black/30 p-3 text-[11px] leading-relaxed text-white/70"
+          />
+          <div className="mt-1 text-[11px] text-white/40">
+            Need more detail?{' '}
+            <a className="underline hover:text-white/80" href="/diagnostics">
+              Visit Diagnostics
+            </a>
+            .
           </div>
         </div>
       </div>

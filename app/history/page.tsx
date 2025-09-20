@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 type Row = {
   id: string
@@ -22,26 +22,88 @@ type Row = {
 
 export default function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [clearingAll, setClearingAll] = useState(false)
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const api = await (await fetch('/api/history')).json()
+      const serverRows: Row[] = api?.items || []
+      let demoRows: Row[] = []
+      try {
+        const raw = localStorage.getItem('demoHistory')
+        if (raw) {
+          const list = JSON.parse(raw) as { id: string; created_at: string; title?: string | null }[]
+          demoRows = list.map((d) => ({
+            id: d.id,
+            created_at: d.created_at,
+            title: typeof d.title === 'string' && d.title.length ? d.title : null,
+            status: 'completed',
+            total_turns: 1,
+            artifacts: {},
+          }))
+        }
+      } catch {}
+      const combined = [...(demoRows || []), ...(serverRows || [])]
+      combined.sort((a, b) => {
+        const aTime = new Date(a.created_at).getTime()
+        const bTime = new Date(b.created_at).getTime()
+        if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0
+        if (Number.isNaN(aTime)) return -1
+        if (Number.isNaN(bTime)) return 1
+        return bTime - aTime
+      })
+      setRows(combined)
+    } catch {
+      setRows([])
+    }
+  }, [])
 
   useEffect(() => {
-    async function load() {
+    loadHistory()
+  }, [loadHistory])
+
+  const removeDemoEntry = useCallback((id: string) => {
+    try {
+      const raw = localStorage.getItem('demoHistory')
+      if (!raw) return
+      const list = JSON.parse(raw) as { id: string }[]
+      const filtered = list.filter((entry) => entry.id !== id)
+      if (filtered.length) {
+        localStorage.setItem('demoHistory', JSON.stringify(filtered))
+      } else {
+        localStorage.removeItem('demoHistory')
+      }
+    } catch {}
+  }, [])
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      setDeletingId(id)
       try {
-        const api = await (await fetch('/api/history')).json()
-        const serverRows: Row[] = api?.items || []
-        let demoRows: Row[] = []
-        try {
-          const raw = localStorage.getItem('demoHistory')
-          if (raw) {
-            const list = JSON.parse(raw) as { id:string, created_at:string }[]
-            demoRows = list.map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{} }))
-          }
-        } catch {}
-        setRows([...(demoRows||[]), ...(serverRows||[])])
-      } catch {
+        const resp = await fetch(`/api/history/${id}`, { method: 'DELETE' })
+        if (resp.ok) {
+          removeDemoEntry(id)
+          await loadHistory()
+        }
+      } finally {
+        setDeletingId(null)
+      }
+    },
+    [loadHistory, removeDemoEntry],
+  )
+
+  const handleClearAll = useCallback(async () => {
+    setClearingAll(true)
+    try {
+      const resp = await fetch('/api/history', { method: 'DELETE' })
+      if (resp.ok) {
+        localStorage.removeItem('demoHistory')
         setRows([])
       }
+    } finally {
+      setClearingAll(false)
     }
-    load()
   }, [])
 
   return (
@@ -56,13 +118,24 @@ export default function HistoryPage() {
         <ul className="space-y-3">
           {rows.map(s => (
             <li key={s.id} className="bg-white/5 rounded p-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="font-medium">{s.title || 'Untitled session'}</div>
+                  <div className="font-medium">
+                    {s.title || `Session from ${new Date(s.created_at).toLocaleString()}`}
+                  </div>
                   <div className="text-xs opacity-70">{new Date(s.created_at).toLocaleString()}</div>
                   <div className="text-xs opacity-70">Turns: {s.total_turns} • Status: {s.status}</div>
                 </div>
-                <div className="flex flex-col gap-2 text-sm max-w-xl">
+                <div className="flex flex-col gap-2 text-sm max-w-xl items-end">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(s.id)}
+                    disabled={deletingId === s.id || clearingAll}
+                    className="text-xs text-red-200/80 hover:text-red-100 disabled:opacity-50"
+                    aria-label="Delete session"
+                  >
+                    {deletingId === s.id ? 'Deleting…' : '🗑 Remove'}
+                  </button>
                   {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
                     <audio
                       controls
@@ -117,6 +190,18 @@ export default function HistoryPage() {
             </li>
           ))}
         </ul>
+      )}
+      {rows.length > 0 && (
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={handleClearAll}
+            disabled={clearingAll || !!deletingId}
+            className="rounded border border-white/20 px-3 py-1 text-sm text-white/80 hover:border-white/40 hover:text-white disabled:opacity-50"
+          >
+            {clearingAll ? 'Clearing…' : 'Clear all history'}
+          </button>
+        </div>
       )}
     </main>
   )

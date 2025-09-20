@@ -1,6 +1,7 @@
-import { putBlobFromBuffer, listBlobs } from './blob'
+import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from './blob'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
+import { generateSessionTitle, SummarizableTurn } from './session-title'
 
 export type Session = {
   id: string
@@ -34,6 +35,8 @@ type RememberedSession = Session & { turns?: Turn[] }
 
 const globalKey = '__dads_interview_mem__'
 const bootKey = '__dads_interview_mem_boot__'
+const primerKey = '__dads_interview_memory_primer__'
+const hydrationKey = '__dads_interview_mem_hydrated__'
 const g: any = globalThis as any
 if (!g[globalKey]) {
   g[globalKey] = { sessions: new Map<string, RememberedSession>() }
@@ -41,8 +44,28 @@ if (!g[globalKey]) {
 if (!g[bootKey]) {
   g[bootKey] = new Date().toISOString()
 }
+if (!g[primerKey]) {
+  g[primerKey] = { text: '', url: undefined, updatedAt: undefined, loaded: false }
+}
+if (!g[hydrationKey]) {
+  g[hydrationKey] = { attempted: false, hydrated: false }
+}
 const mem: { sessions: Map<string, RememberedSession> } = g[globalKey]
 const memBootedAt: string = g[bootKey]
+const primerState: { text: string; url?: string; updatedAt?: string; loaded: boolean } = g[primerKey]
+const hydrationState: { attempted: boolean; hydrated: boolean } = g[hydrationKey]
+
+const MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
+
+function resetPrimerState() {
+  primerState.text = ''
+  primerState.url = undefined
+  primerState.updatedAt = undefined
+  primerState.loaded = false
+}
+
+let hydrationPromise: Promise<void> | null = null
+let primerLoadPromise: Promise<void> | null = null
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -54,11 +77,220 @@ function inlineAwareLabel(label: string, value: string | undefined | null) {
   return `${label}: ${value}`
 }
 
+function safeDateString(value: string | undefined) {
+  if (!value) return undefined
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return parsed.toISOString()
+}
+
+function formatDateTime(value: string | undefined) {
+  if (!value) return 'Unknown time'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+}
+
+function truncateSnippet(text: string, limit = 180) {
+  const cleaned = text.replace(/\s+/g, ' ').trim()
+  if (!cleaned) return ''
+  if (cleaned.length <= limit) return cleaned
+  const slice = cleaned.slice(0, limit - 1)
+  const lastSpace = slice.lastIndexOf(' ')
+  if (lastSpace > 40) {
+    return `${slice.slice(0, lastSpace)}…`
+  }
+  return `${slice}…`
+}
+
+function collectPrimerHighlights(session: RememberedSession): string[] {
+  const highlights: string[] = []
+  const userTurns = (session.turns || []).filter((turn) => turn.role === 'user' && turn.text && turn.text.trim().length)
+  const assistantTurns = (session.turns || []).filter(
+    (turn) => turn.role === 'assistant' && turn.text && turn.text.trim().length,
+  )
+
+  const snippets: { label: string; text: string }[] = []
+  if (userTurns.length) {
+    snippets.push({ label: 'User opened with', text: userTurns[0].text })
+    if (userTurns.length > 2) {
+      snippets.push({ label: 'User reflected', text: userTurns[Math.floor(userTurns.length / 2)].text })
+    }
+    if (userTurns.length > 1) {
+      snippets.push({ label: 'User added', text: userTurns[userTurns.length - 1].text })
+    }
+  }
+  if (assistantTurns.length) {
+    snippets.push({ label: 'Assistant responded', text: assistantTurns[assistantTurns.length - 1].text })
+  }
+
+  const seen = new Set<string>()
+  for (const snippet of snippets) {
+    const trimmed = truncateSnippet(snippet.text)
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    highlights.push(`- ${snippet.label}: ${trimmed}`)
+    if (highlights.length >= 4) break
+  }
+
+  return highlights
+}
+
+async function hydrateSessionsFromBlobs() {
+  try {
+    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
+    const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
+    for (const manifest of manifests) {
+      try {
+        const url = manifest.downloadUrl || manifest.url
+        const resp = await fetch(url)
+        if (!resp.ok) continue
+        const data = await resp.json()
+        const fallbackId = manifest.pathname.replace(/^sessions\//, '').split('/')[0] || data?.sessionId
+        const uploadedAt =
+          manifest.uploadedAt instanceof Date
+            ? manifest.uploadedAt.toISOString()
+            : typeof manifest.uploadedAt === 'string'
+            ? manifest.uploadedAt
+            : undefined
+        const storedId = rememberSessionManifest(data, fallbackId, uploadedAt, url)
+        if (storedId) continue
+        if (fallbackId && mem.sessions.has(fallbackId)) continue
+        const derived = buildSessionFromManifest(data, fallbackId, uploadedAt)
+        if (derived) {
+          mem.sessions.set(derived.id, { ...derived, turns: derived.turns ? [...derived.turns] : [] })
+        }
+      } catch (err) {
+        console.warn('Failed to parse session manifest', err)
+      }
+    }
+    hydrationState.hydrated = true
+  } catch (err) {
+    console.warn('Failed to list session manifests', err)
+  } finally {
+    hydrationState.attempted = true
+  }
+}
+
+async function ensurePrimerLoadedFromStorage() {
+  if (primerState.loaded && primerState.text) return
+  if (primerLoadPromise) {
+    await primerLoadPromise
+    return
+  }
+  primerLoadPromise = (async () => {
+    try {
+      const { blobs } = await listBlobs({ prefix: 'memory/', limit: 20 })
+      const primerBlob = blobs.find((blob) => blob.pathname === MEMORY_PRIMER_PATH)
+      if (!primerBlob) return
+      const url = primerBlob.downloadUrl || primerBlob.url
+      const resp = await fetch(url)
+      if (!resp.ok) return
+      const text = await resp.text()
+      primerState.text = text
+      primerState.url = url
+      primerState.updatedAt = safeDateString(
+        primerBlob.uploadedAt instanceof Date
+          ? primerBlob.uploadedAt.toISOString()
+          : typeof primerBlob.uploadedAt === 'string'
+          ? primerBlob.uploadedAt
+          : undefined,
+      )
+    } catch (err) {
+      console.warn('Failed to load memory primer from storage', err)
+    } finally {
+      primerState.loaded = true
+    }
+  })()
+  try {
+    await primerLoadPromise
+  } finally {
+    primerLoadPromise = null
+  }
+}
+
+export async function ensureSessionMemoryHydrated() {
+  if (hydrationState.hydrated) return
+  if (!hydrationPromise) {
+    hydrationPromise = (async () => {
+      await hydrateSessionsFromBlobs()
+    })()
+  }
+  try {
+    await hydrationPromise
+  } finally {
+    hydrationPromise = null
+  }
+}
+
+export async function getMemoryPrimer(): Promise<{ text: string; url?: string; updatedAt?: string }> {
+  if (!primerState.loaded || !primerState.text) {
+    await ensurePrimerLoadedFromStorage()
+  }
+  if (!primerState.text) {
+    const sessionsWithContent = Array.from(mem.sessions.values()).filter((session) =>
+      (session.turns || []).some((turn) => typeof turn.text === 'string' && turn.text.trim().length),
+    )
+    if (sessionsWithContent.length) {
+      await rebuildMemoryPrimer()
+    }
+  }
+  return { text: primerState.text, url: primerState.url, updatedAt: primerState.updatedAt }
+}
+
+function buildMemoryPrimerFromSessions(sessions: RememberedSession[]): string {
+  const sorted = [...sessions].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
+  const lines: string[] = []
+  lines.push('# Memory Primer')
+  lines.push(`Updated: ${formatDateTime(new Date().toISOString())}`)
+  lines.push('')
+  if (!sorted.length) {
+    lines.push('No conversations have been recorded yet.')
+    return lines.join('\n')
+  }
+
+  for (const session of sorted) {
+    const title = session.title || `Session from ${formatDateTime(session.created_at)}`
+    lines.push(`## ${title}`)
+    lines.push(`- Started: ${formatDateTime(session.created_at)}`)
+    const highlights = collectPrimerHighlights(session)
+    if (highlights.length) {
+      lines.push(...highlights)
+    } else {
+      lines.push('- No detailed transcript was captured for this session.')
+    }
+    lines.push('')
+  }
+
+  return lines.join('\n').trim()
+}
+
+export async function rebuildMemoryPrimer(): Promise<{ text: string; url?: string; updatedAt?: string }> {
+  const sessions = Array.from(mem.sessions.values())
+  const primerText = buildMemoryPrimerFromSessions(sessions)
+  const blob = await putBlobFromBuffer(
+    MEMORY_PRIMER_PATH,
+    Buffer.from(primerText, 'utf8'),
+    'text/plain; charset=utf-8',
+    { access: 'public' },
+  )
+  primerState.text = primerText
+  primerState.url = blob.downloadUrl || blob.url
+  primerState.updatedAt = new Date().toISOString()
+  primerState.loaded = true
+  return { text: primerText, url: primerState.url, updatedAt: primerState.updatedAt }
+}
+
 export async function dbHealth() {
   return { ok: true, mode: 'memory' }
 }
 
 export async function createSession({ email_to }: { email_to: string }): Promise<Session> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+  await getMemoryPrimer().catch(() => undefined)
   const s: RememberedSession = {
     id: uid(),
     created_at: new Date().toISOString(),
@@ -122,6 +354,7 @@ export async function finalizeSession(
   id: string,
   body: { clientDurationMs: number; sessionAudioUrl?: string | null },
 ): Promise<FinalizeSessionResult> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
   const s = mem.sessions.get(id)
   if (!s) {
     flagFox({
@@ -154,11 +387,21 @@ export async function finalizeSession(
   })
 
   const transcriptLines: string[] = []
+  const summaryCandidates: SummarizableTurn[] = []
   for (const turn of turns) {
     transcriptLines.push(`User: ${turn.text}`)
+    summaryCandidates.push({ role: 'user', text: turn.text })
     if (turn.assistant) {
       transcriptLines.push(`Assistant: ${turn.assistant.text}`)
+      summaryCandidates.push({ role: 'assistant', text: turn.assistant.text })
     }
+  }
+
+  const computedTitle = generateSessionTitle(summaryCandidates, {
+    fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+  })
+  if (computedTitle) {
+    s.title = computedTitle
   }
 
   const txtBuf = Buffer.from(transcriptLines.join('\n'), 'utf8')
@@ -201,6 +444,7 @@ export async function finalizeSession(
     sessionId: s.id,
     created_at: s.created_at,
     email: s.email_to,
+    title: s.title,
     totals: { turns: turns.length, durationMs: s.duration_ms },
     turns: turns.map((t) => ({ id: t.id, role: t.role, text: t.text, audio: t.audio || null })),
     artifacts: s.artifacts,
@@ -226,18 +470,25 @@ export async function finalizeSession(
     inlineAwareLabel('Transcript (json)', s.artifacts.transcript_json),
     inlineAwareLabel('Session audio', s.artifacts.session_audio),
   ].join('\n')
-  let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { ok: false; provider: 'unknown'; error: string }
-  try {
-    emailStatus = await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText)
-  } catch (e: any) {
-    emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
-    flagFox({
-      id: 'theory-4-email-send-failed',
-      theory: 4,
-      level: 'error',
-      message: 'Failed to send session summary email from finalizeSession.',
-      details: { sessionId: s.id, error: e?.message || 'send_failed' },
-    })
+  let emailStatus:
+    | Awaited<ReturnType<typeof sendSummaryEmail>>
+    | { ok: false; provider: 'unknown'; error: string }
+    | { skipped: true }
+  if (!s.email_to || !/.+@.+/.test(s.email_to)) {
+    emailStatus = { skipped: true }
+  } else {
+    try {
+      emailStatus = await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText)
+    } catch (e: any) {
+      emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
+      flagFox({
+        id: 'theory-4-email-send-failed',
+        theory: 4,
+        level: 'error',
+        message: 'Failed to send session summary email from finalizeSession.',
+        details: { sessionId: s.id, error: e?.message || 'send_failed' },
+      })
+    }
   }
 
   if ('ok' in emailStatus && emailStatus.ok) {
@@ -256,6 +507,10 @@ export async function finalizeSession(
   }
 
   mem.sessions.set(id, s)
+
+  await rebuildMemoryPrimer().catch((err) => {
+    console.warn('Failed to rebuild memory primer', err)
+  })
 
   const emailed = !!('ok' in emailStatus && emailStatus.ok)
   return { ok: true, session: s, emailed, emailStatus }
@@ -284,47 +539,132 @@ export function mergeSessionArtifacts(id: string, patch: SessionPatch) {
   mem.sessions.set(id, session)
 }
 
+export async function deleteSession(
+  id: string,
+): Promise<{ ok: boolean; deleted: boolean; reason?: string }> {
+  if (!id) {
+    return { ok: false, deleted: false, reason: 'invalid_id' }
+  }
+
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+
+  let session = mem.sessions.get(id)
+  if (!session) {
+    session = (await getSession(id)) as RememberedSession | undefined
+  }
+
+  const artifactUrls = new Set<string>()
+  if (session?.artifacts) {
+    for (const value of Object.values(session.artifacts)) {
+      if (typeof value === 'string' && value.length) {
+        artifactUrls.add(value)
+      }
+    }
+  }
+
+  let removed = !!session
+
+  for (const url of artifactUrls) {
+    try {
+      const deleted = await deleteBlob(url)
+      if (deleted) removed = true
+    } catch (err) {
+      console.warn('Failed to delete session artifact blob', { id, url, err })
+    }
+  }
+
+  const prefixes = [`sessions/${id}/`, `transcripts/${id}`]
+  for (const prefix of prefixes) {
+    try {
+      const count = await deleteBlobsByPrefix(prefix)
+      if (count > 0) {
+        removed = true
+      }
+    } catch (err) {
+      console.warn('Failed to delete blobs for prefix', { id, prefix, err })
+    }
+  }
+
+  if (session) {
+    mem.sessions.delete(session.id)
+  } else {
+    mem.sessions.delete(id)
+  }
+
+  if (mem.sessions.size > 0) {
+    await rebuildMemoryPrimer().catch((err) => {
+      console.warn('Failed to rebuild memory primer after deletion', err)
+    })
+  } else {
+    await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+    resetPrimerState()
+  }
+
+  hydrationState.hydrated = true
+  hydrationState.attempted = true
+
+  return { ok: true, deleted: removed }
+}
+
+export async function clearAllSessions(): Promise<{ ok: boolean }> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+
+  mem.sessions.clear()
+
+  const prefixes = ['sessions/', 'transcripts/', 'memory/']
+  await Promise.all(
+    prefixes.map(async (prefix) => {
+      try {
+        await deleteBlobsByPrefix(prefix)
+      } catch (err) {
+        console.warn('Failed to delete blobs during clearAllSessions', { prefix, err })
+      }
+    }),
+  )
+
+  await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+  resetPrimerState()
+  hydrationState.attempted = true
+  hydrationState.hydrated = true
+
+  return { ok: true }
+}
+
 export async function listSessions(): Promise<Session[]> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
   const seen = new Map<string, RememberedSession>()
   for (const session of mem.sessions.values()) {
     seen.set(session.id, { ...session, turns: session.turns ? [...session.turns] : [] })
   }
-
-  try {
-    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
-    const manifests = blobs.filter((b) => /session-.+\.json$/.test(b.pathname))
-    for (const manifest of manifests) {
-      try {
-        const url = manifest.downloadUrl || manifest.url
-        const resp = await fetch(url)
-        if (!resp.ok) continue
-        const data = await resp.json()
-        const fallbackId = manifest.pathname.replace(/^sessions\//, '').split('/')[0] || data?.sessionId
-        const uploadedAt =
-          manifest.uploadedAt instanceof Date
-            ? manifest.uploadedAt.toISOString()
-            : typeof manifest.uploadedAt === 'string'
-            ? manifest.uploadedAt
-            : undefined
-        const storedId = rememberSessionManifest(data, fallbackId, uploadedAt, url)
-        const stored = storedId ? mem.sessions.get(storedId) : fallbackId ? mem.sessions.get(fallbackId) : undefined
-        if (stored) {
-          seen.set(stored.id, { ...stored, turns: stored.turns ? [...stored.turns] : [] })
-          continue
-        }
-        const derived = buildSessionFromManifest(data, fallbackId, uploadedAt)
-        if (derived) {
-          seen.set(derived.id, derived)
-        }
-      } catch (err) {
-        console.warn('Failed to parse session manifest', err)
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to list session manifests', err)
-  }
-
   return Array.from(seen.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+}
+
+export type SessionMemorySnapshot = {
+  id: string
+  created_at: string
+  title?: string
+  status: Session['status']
+  total_turns: number
+  turns: { role: Turn['role']; text: string }[]
+}
+
+export function getSessionMemorySnapshot(
+  focusSessionId?: string,
+): { current?: SessionMemorySnapshot; sessions: SessionMemorySnapshot[] } {
+  const sessions = Array.from(mem.sessions.values())
+    .map((session) => ({
+      id: session.id,
+      created_at: session.created_at,
+      title: session.title,
+      status: session.status,
+      total_turns: session.total_turns,
+      turns: (session.turns || []).map((turn) => ({ role: turn.role, text: turn.text })),
+    }))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+
+  const current = focusSessionId ? sessions.find((session) => session.id === focusSessionId) : undefined
+
+  return { current, sessions }
 }
 
 
@@ -342,6 +682,16 @@ export async function getSession(id: string): Promise<Session | undefined> {
   }
 
   return undefined
+}
+
+export function __dangerousResetMemoryState() {
+  mem.sessions.clear()
+  hydrationState.attempted = false
+  hydrationState.hydrated = false
+  primerState.text = ''
+  primerState.url = undefined
+  primerState.updatedAt = undefined
+  primerState.loaded = false
 }
 
 async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup | null> {

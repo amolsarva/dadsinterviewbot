@@ -31,12 +31,13 @@ const schema = z.object({
   email: z.string().email().optional(),
   sessionAudioUrl: z.string().min(1).optional(),
   sessionAudioDurationMs: z.number().nonnegative().optional(),
+  emailsEnabled: z.boolean().optional(),
 })
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs } = schema.parse(body)
+    const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs, emailsEnabled } = schema.parse(body)
 
     const token = getBlobToken()
 
@@ -305,8 +306,11 @@ export async function POST(req: NextRequest) {
     let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { skipped: true }
     emailStatus = { skipped: true }
 
-    const targetEmail = email || process.env.DEFAULT_NOTIFY_EMAIL
-    if (!targetEmail) {
+    const allowEmails = emailsEnabled !== false
+    const targetEmail = allowEmails ? email || process.env.DEFAULT_NOTIFY_EMAIL : ''
+    if (!allowEmails) {
+      emailStatus = { skipped: true }
+    } else if (!targetEmail) {
       flagFox({
         id: 'theory-4-email-missing-target',
         theory: 4,
