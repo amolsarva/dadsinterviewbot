@@ -34,8 +34,11 @@ describe('finalizeSession', () => {
 
     expect(result.emailed).toBe(true)
     expect(result.emailStatus).toEqual({ ok: true, provider: 'resend' })
+    expect(result.session.title && result.session.title.length).toBeTruthy()
+    expect(result.session.title?.toLowerCase()).not.toContain('untitled')
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('emailed')
+    expect(stored?.title && stored.title.length).toBeTruthy()
   })
 
   it('handles skipped email when no provider configured', async () => {
@@ -53,6 +56,7 @@ describe('finalizeSession', () => {
     expect(result.emailStatus).toEqual({ skipped: true })
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('completed')
+    expect(stored?.title && stored.title.length).toBeTruthy()
   })
 
   it('flags failures from the email provider', async () => {
@@ -70,6 +74,7 @@ describe('finalizeSession', () => {
     expect(result.emailStatus).toEqual({ ok: false, provider: 'resend', error: 'bad' })
     const stored = await data.getSession(session.id)
     expect(stored?.status).toBe('error')
+    expect(stored?.title && stored.title.length).toBeTruthy()
     const foxes = listFoxes()
     expect(foxes.some((fox) => fox.id === 'theory-4-email-status-error')).toBe(true)
   })

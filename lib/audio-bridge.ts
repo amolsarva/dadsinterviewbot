@@ -6,11 +6,9 @@ export type RecordResult = { blob: Blob; durationMs: number }
 async function getModule(): Promise<any> {
   // Dynamic import so it only loads client-side
   try {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     return await import('../src/lib/audio.js')
   } catch {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     return await import('../src/lib/audio')
   }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
+import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 
 const SESSION_STORAGE_KEY = 'sessionId'
 
@@ -94,6 +95,54 @@ const ensureSessionIdOnce = async (): Promise<SessionInitResult> => {
 
 const OPENING = `Start testing greeting. Answer a question.`
 
+const STATE_VISUALS: Record<
+  'idle' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess',
+  { icon: string; badge: string; title: string; description: string; gradient: string }
+> = {
+  idle: {
+    icon: '✨',
+    badge: 'Ready',
+    title: 'Ready to begin',
+    description: 'Tap Next to start sharing your story. That glowing circle is all you need.',
+    gradient: 'from-sky-400/40 via-blue-500/30 to-indigo-500/40',
+  },
+  recording: {
+    icon: '🎤',
+    badge: 'Listening',
+    title: 'Listening',
+    description: 'I am capturing every detail you say. Speak naturally and take your time.',
+    gradient: 'from-emerald-400/40 via-lime-300/40 to-emerald-500/40',
+  },
+  thinking: {
+    icon: '🤔',
+    badge: 'Thinking',
+    title: 'Thinking',
+    description: 'Give me a brief moment while I make sense of what you shared.',
+    gradient: 'from-fuchsia-400/40 via-purple-500/40 to-indigo-600/40',
+  },
+  playing: {
+    icon: '💬',
+    badge: 'Speaking',
+    title: 'Speaking',
+    description: 'Here is what I heard and how I would respond to keep you going.',
+    gradient: 'from-amber-400/40 via-orange-500/40 to-amber-600/40',
+  },
+  readyToContinue: {
+    icon: '✨',
+    badge: 'Ready',
+    title: 'Ready for more',
+    description: 'Tap Next again when you are ready to add another detail.',
+    gradient: 'from-sky-400/40 via-cyan-400/40 to-blue-500/40',
+  },
+  doneSuccess: {
+    icon: '✅',
+    badge: 'Complete',
+    title: 'Session complete',
+    description: 'Review your links or start another memory when you feel inspired.',
+    gradient: 'from-slate-400/40 via-slate-500/40 to-slate-600/40',
+  },
+}
+
 type AssistantPlayback = {
   base64: string | null
   mime: string
@@ -117,6 +166,7 @@ export default function Home() {
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
+  const conversationRef = useRef<SummarizableTurn[]>([])
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
@@ -394,7 +444,11 @@ export default function Home() {
       try {
         const demo = JSON.parse(localStorage.getItem('demoHistory') || '[]')
         const stamp = new Date().toISOString()
-        demo.unshift({ id: sessionId, created_at: stamp })
+        const summaryTitle =
+          generateSessionTitle(conversationRef.current, {
+            fallback: `Session on ${new Date(stamp).toLocaleDateString()}`,
+          }) || null
+        demo.unshift({ id: sessionId, created_at: stamp, title: summaryTitle })
         localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0, 50)))
       } catch {}
 
@@ -402,6 +456,7 @@ export default function Home() {
     } catch {
       pushLog('Finalize failed')
     } finally {
+      conversationRef.current = []
       finishRequestedRef.current = false
       setFinishRequested(false)
       setDisabledNext(false)
@@ -448,6 +503,13 @@ export default function Home() {
       const endIntent: boolean = askRes?.end_intent === true
       const endRegex =
         /(i[' ]?m done|i am done|stop for now|that's all|i[' ]?m finished|i am finished|we're done|let's stop|lets stop|all done|that's it|im done now|i[' ]?m good|i am done now)/i
+
+      if (transcript) {
+        conversationRef.current.push({ role: 'user', text: transcript })
+      }
+      if (reply) {
+        conversationRef.current.push({ role: 'assistant', text: reply })
+      }
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
       try {
@@ -517,6 +579,7 @@ export default function Home() {
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
+    conversationRef.current = []
     setFinishRequested(false)
     finishRequestedRef.current = false
     setHasStarted(true)
@@ -557,59 +620,120 @@ export default function Home() {
     }
   }, [disabledNext, hasStarted, runTurnLoop, startSession])
 
+  const visual = STATE_VISUALS[machineState] ?? STATE_VISUALS.idle
+  const isInitialState = !hasStarted && machineState === 'idle'
+  const heroBadge = finishRequested ? 'Finishing' : visual.badge
+  const heroIcon = finishRequested ? '📁' : visual.icon
+  const heroTitle = finishRequested ? 'Wrapping up' : isInitialState ? 'Ready to begin' : visual.title
+  const heroDescription = finishRequested
+    ? 'Hold tight while I save your conversation and prepare your history.'
+    : isInitialState
+      ? 'Tap Next to start sharing. The glowing button handles the rest.'
+      : disabledNext && machineState === 'thinking'
+        ? 'Working through what you just said—this only takes a moment.'
+        : visual.description
+  const heroGradient = finishRequested ? 'from-amber-400/40 via-amber-500/40 to-orange-500/40' : visual.gradient
+  const statusMessage = !hasStarted
+    ? 'Tap Next whenever you are ready.'
+    : finishRequested
+      ? 'Wrapping up your session.'
+      : disabledNext
+        ? machineState === 'thinking'
+          ? 'Processing your story...'
+          : 'Working...'
+        : machineState === 'doneSuccess'
+          ? 'Session saved. Tap Start Again to record another memory.'
+          : 'Tap Next to continue.'
+
   return (
-    <main className="mt-8">
-      <div className="flex flex-col items-center gap-6">
-        <div className="text-sm opacity-80">
-          {!hasStarted
-            ? 'Ready'
-            : finishRequested
-              ? 'Wrapping up the session'
-              : disabledNext
-                ? 'Working...'
-                : 'Tap Next to continue'}
+    <main className="mt-6 flex justify-center px-4 pb-16">
+      <div className="flex w-full max-w-4xl flex-col items-center gap-12">
+        <div className="flex w-full flex-col items-center gap-8">
+          <div className="relative w-full max-w-[min(90vw,460px)]">
+            <div className="relative aspect-square w-full">
+              <div className="absolute inset-0 rounded-full bg-black/20 blur-3xl" aria-hidden="true" />
+              <div
+                className={`absolute inset-[8%] rounded-full bg-gradient-to-br ${heroGradient} animate-soft-pulse shadow-[0_0_80px_rgba(255,255,255,0.18)]`}
+                aria-hidden="true"
+              />
+              <div className="absolute inset-[12%] rounded-full border border-white/15 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+              <div className="absolute inset-[18%] rounded-full border border-white/10 animate-slow-ripple" aria-hidden="true" />
+              <div
+                className="absolute inset-[18%] rounded-full border border-white/5 animate-slow-ripple"
+                style={{ animationDelay: '1.2s' }}
+                aria-hidden="true"
+              />
+              <div className="absolute inset-[18%] flex flex-col items-center justify-center px-8 text-center">
+                <div className="text-5xl md:text-6xl" aria-hidden="true">
+                  {heroIcon}
+                </div>
+                <div className="mt-4 text-[11px] uppercase tracking-[0.45em] text-white/50">{heroBadge}</div>
+                <div className="mt-3 text-3xl font-semibold md:text-4xl">{heroTitle}</div>
+                <p className="mt-4 text-sm text-white/70 md:text-base">{heroDescription}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-center gap-4">
+            <div className="text-sm text-white/70">{statusMessage}</div>
+            {machineState !== 'doneSuccess' ? (
+              <button
+                onClick={onNext}
+                disabled={disabledNext}
+                className="rounded-full bg-white px-10 py-3 text-lg font-semibold text-black shadow-xl transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 disabled:cursor-not-allowed disabled:bg-white/70 disabled:text-black/60"
+              >
+                Next
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  try {
+                    recorderRef.current?.cancel()
+                  } catch {}
+                  recorderRef.current = null
+                  sessionAudioUrlRef.current = null
+                  sessionAudioDurationRef.current = 0
+                  conversationRef.current = []
+                  setHasStarted(false)
+                  setTurn(0)
+                  setFinishRequested(false)
+                  finishRequestedRef.current = false
+                }}
+                className="rounded-full bg-white px-8 py-3 text-lg font-semibold text-black shadow-lg transition hover:bg-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
+              >
+                Start Again
+              </button>
+            )}
+            {machineState !== 'doneSuccess' && (
+              <button
+                onClick={requestFinish}
+                disabled={!hasStarted || finishRequested}
+                className="text-sm text-white/70 underline-offset-4 transition hover:text-white disabled:cursor-not-allowed disabled:text-white/40"
+              >
+                I’m finished
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex gap-3">
-          {machineState !== 'doneSuccess' ? (
-            <button onClick={onNext} disabled={disabledNext} className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50">
-              Next
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                try {
-                  recorderRef.current?.cancel()
-                } catch {}
-                recorderRef.current = null
-                sessionAudioUrlRef.current = null
-                sessionAudioDurationRef.current = 0
-                setHasStarted(false)
-                setTurn(0)
-                setFinishRequested(false)
-                finishRequestedRef.current = false
-              }}
-              className="text-sm bg-white/10 px-3 py-1 rounded-2xl"
-            >
-              Start Again
-            </button>
-          )}
-          {machineState !== 'doneSuccess' && (
-            <button
-              onClick={requestFinish}
-              disabled={!hasStarted || finishRequested}
-              className="text-sm bg-white/10 px-3 py-1 rounded-2xl disabled:opacity-50"
-            >
-              I'm finished
-            </button>
-          )}
-        </div>
-
-        <div className="w-full max-w-xl">
-          <label className="text-xs opacity-70">On-screen Log (copy to share diagnostics):</label>
-          <textarea value={debugLog.join('\n')} readOnly className="w-full h-56 bg-black/30 p-2 rounded" />
-          <div className="mt-2 text-xs opacity-70">
-            Need more? Visit <a className="underline" href="/diagnostics">Diagnostics</a>.
+        <div className="w-full max-w-2xl">
+          <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-white/40">
+            <span>Diagnostics log</span>
+            <a className="text-xs font-medium uppercase tracking-[0.2em] text-white/50 underline hover:text-white/80" href="/diagnostics">
+              Open
+            </a>
+          </div>
+          <textarea
+            value={debugLog.join('\n')}
+            readOnly
+            className="mt-2 h-28 w-full resize-none rounded border border-white/10 bg-black/30 p-3 text-[11px] leading-relaxed text-white/70"
+          />
+          <div className="mt-1 text-[11px] text-white/40">
+            Need more detail?{' '}
+            <a className="underline hover:text-white/80" href="/diagnostics">
+              Visit Diagnostics
+            </a>
+            .
           </div>
         </div>
       </div>
