@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSessionMemorySnapshot } from '@/lib/data'
+import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 
 const INTRO_SYSTEM_PROMPT = `You are a warm, curious biographer and this is the very first message in a new recording session.
@@ -73,6 +73,7 @@ function buildHistorySummary(
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const sessionId = params.id
+  await ensureSessionMemoryHydrated().catch(() => undefined)
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
   if (!current) {
     return NextResponse.json({ ok: false, error: 'session_not_found' }, { status: 404 })
@@ -87,6 +88,8 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const askedQuestions = collectAskedQuestions(sessions)
   const fallbackQuestion = pickFallbackQuestion(askedQuestions, details[0])
   const fallbackMessage = buildFallbackIntro({ titles, details, question: fallbackQuestion })
+  const primer = await getMemoryPrimer().catch(() => ({ text: '' }))
+  const primerText = primer && typeof primer === 'object' && 'text' in primer && primer.text ? String(primer.text) : ''
 
   if (!process.env.GOOGLE_API_KEY) {
     return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true })
@@ -94,11 +97,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
   try {
     const { historyText, questionText } = buildHistorySummary(titles, details, askedQuestions)
-    const parts: any[] = [
-      { text: INTRO_SYSTEM_PROMPT },
-      { text: historyText },
-      { text: questionText },
-    ]
+    const parts: any[] = [{ text: INTRO_SYSTEM_PROMPT }]
+    if (primerText.trim().length) {
+      parts.push({ text: `Memory primer:\n${primerText.slice(0, 6000)}` })
+    }
+    parts.push({ text: historyText })
+    parts.push({ text: questionText })
 
     const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
     const response = await fetch(

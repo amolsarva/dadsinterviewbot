@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSessionMemorySnapshot } from '@/lib/data'
+import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import {
   collectAskedQuestions,
   findLatestUserDetails,
@@ -51,6 +51,7 @@ type MemoryPrompt = {
   recentConversation: string
   askedQuestions: string[]
   detailForFallback?: string
+  primerText: string
 }
 
 function softenQuestion(question: string | null | undefined): string {
@@ -62,19 +63,22 @@ function softenQuestion(question: string | null | undefined): string {
   return `If you'd like, you could share ${lowered}.`
 }
 
-function buildMemoryPrompt(sessionId: string | undefined): MemoryPrompt {
+async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryPrompt> {
   if (!sessionId) {
     return {
       historyText: 'No session memory is available yet.',
       questionText: 'No prior questions are on record.',
       recentConversation: '',
       askedQuestions: [],
+      primerText: '',
     }
   }
 
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
   const askedQuestions = collectAskedQuestions(sessions)
   const detailForFallback = findLatestUserDetails(sessions, { limit: 1 })[0]
+  const primer = await getMemoryPrimer()
+  const primerText = primer.text ? primer.text.trim() : ''
 
   const historyLines: string[] = []
   const priorSessions = sessions.filter((session) => session.id !== sessionId)
@@ -116,6 +120,7 @@ function buildMemoryPrompt(sessionId: string | undefined): MemoryPrompt {
     recentConversation: conversationLines.join('\n'),
     askedQuestions,
     detailForFallback,
+    primerText,
   }
 }
 
@@ -127,7 +132,10 @@ export async function POST(req: NextRequest) {
     const body: AskAudioBody = raw && raw.length ? safeJsonParse(raw) : {}
     const { audio, format = 'webm', text, sessionId } = body || {}
 
-    const memory = buildMemoryPrompt(sessionId)
+    if (sessionId) {
+      await ensureSessionMemoryHydrated().catch(() => undefined)
+    }
+    const memory = await buildMemoryPrompt(sessionId)
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.detailForFallback)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
     const fallbackReply = memory.detailForFallback
@@ -148,7 +156,13 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const parts: any[] = [{ text: SYSTEM_PROMPT }, { text: memory.historyText }, { text: memory.questionText }]
+    const primerSnippet = memory.primerText ? memory.primerText.slice(0, 6000) : ''
+    const parts: any[] = [{ text: SYSTEM_PROMPT }]
+    if (primerSnippet) {
+      parts.push({ text: `Memory primer:\n${primerSnippet}` })
+    }
+    parts.push({ text: memory.historyText })
+    parts.push({ text: memory.questionText })
     if (memory.recentConversation) {
       parts.push({ text: memory.recentConversation })
     }

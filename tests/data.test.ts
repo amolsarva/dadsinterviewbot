@@ -4,8 +4,10 @@ import { clearFoxes, listFoxes } from '../lib/foxes'
 const putBlobMock = vi.fn(async (path: string, _buf: Buffer, _type: string, _options?: unknown) => ({
   url: `https://blob.test/${path}`,
 }))
+const listBlobsMock = vi.fn(async () => ({ blobs: [] }))
 vi.mock('../lib/blob', () => ({
   putBlobFromBuffer: putBlobMock,
+  listBlobs: listBlobsMock,
 }))
 
 const sendEmailMock = vi.fn()
@@ -14,11 +16,14 @@ vi.mock('../lib/email', () => ({
 }))
 
 describe('finalizeSession', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules()
     putBlobMock.mockClear()
+    listBlobsMock.mockClear()
     sendEmailMock.mockReset()
     clearFoxes()
+    const data = await import('../lib/data')
+    data.__dangerousResetMemoryState()
   })
 
   it('reports success when email provider succeeds', async () => {
@@ -113,5 +118,19 @@ describe('finalizeSession', () => {
 
     const stored = await data.getSession(session.id)
     expect(stored?.artifacts?.session_audio).toBe('https://blob.test/sessions/123/session-audio.webm')
+  })
+
+  it('updates the memory primer with highlights from the session', async () => {
+    const data = await import('../lib/data')
+    sendEmailMock.mockResolvedValue({ skipped: true })
+    const session = await data.createSession({ email_to: '' })
+    await data.appendTurn(session.id, { role: 'user', text: 'hello there from the porch' })
+    await data.appendTurn(session.id, { role: 'assistant', text: 'thanks for sharing that scene' })
+
+    await data.finalizeSession(session.id, { clientDurationMs: 500 })
+
+    const primer = await data.getMemoryPrimer()
+    expect(primer.text).toContain('User opened with: hello there from the porch')
+    expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/MemoryPrimer.txt')).toBe(true)
   })
 })

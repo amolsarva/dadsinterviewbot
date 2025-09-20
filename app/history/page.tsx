@@ -50,7 +50,7 @@ export default function HistoryPage() {
           if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0
           if (Number.isNaN(aTime)) return -1
           if (Number.isNaN(bTime)) return 1
-          return aTime - bTime
+          return bTime - aTime
         })
         setRows(combined)
       } catch {
