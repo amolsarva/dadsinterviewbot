@@ -1,27 +1,79 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from './lib/audio'
+
+function normalizeUserId(raw) {
+  if (typeof raw !== 'string') return 'default'
+  const trimmed = raw.trim()
+  if (!trimmed) return 'default'
+  const lowered = trimmed.toLowerCase()
+  const cleaned = lowered
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  return cleaned || 'default'
+}
+
+function deriveUserId() {
+  if (typeof window === 'undefined') return 'default'
+  try {
+    const path = window.location.pathname || ''
+    const directMatch = path.match(/^\/u\/([^/]+)/i)
+    if (directMatch && directMatch[1]) {
+      return normalizeUserId(decodeURIComponent(directMatch[1]))
+    }
+  } catch {
+    // ignore decode failures and fall back to query param
+  }
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const fromQuery = params.get('user')
+    if (fromQuery) return normalizeUserId(fromQuery)
+  } catch {}
+  return 'default'
+}
 
 const PROVIDER_DEFAULT = 'google'
 const OPENING = `Hello and welcome to Dad’s Interview Bot. I’m your biographer companion. We’ll have gentle, short conversations to help you recall stories. When a question finishes, just answer in your own words, and when you pause I’ll ask a thoughtful follow-up. Take your time. Let’s begin.`
 
 export default function App(){
+  const userId = useMemo(() => deriveUserId(), [])
+  const storageSessionKey = useMemo(() => `sessionId:${userId}`, [userId])
+  const storageEmailKey = useMemo(() => `email:${userId}`, [userId])
+
+  const withUser = useMemo(() => {
+    return (path) => {
+      const encoded = encodeURIComponent(userId)
+      return path.includes('?') ? `${path}&user=${encoded}` : `${path}?user=${encoded}`
+    }
+  }, [userId])
+
   const [state, setState] = useState('assistant:intro')
-  const [sessionId, setSessionId] = useState(() => sessionStorage.getItem('sessionId') || crypto.randomUUID())
+  const [sessionId, setSessionId] = useState(() => {
+    if (typeof window === 'undefined') return crypto.randomUUID()
+    return sessionStorage.getItem(storageSessionKey) || crypto.randomUUID()
+  })
   const [turn, setTurn] = useState(0)
-  const [email, setEmail] = useState(() => localStorage.getItem('email') || 'a@sarva.co')
+  const [email, setEmail] = useState(() => {
+    if (typeof window === 'undefined') return 'a@sarva.co'
+    return localStorage.getItem(storageEmailKey) || 'a@sarva.co'
+  })
   const [historyOpen, setHistoryOpen] = useState(false)
   const spokenOnceRef = useRef(false)
   const forceStopRef = useRef(false)
 
-  useEffect(()=>{ sessionStorage.setItem('sessionId', sessionId) }, [sessionId])
-  useEffect(()=>{ localStorage.setItem('email', email) }, [email])
+  useEffect(()=>{
+    sessionStorage.setItem(storageSessionKey, sessionId)
+  }, [sessionId, storageSessionKey])
+  useEffect(()=>{
+    localStorage.setItem(storageEmailKey, email)
+  }, [email, storageEmailKey])
 
   useEffect(()=>{
     if (!spokenOnceRef.current) {
       spokenOnceRef.current = true
       speak(OPENING, ()=> { setState('user:listening'); runUserTurn() })
     }
-  }, [])
+  }, [runUserTurn])
 
   function speak(text, onend){
     const u = new SpeechSynthesisUtterance(text); u.rate=1; u.pitch=1; u.onend=onend
@@ -29,7 +81,7 @@ export default function App(){
     // TODO(later): reuse the OpenAI speech helper here once we have a node-side relay endpoint.
   }
 
-  async function runUserTurn(){
+  const runUserTurn = useCallback(async () => {
     try{
       forceStopRef.current = false
       setState('user:listening')
@@ -37,7 +89,7 @@ export default function App(){
       const rec = await recordUntilSilence({ baseline, minDurationMs:1200, silenceMs:1600, graceMs:600, shouldForceStop: ()=> forceStopRef.current })
       const b64 = await blobToBase64(rec.blob)
       setState('assistant:thinking')
-      const askRes = await fetch('/api/ask-audio?provider='+encodeURIComponent(PROVIDER_DEFAULT), {
+      const askRes = await fetch(withUser('/api/ask-audio?provider='+encodeURIComponent(PROVIDER_DEFAULT)), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ audio:b64, format:'webm', sessionId, turn: turn+1 })
       }).then(r=>r.json()).catch(()=>({ reply:"Tell me one small detail you remember from that moment.", transcript:"", end_intent:false }))
@@ -46,7 +98,7 @@ export default function App(){
       const endRegex = /(i[' ]?m done|stop for now|that’s all|i’m finished|we’re done|let’s stop)/i
       const shouldEnd = end_intent === true || (transcript && endRegex.test(transcript))
 
-      const save = await fetch('/api/save-turn', {
+      const save = await fetch(withUser('/api/save-turn'), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ sessionId, turn: turn+1, wav: b64, mime:'audio/webm', duration_ms: rec.durationMs,
           reply_text: reply, transcript, provider: PROVIDER_DEFAULT })
@@ -59,18 +111,18 @@ export default function App(){
     }catch(e){
       console.error(e); alert('There was a problem saving or asking. Check /api/health and env keys.'); setState('idle')
     }
-  }
+  }, [finalizeSession, sessionId, turn, withUser])
 
-  async function finalizeSession(){
+  const finalizeSession = useCallback(async () => {
     try{
       window.speechSynthesis.cancel(); setState('assistant:thinking')
       // REMINDER: capture latency metrics so we can compare browser TTS vs OpenAI Neural voices.
-      const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
+      const resp = await fetch(withUser('/api/finalize-session'), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
       const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
       setState('idle'); const sent = j.emailStatus && (j.emailStatus.ok || j.emailStatus.skipped)
       alert(`Session saved. ${sent? (j.emailStatus.skipped? 'Email skipped.' : 'Email sent.') : 'Email failed.'}`)
     }catch(e){ console.error(e); alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.'); setState('idle') }
-  }
+  }, [email, sessionId, withUser])
 
   function startAgain(){ window.speechSynthesis.cancel(); const next=crypto.randomUUID(); setSessionId(next); setTurn(0); setState('assistant:intro'); spokenOnceRef.current=false; speak(OPENING, ()=>{ setState('user:listening'); runUserTurn() }) }
 
@@ -100,20 +152,20 @@ export default function App(){
           </div>
         </div>
       </div>
-      {historyOpen && <History onClose={()=>setHistoryOpen(false)} />}
+      {historyOpen && <History onClose={()=>setHistoryOpen(false)} withUser={withUser} />}
     </main>
     <button className="fab-health" onClick={()=>window.open('/api/health','_blank')}>Health</button>
   </>)
 }
 
-function History({onClose}){
+function History({onClose, withUser}){
   const [items, setItems] = React.useState([])
   React.useEffect(()=>{
-    fetch('/api/get-history?page=1&limit=10')
+    fetch(withUser('/api/get-history?page=1&limit=10'))
       .then(r=>r.json())
       .then(setItems)
       .catch(()=>setItems({items:[]}))
-  },[])
+  },[withUser])
   return (
     <div className="modal" onClick={onClose}>
       <div className="card" onClick={e=>e.stopPropagation()}>

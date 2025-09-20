@@ -1,7 +1,15 @@
 'use client'
 import { create } from 'zustand'
 
-type State = 'idle' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess'
+type State =
+  | 'idle'
+  | 'calibrating'
+  | 'recording'
+  | 'thinking'
+  | 'speakingPrep'
+  | 'playing'
+  | 'readyToContinue'
+  | 'doneSuccess'
 
 type Store = {
   state: State
@@ -18,8 +26,10 @@ type Store = {
 function computeLabel(state: State): string {
   switch(state){
     case 'idle': return 'Start'
+    case 'calibrating': return 'Calibrating'
     case 'recording': return 'Done'
     case 'thinking': return 'Cancel'
+    case 'speakingPrep': return 'Continue'
     case 'playing': return 'Continue'
     case 'readyToContinue': return 'Continue'
     case 'doneSuccess': return 'Start Again'
@@ -44,6 +54,11 @@ export const useInterviewMachine = create<Store>((set, get) => ({
       push('Recording started')
       return
     }
+    if (state === 'calibrating') {
+      push('Skipping calibration → recording')
+      set({ state: 'recording', label: computeLabel('recording') })
+      return
+    }
     if (state === 'recording') {
       set({ state: 'thinking', label: computeLabel('thinking'), disabled: true })
       push('Recording stopped → thinking')
@@ -56,6 +71,11 @@ export const useInterviewMachine = create<Store>((set, get) => ({
     if (state === 'thinking') {
       set({ state: 'readyToContinue', label: computeLabel('readyToContinue'), disabled: false })
       push('Cancelled thinking')
+      return
+    }
+    if (state === 'speakingPrep') {
+      set({ state: 'readyToContinue', label: computeLabel('readyToContinue') })
+      push('Skipped speaking → ready')
       return
     }
     if (state === 'playing') {

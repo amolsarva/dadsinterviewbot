@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createSession, appendTurn, finalizeSession } from '@/lib/data'
 import { listFoxes } from '@/lib/foxes'
+import { DEFAULT_USER_ID } from '@/lib/users'
 
 export const runtime = 'nodejs'
 
@@ -20,20 +21,21 @@ function wrapStage<T>(stage: Stage, task: () => Promise<T>): Promise<T> {
 
 export async function POST() {
   try {
+    const userId = DEFAULT_USER_ID
     const session = await wrapStage('create_session', () =>
-      createSession({ email_to: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co' })
+      createSession(userId, { email_to: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co' })
     )
 
     await wrapStage('append_user_turn', () =>
-      appendTurn(session.id, { role: 'user', text: 'Hello world' } as any)
+      appendTurn(userId, session.id, { role: 'user', text: 'Hello world' } as any)
     )
 
     await wrapStage('append_assistant_turn', () =>
-      appendTurn(session.id, { role: 'assistant', text: 'Tell me more about that.' } as any)
+      appendTurn(userId, session.id, { role: 'assistant', text: 'Tell me more about that.' } as any)
     )
 
     const result = await wrapStage('finalize_session', () =>
-      finalizeSession(session.id, { clientDurationMs: 5000 })
+      finalizeSession(userId, session.id, { clientDurationMs: 5000 })
     )
 
     if ('skipped' in result && result.skipped) {

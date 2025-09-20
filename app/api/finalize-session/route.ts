@@ -4,6 +4,7 @@ import { getBlobToken, listBlobs, putBlobFromBuffer } from '@/lib/blob'
 import { sendSummaryEmail } from '@/lib/email'
 import { getSession, mergeSessionArtifacts, rememberSessionManifest } from '@/lib/data'
 import { flagFox, listFoxes } from '@/lib/foxes'
+import { buildUserScopedPath, normalizeUserId } from '@/lib/users'
 
 import { z } from 'zod'
 
@@ -31,12 +32,14 @@ const schema = z.object({
   email: z.string().email().optional(),
   sessionAudioUrl: z.string().min(1).optional(),
   sessionAudioDurationMs: z.number().nonnegative().optional(),
+  emailsEnabled: z.boolean().optional(),
 })
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs } = schema.parse(body)
+    const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs, emailsEnabled } = schema.parse(body)
+    const userId = normalizeUserId(req.nextUrl.searchParams.get('user'))
 
     const token = getBlobToken()
 
@@ -45,7 +48,7 @@ export async function POST(req: NextRequest) {
 
     if (token) {
       try {
-        const prefix = `sessions/${sessionId}/`
+        const prefix = buildUserScopedPath(userId, `sessions/${sessionId}/`)
         const listed = await listBlobs({ prefix, limit: 2000 })
         turnBlobs = listed.blobs.filter((b) => /turn-\d+\.json$/.test(b.pathname))
         turnBlobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
@@ -108,7 +111,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!turns.length) {
-      const inMemory = await getSession(sessionId)
+      const inMemory = await getSession(userId, sessionId)
       if (!turnBlobs.length) {
         const level = manifestListFailed ? 'error' : 'warn'
         flagFox({
@@ -219,19 +222,15 @@ export async function POST(req: NextRequest) {
     }
 
     const transcriptTxtUpload = await putBlobFromBuffer(
-      `sessions/${sessionId}/transcript-${sessionId}.txt`,
+      buildUserScopedPath(userId, `sessions/${sessionId}/transcript-${sessionId}.txt`),
       Buffer.from(transcriptText, 'utf8'),
-
       'text/plain; charset=utf-8',
-
     )
     const transcriptTxtUrl = transcriptTxtUpload.downloadUrl || transcriptTxtUpload.url
     const transcriptJsonUpload = await putBlobFromBuffer(
-      `sessions/${sessionId}/transcript-${sessionId}.json`,
+      buildUserScopedPath(userId, `sessions/${sessionId}/transcript-${sessionId}.json`),
       Buffer.from(JSON.stringify(transcriptJson, null, 2), 'utf8'),
-
       'application/json',
-
     )
     const transcriptJsonUrl = transcriptJsonUpload.downloadUrl || transcriptJsonUpload.url
 
@@ -263,10 +262,9 @@ export async function POST(req: NextRequest) {
     }
 
     const manifestUpload = await putBlobFromBuffer(
-      `sessions/${sessionId}/session-${sessionId}.json`,
+      buildUserScopedPath(userId, `sessions/${sessionId}/session-${sessionId}.json`),
       Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'),
       'application/json',
-
       { access: 'public' },
     )
     const manifestUrl = manifestUpload.downloadUrl || manifestUpload.url
@@ -274,6 +272,7 @@ export async function POST(req: NextRequest) {
     manifest.artifacts.manifest = manifestUrl
 
     rememberSessionManifest(
+      userId,
       {
         ...manifest,
         artifacts: {
@@ -288,7 +287,7 @@ export async function POST(req: NextRequest) {
       manifestUrl,
     )
 
-    mergeSessionArtifacts(sessionId, {
+    mergeSessionArtifacts(userId, sessionId, {
       artifacts: {
         session_manifest: manifestUrl,
         manifest: manifestUrl,
@@ -305,8 +304,11 @@ export async function POST(req: NextRequest) {
     let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { skipped: true }
     emailStatus = { skipped: true }
 
-    const targetEmail = email || process.env.DEFAULT_NOTIFY_EMAIL
-    if (!targetEmail) {
+    const allowEmails = emailsEnabled !== false
+    const targetEmail = allowEmails ? email || process.env.DEFAULT_NOTIFY_EMAIL : ''
+    if (!allowEmails) {
+      emailStatus = { skipped: true }
+    } else if (!targetEmail) {
       flagFox({
         id: 'theory-4-email-missing-target',
         theory: 4,
@@ -353,11 +355,11 @@ export async function POST(req: NextRequest) {
     }
 
     if ('ok' in emailStatus && emailStatus.ok) {
-      mergeSessionArtifacts(sessionId, { status: 'emailed' })
+      mergeSessionArtifacts(userId, sessionId, { status: 'emailed' })
     } else if ('skipped' in emailStatus && emailStatus.skipped) {
-      mergeSessionArtifacts(sessionId, { status: 'completed' })
+      mergeSessionArtifacts(userId, sessionId, { status: 'completed' })
     } else {
-      mergeSessionArtifacts(sessionId, { status: 'error' })
+      mergeSessionArtifacts(userId, sessionId, { status: 'error' })
 
       flagFox({
         id: 'theory-4-email-status-error-api',

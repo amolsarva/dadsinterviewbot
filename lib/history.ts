@@ -1,5 +1,6 @@
 import { list } from '@vercel/blob'
 import { getBlobToken } from './blob'
+import { buildUserScopedPath, normalizeUserId } from './users'
 
 type RawTurnBlob = { url: string; downloadUrl?: string; uploadedAt: string; name: string }
 
@@ -150,14 +151,26 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
   }
 }
 
+function extractSessionPath(pathname: string): { sessionId: string; name: string } | null {
+  const userScoped = pathname.match(/^users\/[^/]+\/sessions\/([^/]+)\/(.+)$/)
+  if (userScoped) {
+    return { sessionId: userScoped[1], name: userScoped[2] }
+  }
+  const legacy = pathname.match(/^sessions\/([^/]+)\/(.+)$/)
+  if (legacy) {
+    return { sessionId: legacy[1], name: legacy[2] }
+  }
+  return null
+}
+
 function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
   const sessions = new Map<string, SessionEntry>()
 
   for (const blob of blobs) {
-    const match = blob.pathname.match(/^sessions\/([^/]+)\/(.+)$/)
+    const match = extractSessionPath(blob.pathname)
     if (!match) continue
-    const id = match[1]
-    const name = match[2]
+    const id = match.sessionId
+    const name = match.name
     const existing =
       sessions.get(id) ||
       ({
@@ -214,12 +227,14 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
 }
 
 export async function fetchStoredSessions({
+  userId: rawUserId,
   page = 1,
   limit = 10,
-}: { page?: number; limit?: number } = {}): Promise<{ items: StoredSession[] }> {
+}: { userId: string; page?: number; limit?: number }): Promise<{ items: StoredSession[] }> {
   try {
     const token = ensureToken()
-    const { blobs } = await list({ prefix: 'sessions/', limit: 2000, token })
+    const userId = normalizeUserId(rawUserId)
+    const { blobs } = await list({ prefix: buildUserScopedPath(userId, 'sessions/'), limit: 2000, token })
     const sessions = buildEntries(blobs)
 
     const sorted = Array.from(sessions.values()).sort(
@@ -238,10 +253,11 @@ export async function fetchStoredSessions({
   }
 }
 
-export async function fetchStoredSession(id: string): Promise<StoredSession | undefined> {
+export async function fetchStoredSession(userIdRaw: string, id: string): Promise<StoredSession | undefined> {
   try {
     const token = ensureToken()
-    const { blobs } = await list({ prefix: `sessions/${id}/`, limit: 2000, token })
+    const userId = normalizeUserId(userIdRaw)
+    const { blobs } = await list({ prefix: buildUserScopedPath(userId, `sessions/${id}/`), limit: 2000, token })
     if (!blobs.length) return undefined
     const entries = buildEntries(blobs)
     const entry = entries.get(id)

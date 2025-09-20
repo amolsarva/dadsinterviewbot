@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { putBlobFromBuffer } from '@/lib/blob'
 import { mergeSessionArtifacts } from '@/lib/data'
+import { buildUserScopedPath, normalizeUserId } from '@/lib/users'
 
 const schema = z.object({
   sessionId: z.string().min(1),
@@ -14,11 +15,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { sessionId, audio, mime, duration_ms } = schema.parse(body)
+    const userId = normalizeUserId(request.nextUrl.searchParams.get('user'))
 
     const buffer = Buffer.from(audio, 'base64')
     const ext = mime.split('/')[1]?.split(';')[0] || 'webm'
     const blob = await putBlobFromBuffer(
-      `sessions/${sessionId}/session-audio.${ext}`,
+      buildUserScopedPath(userId, `sessions/${sessionId}/session-audio.${ext}`),
       buffer,
       mime,
       { access: 'public' },
@@ -26,7 +28,7 @@ export async function POST(request: NextRequest) {
 
     const url = blob.downloadUrl || blob.url
 
-    mergeSessionArtifacts(sessionId, {
+    mergeSessionArtifacts(userId, sessionId, {
       artifacts: { session_audio: url },
       durationMs: typeof duration_ms === 'number' ? duration_ms : undefined,
     })
