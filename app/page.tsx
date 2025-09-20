@@ -726,13 +726,15 @@ export default function Home() {
       }
 
       const completionIntent = detectCompletionIntent(transcript)
+      const completionDetected = completionIntent.shouldStop && completionIntent.confidence !== 'low'
       if (completionIntent.shouldStop) {
         const match = completionIntent.matchedPhrases.join(', ')
-        pushLog(
-          match.length
-            ? `Completion intent detected (${completionIntent.confidence}): ${match}`
-            : `Completion intent detected (${completionIntent.confidence})`,
-        )
+        const suffix = match.length ? `: ${match}` : ''
+        if (completionDetected) {
+          pushLog(`Completion intent detected (${completionIntent.confidence})${suffix}`)
+        } else {
+          pushLog(`Low-confidence completion intent ignored (${completionIntent.confidence})${suffix}`)
+        }
       }
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
@@ -800,7 +802,7 @@ export default function Home() {
       pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
       const shouldEnd =
-        finishRequestedRef.current || endIntent || reachedMax || completionIntent.shouldStop
+        finishRequestedRef.current || endIntent || reachedMax || completionDetected
       inTurnRef.current = false
 
       if (shouldEnd) {
