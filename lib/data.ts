@@ -1,6 +1,7 @@
 import { putBlobFromBuffer, listBlobs } from './blob'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
+import { generateSessionTitle, SummarizableTurn } from './session-title'
 
 export type Session = {
   id: string
@@ -154,11 +155,21 @@ export async function finalizeSession(
   })
 
   const transcriptLines: string[] = []
+  const summaryCandidates: SummarizableTurn[] = []
   for (const turn of turns) {
     transcriptLines.push(`User: ${turn.text}`)
+    summaryCandidates.push({ role: 'user', text: turn.text })
     if (turn.assistant) {
       transcriptLines.push(`Assistant: ${turn.assistant.text}`)
+      summaryCandidates.push({ role: 'assistant', text: turn.assistant.text })
     }
+  }
+
+  const computedTitle = generateSessionTitle(summaryCandidates, {
+    fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+  })
+  if (computedTitle) {
+    s.title = computedTitle
   }
 
   const txtBuf = Buffer.from(transcriptLines.join('\n'), 'utf8')
@@ -201,6 +212,7 @@ export async function finalizeSession(
     sessionId: s.id,
     created_at: s.created_at,
     email: s.email_to,
+    title: s.title,
     totals: { turns: turns.length, durationMs: s.duration_ms },
     turns: turns.map((t) => ({ id: t.id, role: t.role, text: t.text, audio: t.audio || null })),
     artifacts: s.artifacts,
@@ -325,6 +337,34 @@ export async function listSessions(): Promise<Session[]> {
   }
 
   return Array.from(seen.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+}
+
+export type SessionMemorySnapshot = {
+  id: string
+  created_at: string
+  title?: string
+  status: Session['status']
+  total_turns: number
+  turns: { role: Turn['role']; text: string }[]
+}
+
+export function getSessionMemorySnapshot(
+  focusSessionId?: string,
+): { current?: SessionMemorySnapshot; sessions: SessionMemorySnapshot[] } {
+  const sessions = Array.from(mem.sessions.values())
+    .map((session) => ({
+      id: session.id,
+      created_at: session.created_at,
+      title: session.title,
+      status: session.status,
+      total_turns: session.total_turns,
+      turns: (session.turns || []).map((turn) => ({ role: turn.role, text: turn.text })),
+    }))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+
+  const current = focusSessionId ? sessions.find((session) => session.id === focusSessionId) : undefined
+
+  return { current, sessions }
 }
 
 
