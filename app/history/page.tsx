@@ -32,8 +32,15 @@ export default function HistoryPage() {
         try {
           const raw = localStorage.getItem('demoHistory')
           if (raw) {
-            const list = JSON.parse(raw) as { id:string, created_at:string }[]
-            demoRows = list.map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{} }))
+            const list = JSON.parse(raw) as { id: string; created_at: string; title?: string | null }[]
+            demoRows = list.map((d) => ({
+              id: d.id,
+              created_at: d.created_at,
+              title: typeof d.title === 'string' && d.title.length ? d.title : null,
+              status: 'completed',
+              total_turns: 1,
+              artifacts: {},
+            }))
           }
         } catch {}
         setRows([...(demoRows||[]), ...(serverRows||[])])
@@ -58,7 +65,9 @@ export default function HistoryPage() {
             <li key={s.id} className="bg-white/5 rounded p-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="font-medium">{s.title || 'Untitled session'}</div>
+                  <div className="font-medium">
+                    {s.title || `Session from ${new Date(s.created_at).toLocaleString()}`}
+                  </div>
                   <div className="text-xs opacity-70">{new Date(s.created_at).toLocaleString()}</div>
                   <div className="text-xs opacity-70">Turns: {s.total_turns} • Status: {s.status}</div>
                 </div>

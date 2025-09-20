@@ -1,6 +1,7 @@
 import { putBlobFromBuffer, listBlobs } from './blob'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
+import { generateSessionTitle, SummarizableTurn } from './session-title'
 
 export type Session = {
   id: string
@@ -154,11 +155,21 @@ export async function finalizeSession(
   })
 
   const transcriptLines: string[] = []
+  const summaryCandidates: SummarizableTurn[] = []
   for (const turn of turns) {
     transcriptLines.push(`User: ${turn.text}`)
+    summaryCandidates.push({ role: 'user', text: turn.text })
     if (turn.assistant) {
       transcriptLines.push(`Assistant: ${turn.assistant.text}`)
+      summaryCandidates.push({ role: 'assistant', text: turn.assistant.text })
     }
+  }
+
+  const computedTitle = generateSessionTitle(summaryCandidates, {
+    fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+  })
+  if (computedTitle) {
+    s.title = computedTitle
   }
 
   const txtBuf = Buffer.from(transcriptLines.join('\n'), 'utf8')
@@ -201,6 +212,7 @@ export async function finalizeSession(
     sessionId: s.id,
     created_at: s.created_at,
     email: s.email_to,
+    title: s.title,
     totals: { turns: turns.length, durationMs: s.duration_ms },
     turns: turns.map((t) => ({ id: t.id, role: t.role, text: t.text, audio: t.audio || null })),
     artifacts: s.artifacts,
