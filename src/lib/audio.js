@@ -78,18 +78,32 @@ export async function recordUntilSilence(options) {
   const data = new Float32Array(an.fftSize)
 
   return await new Promise((resolve) => {
+    let done = false
+    const finish = (result) => {
+      if (done) return
+      done = true
+      cleanup()
+      resolve(result)
+    }
+
     rec.onstop = () => {
+      if (done) return
       const blob = new Blob(chunks, { type: mime })
       const durationMs = Math.max(0, performance.now() - startedAt)
-      cleanup()
-      resolve({ blob, durationMs })
+      finish({ blob, durationMs })
     }
+
     proc.onaudioprocess = () => {
+      if (done) return
       an.getFloatTimeDomainData(data)
       const safeBaseline = baseline > 0.0001 ? baseline : 0.0001
       const level = rms(data) / safeBaseline
       const now = performance.now()
       if (!started) {
+        if (shouldForceStop()) {
+          finish({ blob: new Blob([], { type: mime }), durationMs: 0 })
+          return
+        }
         if (level >= startRatio) {
           if (++loudStreak >= 3) {
             started = true
@@ -108,8 +122,12 @@ export async function recordUntilSilence(options) {
         const elapsed = now - startedAt
         const silenceElapsed = now - lastLoud
         if (elapsed >= maxDurationMs) rec.stop()
-        else if (shouldForceStop() && elapsed >= minDurationMs) rec.stop()
-        else if (elapsed >= minDurationMs && quietStreak >= 8 && silenceElapsed >= silenceMs + graceMs) rec.stop()
+        else if (shouldForceStop()) {
+          if (rec.state === 'recording') rec.stop()
+          else finish({ blob: new Blob(chunks, { type: mime }), durationMs: elapsed })
+        } else if (elapsed >= minDurationMs && quietStreak >= 8 && silenceElapsed >= silenceMs + graceMs) {
+          rec.stop()
+        }
       }
     }
     function cleanup() {
