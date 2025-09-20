@@ -1,4 +1,4 @@
-import { putBlobFromBuffer, listBlobs } from './blob'
+import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from './blob'
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
@@ -56,6 +56,13 @@ const primerState: { text: string; url?: string; updatedAt?: string; loaded: boo
 const hydrationState: { attempted: boolean; hydrated: boolean } = g[hydrationKey]
 
 const MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
+
+function resetPrimerState() {
+  primerState.text = ''
+  primerState.url = undefined
+  primerState.updatedAt = undefined
+  primerState.loaded = false
+}
 
 let hydrationPromise: Promise<void> | null = null
 let primerLoadPromise: Promise<void> | null = null
@@ -530,6 +537,97 @@ export function mergeSessionArtifacts(id: string, patch: SessionPatch) {
     session.status = patch.status
   }
   mem.sessions.set(id, session)
+}
+
+export async function deleteSession(
+  id: string,
+): Promise<{ ok: boolean; deleted: boolean; reason?: string }> {
+  if (!id) {
+    return { ok: false, deleted: false, reason: 'invalid_id' }
+  }
+
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+
+  let session = mem.sessions.get(id)
+  if (!session) {
+    session = (await getSession(id)) as RememberedSession | undefined
+  }
+
+  const artifactUrls = new Set<string>()
+  if (session?.artifacts) {
+    for (const value of Object.values(session.artifacts)) {
+      if (typeof value === 'string' && value.length) {
+        artifactUrls.add(value)
+      }
+    }
+  }
+
+  let removed = !!session
+
+  for (const url of artifactUrls) {
+    try {
+      const deleted = await deleteBlob(url)
+      if (deleted) removed = true
+    } catch (err) {
+      console.warn('Failed to delete session artifact blob', { id, url, err })
+    }
+  }
+
+  const prefixes = [`sessions/${id}/`, `transcripts/${id}`]
+  for (const prefix of prefixes) {
+    try {
+      const count = await deleteBlobsByPrefix(prefix)
+      if (count > 0) {
+        removed = true
+      }
+    } catch (err) {
+      console.warn('Failed to delete blobs for prefix', { id, prefix, err })
+    }
+  }
+
+  if (session) {
+    mem.sessions.delete(session.id)
+  } else {
+    mem.sessions.delete(id)
+  }
+
+  if (mem.sessions.size > 0) {
+    await rebuildMemoryPrimer().catch((err) => {
+      console.warn('Failed to rebuild memory primer after deletion', err)
+    })
+  } else {
+    await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+    resetPrimerState()
+  }
+
+  hydrationState.hydrated = true
+  hydrationState.attempted = true
+
+  return { ok: true, deleted: removed }
+}
+
+export async function clearAllSessions(): Promise<{ ok: boolean }> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+
+  mem.sessions.clear()
+
+  const prefixes = ['sessions/', 'transcripts/', 'memory/']
+  await Promise.all(
+    prefixes.map(async (prefix) => {
+      try {
+        await deleteBlobsByPrefix(prefix)
+      } catch (err) {
+        console.warn('Failed to delete blobs during clearAllSessions', { prefix, err })
+      }
+    }),
+  )
+
+  await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+  resetPrimerState()
+  hydrationState.attempted = true
+  hydrationState.hydrated = true
+
+  return { ok: true }
 }
 
 export async function listSessions(): Promise<Session[]> {

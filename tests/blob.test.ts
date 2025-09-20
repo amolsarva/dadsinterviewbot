@@ -17,6 +17,7 @@ describe('putBlobFromBuffer', () => {
     vi.doMock('@vercel/blob', () => ({
       put: putSpy,
       list: vi.fn(),
+      del: vi.fn(),
     }))
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
@@ -36,6 +37,7 @@ describe('putBlobFromBuffer', () => {
     vi.doMock('@vercel/blob', () => ({
       put: vi.fn(),
       list: vi.fn(),
+      del: vi.fn(),
     }))
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
@@ -50,6 +52,7 @@ describe('listBlobs', () => {
     vi.doMock('@vercel/blob', () => ({
       put: vi.fn(),
       list: vi.fn(),
+      del: vi.fn(),
     }))
     const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
     clearFallbackBlobs()

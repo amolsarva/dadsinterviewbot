@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { listSessions } from '@/lib/data'
+import { listSessions, clearAllSessions } from '@/lib/data'
 import { fetchStoredSessions } from '@/lib/history'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 
@@ -89,4 +89,9 @@ export async function GET() {
     artifacts: { transcript_txt: null, transcript_json: null },
   }))
   return NextResponse.json({ items: [...demoRows, ...rows] })
+}
+
+export async function DELETE() {
+  await clearAllSessions()
+  return NextResponse.json({ ok: true, items: [] })
 }

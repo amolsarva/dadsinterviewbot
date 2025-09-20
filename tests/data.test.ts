@@ -5,9 +5,13 @@ const putBlobMock = vi.fn(async (path: string, _buf: Buffer, _type: string, _opt
   url: `https://blob.test/${path}`,
 }))
 const listBlobsMock = vi.fn(async () => ({ blobs: [] }))
+const deleteByPrefixMock = vi.fn(async () => 0)
+const deleteBlobMock = vi.fn(async () => false)
 vi.mock('../lib/blob', () => ({
   putBlobFromBuffer: putBlobMock,
   listBlobs: listBlobsMock,
+  deleteBlobsByPrefix: deleteByPrefixMock,
+  deleteBlob: deleteBlobMock,
 }))
 
 const sendEmailMock = vi.fn()
@@ -20,6 +24,8 @@ describe('finalizeSession', () => {
     vi.resetModules()
     putBlobMock.mockClear()
     listBlobsMock.mockClear()
+    deleteByPrefixMock.mockClear()
+    deleteBlobMock.mockClear()
     sendEmailMock.mockReset()
     clearFoxes()
     const data = await import('../lib/data')
@@ -132,5 +138,65 @@ describe('finalizeSession', () => {
     const primer = await data.getMemoryPrimer()
     expect(primer.text).toContain('User opened with: hello there from the porch')
     expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/MemoryPrimer.txt')).toBe(true)
+  })
+})
+
+describe('session deletion helpers', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    putBlobMock.mockClear()
+    listBlobsMock.mockClear()
+    deleteByPrefixMock.mockClear()
+    deleteBlobMock.mockClear()
+    sendEmailMock.mockReset()
+    clearFoxes()
+    const data = await import('../lib/data')
+    data.__dangerousResetMemoryState()
+    deleteByPrefixMock.mockImplementation(async () => 0)
+    deleteBlobMock.mockImplementation(async () => true)
+  })
+
+  it('deletes a specific session and updates the primer state', async () => {
+    const data = await import('../lib/data')
+    sendEmailMock.mockResolvedValue({ skipped: true })
+    const session = await data.createSession({ email_to: '' })
+    await data.appendTurn(session.id, { role: 'user', text: 'memory highlight to remove' })
+    await data.finalizeSession(session.id, { clientDurationMs: 100 })
+
+    deleteByPrefixMock.mockImplementation(async (prefix: string) => {
+      if (prefix.startsWith('sessions/')) return 1
+      if (prefix.startsWith('transcripts/')) return 1
+      return 0
+    })
+
+    const result = await data.deleteSession(session.id)
+
+    expect(result).toEqual({ ok: true, deleted: true })
+    expect(deleteByPrefixMock).toHaveBeenCalledWith(`sessions/${session.id}/`)
+    expect(deleteByPrefixMock).toHaveBeenCalledWith(`transcripts/${session.id}`)
+    expect(deleteBlobMock).toHaveBeenCalledWith('memory/MemoryPrimer.txt')
+
+    const primer = await data.getMemoryPrimer()
+    expect(primer.text).not.toContain('memory highlight to remove')
+  })
+
+  it('clears all sessions and blob records', async () => {
+    const data = await import('../lib/data')
+    sendEmailMock.mockResolvedValue({ skipped: true })
+    const session = await data.createSession({ email_to: '' })
+    await data.appendTurn(session.id, { role: 'assistant', text: 'hello' })
+    await data.finalizeSession(session.id, { clientDurationMs: 200 })
+
+    deleteByPrefixMock.mockImplementation(async () => 1)
+
+    await data.clearAllSessions()
+
+    expect(deleteByPrefixMock).toHaveBeenCalledWith('sessions/')
+    expect(deleteByPrefixMock).toHaveBeenCalledWith('transcripts/')
+    expect(deleteByPrefixMock).toHaveBeenCalledWith('memory/')
+    expect(deleteBlobMock).toHaveBeenCalledWith('memory/MemoryPrimer.txt')
+
+    const sessions = await data.listSessions()
+    expect(sessions).toEqual([])
   })
 })
