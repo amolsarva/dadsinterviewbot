@@ -43,7 +43,16 @@ export default function HistoryPage() {
             }))
           }
         } catch {}
-        setRows([...(demoRows||[]), ...(serverRows||[])])
+        const combined = [...(demoRows || []), ...(serverRows || [])]
+        combined.sort((a, b) => {
+          const aTime = new Date(a.created_at).getTime()
+          const bTime = new Date(b.created_at).getTime()
+          if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0
+          if (Number.isNaN(aTime)) return -1
+          if (Number.isNaN(bTime)) return 1
+          return aTime - bTime
+        })
+        setRows(combined)
       } catch {
         setRows([])
       }

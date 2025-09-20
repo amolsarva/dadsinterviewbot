@@ -4,6 +4,7 @@ import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
+import { detectCompletionIntent } from '@/lib/intents'
 
 const SESSION_STORAGE_KEY = 'sessionId'
 const HARD_TURN_LIMIT_MS = 90_000
@@ -299,7 +300,7 @@ export default function Home() {
         const res = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, speed: 1.22 }),
         })
         if (!res.ok) throw new Error('tts_failed')
         const data = await res.json()
@@ -543,14 +544,21 @@ export default function Home() {
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
-      const endRegex =
-        /(i[' ]?m done|i am done|stop for now|that's all|i[' ]?m finished|i am finished|we're done|let's stop|lets stop|all done|that's it|im done now|i[' ]?m good|i am done now)/i
-
       if (transcript) {
         conversationRef.current.push({ role: 'user', text: transcript })
       }
       if (reply) {
         conversationRef.current.push({ role: 'assistant', text: reply })
+      }
+
+      const completionIntent = detectCompletionIntent(transcript)
+      if (completionIntent.shouldStop) {
+        const match = completionIntent.matchedPhrases.join(', ')
+        pushLog(
+          match.length
+            ? `Completion intent detected (${completionIntent.confidence}): ${match}`
+            : `Completion intent detected (${completionIntent.confidence})`,
+        )
       }
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
@@ -605,7 +613,7 @@ export default function Home() {
       pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
       const shouldEnd =
-        finishRequestedRef.current || endIntent || reachedMax || (transcript && endRegex.test(transcript))
+        finishRequestedRef.current || endIntent || reachedMax || completionIntent.shouldStop
       inTurnRef.current = false
 
       if (shouldEnd) {
@@ -885,7 +893,7 @@ export default function Home() {
               <button
                 onClick={requestFinish}
                 disabled={!hasStarted || finishRequested}
-                className="text-sm text-white/70 underline-offset-4 transition hover:text-white disabled:cursor-not-allowed disabled:text-white/40"
+                className="rounded-full border border-white/20 bg-white/5 px-5 py-2 text-sm font-medium text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/40 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
               >
                 I’m finished
               </button>

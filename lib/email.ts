@@ -1,7 +1,16 @@
 import { Resend } from 'resend'
 
+export function areSummaryEmailsEnabled() {
+  return process.env.ENABLE_SESSION_EMAILS === 'true'
+}
+
 export async function sendSummaryEmail(to: string, subject: string, body: string) {
   const from = process.env.MAIL_FROM || 'noreply@example.com'
+
+  if (!areSummaryEmailsEnabled()) {
+    console.info('Session summary email delivery disabled via ENABLE_SESSION_EMAILS flag.')
+    return { skipped: true }
+  }
 
   if (process.env.RESEND_API_KEY) {
     try {

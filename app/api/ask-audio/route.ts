@@ -6,10 +6,13 @@ import {
   normalizeQuestion,
   pickFallbackQuestion,
 } from '@/lib/question-memory'
+import { detectCompletionIntent } from '@/lib/intents'
 
 const SYSTEM_PROMPT = `You are a warm, patient biographer helping an older adult remember their life.
 You remember every conversation provided in the memory section below.
-Goals: guide a long conversation in short steps; never repeat or paraphrase the user's words; ask one short, specific, sensory-rich question (<= 20 words) that either (a) digs deeper on the last detail, (b) moves to a closely related facet (people, place, date), or (c) gracefully shifts to a new chapter if the user signals they wish to.
+Goals: guide a long conversation in short steps; never repeat or paraphrase the user's words. Carefully listen for instructions, questions, or corrections from the user and respond directly before offering a next prompt. Ask one short, specific, sensory-rich question (<= 20 words) only when the user is ready to keep going.
+If the user signals they are finished for now, set end_intent to true and close warmly without pushing another question.
+If the user asks you a question, give a thoughtful answer before deciding whether to follow with a gentle prompt.
 Keep silence handling patient; do not rush to speak if the user pauses briefly.
 Background noise is irrelevant - focus on spoken voice only.
 Do not repeat any question that appears in the memory section.
@@ -46,6 +49,15 @@ type MemoryPrompt = {
   recentConversation: string
   askedQuestions: string[]
   detailForFallback?: string
+}
+
+function softenQuestion(question: string | null | undefined): string {
+  if (!question) return ''
+  const trimmed = question.trim()
+  if (!trimmed.length) return ''
+  const withoutQuestion = trimmed.replace(/[?]+$/, '')
+  const lowered = withoutQuestion.charAt(0).toLowerCase() + withoutQuestion.slice(1)
+  return `If you'd like, you could share ${lowered}.`
 }
 
 function buildMemoryPrompt(sessionId: string | undefined): MemoryPrompt {
@@ -115,14 +127,20 @@ export async function POST(req: NextRequest) {
 
     const memory = buildMemoryPrompt(sessionId)
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.detailForFallback)
+    const fallbackSuggestion = softenQuestion(fallbackQuestion)
+    const fallbackReply = memory.detailForFallback
+      ? `I remember you mentioned ${memory.detailForFallback}. I'm here when you're ready to add more or head in a new direction.${
+          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
+        }`
+      : `I’m here with you. ${fallbackSuggestion || 'Share whatever feels right next, or let me know how I can help.'}`
 
     if (!process.env.GOOGLE_API_KEY) {
       return NextResponse.json<AskAudioResponse>({
         ok: true,
         provider,
-        reply: fallbackQuestion,
+        reply: fallbackReply,
         transcript: text || '',
-        end_intent: false,
+        end_intent: detectCompletionIntent(text || '').shouldStop,
       })
     }
 
@@ -150,9 +168,9 @@ export async function POST(req: NextRequest) {
     const fallback: AskAudioResponse = {
       ok: true,
       provider: 'google',
-      reply: fallbackQuestion,
-      transcript: '',
-      end_intent: false,
+      reply: fallbackReply,
+      transcript: text || '',
+      end_intent: detectCompletionIntent(text || '').shouldStop,
     }
 
     try {
@@ -162,22 +180,30 @@ export async function POST(req: NextRequest) {
       if (reply) {
         const normalized = normalizeQuestion(reply)
         if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
-          reply = fallbackQuestion
+          reply = fallbackReply
         }
       }
+      const transcriptText = typeof parsed.transcript === 'string' ? parsed.transcript : fallback.transcript || ''
+      const completion = detectCompletionIntent(transcriptText || text || '')
       return NextResponse.json({
         ok: true,
         provider: 'google',
         reply,
-        transcript: parsed.transcript || fallback.transcript || '',
-        end_intent: Boolean(parsed.end_intent),
+        transcript: transcriptText,
+        end_intent: Boolean(parsed.end_intent) || completion.shouldStop,
       })
     } catch {
       const normalized = normalizeQuestion(txt)
       if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
         return NextResponse.json(fallback)
       }
-      return NextResponse.json({ ...fallback, reply: txt || fallback.reply })
+      const completion = detectCompletionIntent(txt || text || '')
+      return NextResponse.json({
+        ...fallback,
+        reply: txt || fallback.reply,
+        transcript: txt || fallback.transcript || '',
+        end_intent: fallback.end_intent || completion.shouldStop,
+      })
     }
   } catch (e) {
     return NextResponse.json<AskAudioResponse>({
