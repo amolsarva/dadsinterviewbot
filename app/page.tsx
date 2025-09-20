@@ -133,7 +133,14 @@ const INTRO_FALLBACK =
   'Welcome back. I remember everything you have trusted me with. Tell me one new detail you would like to explore now.'
 
 const STATE_VISUALS: Record<
-  'idle' | 'calibrating' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess',
+  | 'idle'
+  | 'calibrating'
+  | 'recording'
+  | 'thinking'
+  | 'speakingPrep'
+  | 'playing'
+  | 'readyToContinue'
+  | 'doneSuccess',
   { icon: string; badge: string; title: string; description: string; gradient: string }
 > = {
   idle: {
@@ -163,6 +170,13 @@ const STATE_VISUALS: Record<
     title: 'Thinking',
     description: 'Give me a brief moment while I make sense of what you shared.',
     gradient: 'from-fuchsia-400/40 via-purple-500/40 to-indigo-600/40',
+  },
+  speakingPrep: {
+    icon: '🔄',
+    badge: 'Warming up',
+    title: 'Preparing to speak',
+    description: 'Spinning up my voice so I can respond clearly.',
+    gradient: 'from-amber-300/40 via-amber-400/40 to-orange-500/40',
   },
   playing: {
     icon: '💬',
@@ -224,6 +238,7 @@ export default function Home() {
         | 'calibrating'
         | 'recording'
         | 'thinking'
+        | 'speakingPrep'
         | 'playing'
         | 'readyToContinue'
         | 'doneSuccess',
@@ -305,46 +320,107 @@ export default function Home() {
     }
   }, [])
 
-  const playWithAudioElement = useCallback(async (base64: string, mime: string) => {
-    if (typeof window === 'undefined') return 0
-    return await new Promise<number>((resolve) => {
-      try {
-        const src = `data:${mime};base64,${base64}`
-        const audio = new Audio(src)
-        audio.onended = () => {
-          resolve(Math.round((audio.duration || 0) * 1000))
-        }
-        audio.onerror = () => resolve(0)
-        audio.play().catch(() => resolve(0))
-      } catch {
-        resolve(0)
-      }
-    })
-  }, [])
-
-  const playWithSpeechSynthesis = useCallback(async (text: string) => {
-    if (typeof window === 'undefined') return 0
-    return await new Promise<number>((resolve) => {
-      try {
-        if (!('speechSynthesis' in window)) {
+  const playWithAudioElement = useCallback(
+    async (
+      base64: string,
+      mime: string,
+      options?: {
+        onStart?: () => void
+      },
+    ) => {
+      if (typeof window === 'undefined') return 0
+      return await new Promise<number>((resolve) => {
+        try {
+          const src = `data:${mime};base64,${base64}`
+          const audio = new Audio(src)
+          const triggerStart = () => {
+            if (!options?.onStart) return
+            try {
+              options.onStart()
+            } catch {}
+          }
+          let started = false
+          const ensureStarted = () => {
+            if (started) return
+            started = true
+            triggerStart()
+          }
+          audio.onended = () => {
+            resolve(Math.round((audio.duration || 0) * 1000))
+          }
+          audio.onerror = () => resolve(0)
+          audio.onplay = ensureStarted
+          audio.onplaying = ensureStarted
+          const playPromise = audio.play()
+          if (playPromise && typeof playPromise.then === 'function') {
+            playPromise
+              .then(() => {
+                ensureStarted()
+              })
+              .catch(() => {
+                resolve(0)
+              })
+          } else {
+            ensureStarted()
+          }
+        } catch {
           resolve(0)
-          return
         }
-        const utterance = new SpeechSynthesisUtterance(text)
-        utterance.rate = 1
-        utterance.pitch = 1
-        utterance.onend = () => resolve(0)
-        utterance.onerror = () => resolve(0)
-        window.speechSynthesis.cancel()
-        window.speechSynthesis.speak(utterance)
-      } catch {
-        resolve(0)
-      }
-    })
-  }, [])
+      })
+    },
+    [],
+  )
+
+  const playWithSpeechSynthesis = useCallback(
+    async (
+      text: string,
+      options?: {
+        onStart?: () => void
+      },
+    ) => {
+      if (typeof window === 'undefined') return 0
+      return await new Promise<number>((resolve) => {
+        try {
+          if (!('speechSynthesis' in window)) {
+            resolve(0)
+            return
+          }
+          const utterance = new SpeechSynthesisUtterance(text)
+          utterance.rate = 1
+          utterance.pitch = 1
+          const triggerStart = () => {
+            if (!options?.onStart) return
+            try {
+              options.onStart()
+            } catch {}
+          }
+          let started = false
+          const ensureStarted = () => {
+            if (started) return
+            started = true
+            triggerStart()
+          }
+          utterance.onstart = ensureStarted
+          utterance.onend = () => resolve(0)
+          utterance.onerror = () => resolve(0)
+          window.speechSynthesis.cancel()
+          window.speechSynthesis.speak(utterance)
+          ensureStarted()
+        } catch {
+          resolve(0)
+        }
+      })
+    },
+    [],
+  )
 
   const playAssistantResponse = useCallback(
-    async (text: string): Promise<AssistantPlayback> => {
+    async (
+      text: string,
+      options?: {
+        onPlaybackStart?: () => void
+      },
+    ): Promise<AssistantPlayback> => {
       if (!text) return { base64: null, mime: 'audio/mpeg', durationMs: 0 }
       pushLog('Assistant reply ready → playing')
       try {
@@ -363,19 +439,30 @@ export default function Home() {
         const recorder = recorderRef.current
         if (recorder) {
           try {
+            if (options?.onPlaybackStart) {
+              try {
+                options.onPlaybackStart()
+              } catch {}
+            }
             const playback = await recorder.playAssistantBase64(data.audioBase64, mime)
             durationMs = playback?.durationMs ?? 0
           } catch (err) {
             pushLog('Recorder playback failed, falling back to direct audio')
-            durationMs = await playWithAudioElement(data.audioBase64, mime)
+            durationMs = await playWithAudioElement(data.audioBase64, mime, {
+              onStart: options?.onPlaybackStart,
+            })
           }
         } else {
-          durationMs = await playWithAudioElement(data.audioBase64, mime)
+          durationMs = await playWithAudioElement(data.audioBase64, mime, {
+            onStart: options?.onPlaybackStart,
+          })
         }
         return { base64: data.audioBase64, mime, durationMs }
       } catch (err) {
         pushLog('TTS unavailable, using speech synthesis fallback')
-        const durationMs = await playWithSpeechSynthesis(text)
+        const durationMs = await playWithSpeechSynthesis(text, {
+          onStart: options?.onPlaybackStart,
+        })
         return { base64: null, mime: 'audio/mpeg', durationMs }
       }
     },
@@ -649,10 +736,23 @@ export default function Home() {
       }
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
-      updateMachineState('playing')
+      let playbackStarted = false
+      pushLog('Preparing assistant audio')
+      updateMachineState('speakingPrep')
       try {
-        assistantPlayback = await playAssistantResponse(reply)
+        assistantPlayback = await playAssistantResponse(reply, {
+          onPlaybackStart: () => {
+            playbackStarted = true
+            updateMachineState('playing')
+          },
+        })
+        if (!playbackStarted) {
+          updateMachineState('playing')
+        }
       } catch {
+        if (!playbackStarted) {
+          updateMachineState('playing')
+        }
         assistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
       }
 
@@ -783,16 +883,43 @@ export default function Home() {
       } catch {}
 
       pushLog('Intro message ready → playing')
-      updateMachineState('playing')
+      let introPlaybackStarted = false
+      updateMachineState('speakingPrep')
       try {
-        await playAssistantResponse(introMessage)
+        await playAssistantResponse(introMessage, {
+          onPlaybackStart: () => {
+            introPlaybackStarted = true
+            updateMachineState('playing')
+          },
+        })
       } catch {
-        await playWithSpeechSynthesis(introMessage)
+        try {
+          await playWithSpeechSynthesis(introMessage, {
+            onStart: () => {
+              introPlaybackStarted = true
+              updateMachineState('playing')
+            },
+          })
+        } catch {}
+      } finally {
+        if (!introPlaybackStarted) {
+          updateMachineState('playing')
+        }
       }
     } catch {
+      let introFallbackStarted = false
+      updateMachineState('speakingPrep')
       try {
-        await playWithSpeechSynthesis(INTRO_FALLBACK)
+        await playWithSpeechSynthesis(INTRO_FALLBACK, {
+          onStart: () => {
+            introFallbackStarted = true
+            updateMachineState('playing')
+          },
+        })
       } catch {}
+      if (!introFallbackStarted) {
+        updateMachineState('playing')
+      }
     } finally {
       if (!finishRequestedRef.current) {
         updateMachineState('readyToContinue')
@@ -873,6 +1000,8 @@ export default function Home() {
         return 'Speak naturally. Tap the glowing ring whenever you want me to stop listening.'
       case 'thinking':
         return 'Working through what you just said—this only takes a moment.'
+      case 'speakingPrep':
+        return 'Warming up my voice so I can respond clearly.'
       case 'playing':
         return 'Sharing what I heard and how we can keep going.'
       case 'readyToContinue':
@@ -894,7 +1023,9 @@ export default function Home() {
         ? 'Listening. Tap to finish your turn.'
         : machineState === 'calibrating'
           ? 'Calibrating the microphone baseline'
-          : 'Session status indicator'
+          : machineState === 'speakingPrep'
+            ? 'Preparing to speak'
+            : 'Session status indicator'
   const statusMessage = (() => {
     if (!hasStarted) {
       return 'Let me welcome you first—I’ll begin automatically.'
@@ -912,6 +1043,8 @@ export default function Home() {
         return 'Listening now. Take your time and tap the ring when you’re finished.'
       case 'thinking':
         return 'Processing what you shared…'
+      case 'speakingPrep':
+        return 'Getting ready to speak with you.'
       case 'playing':
         return 'Sharing what I heard back to you.'
       case 'readyToContinue':
