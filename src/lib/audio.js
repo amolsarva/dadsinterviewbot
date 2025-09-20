@@ -25,18 +25,30 @@ export async function calibrateRMS(seconds = 2.0) {
   an.fftSize = 2048
   output.connect(an)
   const data = new Float32Array(an.fftSize)
-  const vals = []
+  const samples = []
   const end = performance.now() + seconds * 1000
   while (performance.now() < end) {
     an.getFloatTimeDomainData(data)
-    vals.push(rms(data))
+    samples.push(rms(data))
     await new Promise((r) => setTimeout(r, 50))
   }
-  vals.sort((a, b) => a - b)
-  const med = vals[Math.floor(vals.length / 2)] || 0.01
   stream.getTracks().forEach((t) => t.stop())
   await ctx.close()
-  return med
+
+  if (!samples.length) return 0.01
+
+  samples.sort((a, b) => a - b)
+  const keepCount = Math.max(1, Math.floor(samples.length * 0.7))
+  const trimmed = samples.slice(0, keepCount)
+  const median = trimmed[Math.floor(trimmed.length / 2)] ?? 0.01
+  const mean =
+    trimmed.reduce((sum, value) => (Number.isFinite(value) ? sum + value : sum), 0) /
+    trimmed.length
+  const candidate = Number.isFinite(median) ? median : Number.isFinite(mean) ? mean : 0.01
+  const MIN_BASELINE = 0.0001
+  const MAX_BASELINE = 0.05
+  const baseline = Math.min(Math.max(candidate, MIN_BASELINE), MAX_BASELINE)
+  return baseline
 }
 
 export async function recordUntilSilence(options) {

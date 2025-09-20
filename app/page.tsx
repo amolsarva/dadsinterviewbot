@@ -8,6 +8,18 @@ import { detectCompletionIntent } from '@/lib/intents'
 
 const SESSION_STORAGE_KEY = 'sessionId'
 const HARD_TURN_LIMIT_MS = 90_000
+const DEFAULT_BASELINE = 0.004
+const MIN_BASELINE = 0.0004
+const MAX_BASELINE = 0.05
+const BASELINE_SPIKE_FACTOR = 2.8
+
+const clampBaseline = (value: number | null | undefined) => {
+  if (!Number.isFinite(value ?? NaN) || !value) {
+    return DEFAULT_BASELINE
+  }
+  const clamped = Math.min(Math.max(value, MIN_BASELINE), MAX_BASELINE)
+  return clamped
+}
 
 type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
 
@@ -99,7 +111,7 @@ const INTRO_FALLBACK =
   'Welcome back. I remember everything you have trusted me with. Tell me one new detail you would like to explore now.'
 
 const STATE_VISUALS: Record<
-  'idle' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess',
+  'idle' | 'calibrating' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess',
   { icon: string; badge: string; title: string; description: string; gradient: string }
 > = {
   idle: {
@@ -108,6 +120,13 @@ const STATE_VISUALS: Record<
     title: 'Ready to begin',
     description: 'I’ll start the conversation for you—just settle in and listen.',
     gradient: 'from-sky-400/40 via-blue-500/30 to-indigo-500/40',
+  },
+  calibrating: {
+    icon: '🎚️',
+    badge: 'Preparing',
+    title: 'Getting ready to listen',
+    description: 'Give me a moment to measure the room noise before I start recording.',
+    gradient: 'from-cyan-400/40 via-sky-400/40 to-indigo-400/40',
   },
   recording: {
     icon: '🎤',
@@ -167,6 +186,7 @@ export default function Home() {
   const recorderRef = useRef<SessionRecorder | null>(null)
   const sessionAudioUrlRef = useRef<string | null>(null)
   const sessionAudioDurationRef = useRef<number>(0)
+  const baselineRef = useRef<number | null>(null)
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
@@ -176,7 +196,16 @@ export default function Home() {
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
   const updateMachineState = useCallback(
-    (next: 'idle' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess') => {
+    (
+      next:
+        | 'idle'
+        | 'calibrating'
+        | 'recording'
+        | 'thinking'
+        | 'playing'
+        | 'readyToContinue'
+        | 'doneSuccess',
+    ) => {
       useInterviewMachine.setState((prev) => (prev.state === next ? prev : { ...prev, state: next }))
     },
     [],
@@ -499,16 +528,43 @@ export default function Home() {
     inTurnRef.current = true
     manualStopRef.current = false
     setManualStopRequested(false)
-    updateMachineState('recording')
+    updateMachineState('calibrating')
+    pushLog('Calibrating microphone baseline')
     try {
-      pushLog('Recording started')
       let b64 = ''
       let recDuration = 0
+      let baselineToUse = baselineRef.current ?? DEFAULT_BASELINE
+      const calibrateDuration = baselineRef.current ? 0.6 : 0.9
       try {
-        const baseline = await calibrateRMS(1.0)
+        const measured = clampBaseline(await calibrateRMS(calibrateDuration))
+        const previous = baselineRef.current
+        if (previous && measured > previous * BASELINE_SPIKE_FACTOR) {
+          pushLog(
+            `Baseline spike detected (${measured.toFixed(4)}). Reusing previous value ${previous.toFixed(4)}.`,
+          )
+          baselineToUse = previous
+        } else {
+          baselineToUse = measured
+          baselineRef.current = measured
+          pushLog(`Baseline ready: ${measured.toFixed(4)}`)
+        }
+      } catch (err) {
+        const previous = baselineRef.current
+        if (previous) {
+          baselineToUse = previous
+          pushLog(`Baseline calibration failed. Reusing previous value ${previous.toFixed(4)}.`)
+        } else {
+          baselineToUse = DEFAULT_BASELINE
+          pushLog(`Baseline calibration failed. Using default value ${baselineToUse.toFixed(4)}.`)
+        }
+      }
+
+      updateMachineState('recording')
+      pushLog(`Recording started (baseline ${baselineToUse.toFixed(4)})`)
+      try {
         const hardStopAt = Date.now() + HARD_TURN_LIMIT_MS
         const rec = await recordUntilSilence({
-          baseline,
+          baseline: baselineToUse,
           minDurationMs: 800,
           maxDurationMs: HARD_TURN_LIMIT_MS,
           silenceMs: 900,
@@ -527,6 +583,9 @@ export default function Home() {
         const silent = new Blob([new Uint8Array(1)], { type: 'audio/webm' })
         b64 = await blobToBase64(silent)
         recDuration = 500
+      }
+      if (recDuration < 100) {
+        pushLog(`Warning: captured very short audio (${Math.round(recDuration)}ms).`)
       }
       manualStopRef.current = false
       setManualStopRequested(false)
@@ -780,6 +839,8 @@ export default function Home() {
       return 'I’ll start with a welcome and remember every word you share.'
     }
     switch (machineState) {
+      case 'calibrating':
+        return 'Measuring the room noise so I can tell when you start speaking.'
       case 'recording':
         return 'Speak naturally. Tap the glowing ring whenever you want me to stop listening.'
       case 'thinking':
@@ -803,7 +864,9 @@ export default function Home() {
       ? 'Stopping the recording'
       : machineState === 'recording'
         ? 'Listening. Tap to finish your turn.'
-        : 'Session status indicator'
+        : machineState === 'calibrating'
+          ? 'Calibrating the microphone baseline'
+          : 'Session status indicator'
   const statusMessage = (() => {
     if (!hasStarted) {
       return 'Let me welcome you first—I’ll begin automatically.'
@@ -815,6 +878,8 @@ export default function Home() {
       return 'Stopping the recording now.'
     }
     switch (machineState) {
+      case 'calibrating':
+        return 'Measuring the room noise before we begin.'
       case 'recording':
         return 'Listening now. Take your time and tap the ring when you’re finished.'
       case 'thinking':

@@ -1,7 +1,7 @@
 'use client'
 import { create } from 'zustand'
 
-type State = 'idle' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess'
+type State = 'idle' | 'calibrating' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess'
 
 type Store = {
   state: State
@@ -18,6 +18,7 @@ type Store = {
 function computeLabel(state: State): string {
   switch(state){
     case 'idle': return 'Start'
+    case 'calibrating': return 'Calibrating'
     case 'recording': return 'Done'
     case 'thinking': return 'Cancel'
     case 'playing': return 'Continue'
@@ -42,6 +43,11 @@ export const useInterviewMachine = create<Store>((set, get) => ({
     if (state === 'idle') {
       set({ state: 'recording', label: computeLabel('recording') })
       push('Recording started')
+      return
+    }
+    if (state === 'calibrating') {
+      push('Skipping calibration → recording')
+      set({ state: 'recording', label: computeLabel('recording') })
       return
     }
     if (state === 'recording') {
