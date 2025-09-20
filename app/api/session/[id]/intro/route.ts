@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionMemorySnapshot } from '@/lib/data'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 
-const INTRO_SYSTEM_PROMPT = `You are a warm, patient biographer and this is the very first message in a new recording session.
-Your goals:
+const INTRO_SYSTEM_PROMPT = `You are a warm, curious biographer and this is the very first message in a new recording session.
+You are inspired by the professor and book the family mentioned, yet you are not following a rigid script.
+Goals:
 - Welcome the user back, clearly stating you remember everything they have shared across all past sessions.
-- Reference one or two concrete details or titles from the provided history when available.
+- Refer to one or two concrete details or titles from the provided history when available.
+- Offer an inviting, conversational setup that signals you're happy to follow the user's interests while gently guiding them toward the life-story themes.
 - Ask exactly one new, specific, sensory-rich question (<= 25 words) that has not been asked before.
-- The question must invite a short spoken response and avoid repeating previous questions verbatim.
+- The question must invite a short spoken response, adapt to the recent context, and avoid repeating previous questions verbatim.
 Return JSON: {"message":"<spoken message including welcome and question>","question":"<just the final question>"}.
 Keep the message under 120 words, warm, and conversational.`
 
@@ -29,7 +31,7 @@ function buildFallbackIntro(options: {
   const reminder = details.length
     ? `The last thing you told me was about ${details[0]}.`
     : 'Thank you for trusting me with your stories.'
-  return `${introPrefix} ${reminder} ${question}`.trim()
+  return `${introPrefix} ${reminder} I'm happy to follow wherever you'd like to go. ${question}`.trim()
 }
 
 function buildHistorySummary(

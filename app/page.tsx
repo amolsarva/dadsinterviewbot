@@ -7,6 +7,9 @@ import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 import { detectCompletionIntent } from '@/lib/intents'
 
 const SESSION_STORAGE_KEY = 'sessionId'
+const EMAIL_STORAGE_KEY = 'defaultEmail'
+const EMAIL_ENABLED_KEY = 'sendSummaryEmails'
+const DEFAULT_NOTIFY_EMAIL = 'a@sarva.co'
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
 const MIN_BASELINE = 0.0004
@@ -60,6 +63,20 @@ const persistSessionId = (id: string) => {
   } catch {}
 }
 
+const readEmailPreferences = () => {
+  if (typeof window === 'undefined') {
+    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+  }
+  try {
+    const email = window.localStorage.getItem(EMAIL_STORAGE_KEY) || DEFAULT_NOTIFY_EMAIL
+    const rawEnabled = window.localStorage.getItem(EMAIL_ENABLED_KEY)
+    const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
+    return { email, emailsEnabled }
+  } catch {
+    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+  }
+}
+
 const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
   if (typeof window === 'undefined') {
     const fallbackId = createLocalSessionId()
@@ -67,7 +84,12 @@ const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
   }
 
   try {
-    const res = await fetch('/api/session/start', { method: 'POST' })
+    const { email, emailsEnabled } = readEmailPreferences()
+    const res = await fetch('/api/session/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, emailsEnabled }),
+    })
     const data = await res.json().catch(() => ({}))
     const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
     const source: NetworkSessionResult['source'] =
@@ -408,10 +430,16 @@ export default function Home() {
       sessionAudioUrlRef.current = sessionAudioUrl
       sessionAudioDurationRef.current = sessionAudioDurationMs
 
+      const { email: preferredEmail, emailsEnabled } = readEmailPreferences()
+      const trimmedEmail = preferredEmail && preferredEmail.trim().length ? preferredEmail.trim() : undefined
+      const emailForSession = emailsEnabled ? trimmedEmail : undefined
+
       const payload = {
         sessionId,
         sessionAudioUrl: sessionAudioUrl || undefined,
         sessionAudioDurationMs: sessionAudioDurationMs || undefined,
+        email: emailForSession,
+        emailsEnabled,
       }
 
       async function inspect(label: string, response: Response | null, options?: { optional?: boolean }) {

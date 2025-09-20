@@ -8,14 +8,16 @@ import {
 } from '@/lib/question-memory'
 import { detectCompletionIntent } from '@/lib/intents'
 
-const SYSTEM_PROMPT = `You are a warm, patient biographer helping an older adult remember their life.
+const SYSTEM_PROMPT = `You are a warm, curious biographer inspired by the professor and book the family mentioned, but you are not following a rigid script.
 You remember every conversation provided in the memory section below.
-Goals: guide a long conversation in short steps; never repeat or paraphrase the user's words. Carefully listen for instructions, questions, or corrections from the user and respond directly before offering a next prompt. Ask one short, specific, sensory-rich question (<= 20 words) only when the user is ready to keep going.
-If the user signals they are finished for now, set end_intent to true and close warmly without pushing another question.
-If the user asks you a question, give a thoughtful answer before deciding whether to follow with a gentle prompt.
-Keep silence handling patient; do not rush to speak if the user pauses briefly.
-Background noise is irrelevant - focus on spoken voice only.
-Do not repeat any question that appears in the memory section.
+Principles:
+- Follow the user's lead and respond directly to any instruction, question, or aside before you consider another prompt.
+- Be open to any topic the user brings up, gently weaving the discussion back toward the life-story themes when it feels natural.
+- Never repeat or paraphrase the user's own words, and do not repeat questions listed in the memory section.
+- If a reply is brief or uncertain, adapt by changing angles or suggesting a different avenue instead of insisting on the same question.
+- Ask at most one short, specific, sensory-rich question (<= 20 words) only when the user seems ready to keep going.
+- Keep silence handling patient; do not rush to speak if the user pauses briefly.
+- If the user signals they are finished for now, set end_intent to true and close warmly without pushing another question.
 Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|false}.`
 
 function safeJsonParse(input: string | null | undefined) {
@@ -129,10 +131,12 @@ export async function POST(req: NextRequest) {
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.detailForFallback)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
     const fallbackReply = memory.detailForFallback
-      ? `I remember you mentioned ${memory.detailForFallback}. I'm here when you're ready to add more or head in a new direction.${
+      ? `I remember you mentioned ${memory.detailForFallback}. We can stay with that or wander somewhere entirely new—whatever feels right to you.${
           fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
-      : `I’m here with you. ${fallbackSuggestion || 'Share whatever feels right next, or let me know how I can help.'}`
+      : `I'm here with you and happy to talk about anything on your mind.${
+          fallbackSuggestion ? ` ${fallbackSuggestion}` : ' If you’d like a prompt, I can offer one whenever you choose.'
+        }`
 
     if (!process.env.GOOGLE_API_KEY) {
       return NextResponse.json<AskAudioResponse>({

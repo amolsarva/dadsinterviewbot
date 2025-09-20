@@ -1,7 +1,16 @@
 import { Resend } from 'resend'
 
 export function areSummaryEmailsEnabled() {
-  return process.env.ENABLE_SESSION_EMAILS === 'true'
+  const raw = process.env.ENABLE_SESSION_EMAILS
+  if (raw === undefined) return true
+  const normalized = raw.trim().toLowerCase()
+  if (['false', '0', 'off', 'disable', 'disabled'].includes(normalized)) {
+    return false
+  }
+  if (['true', '1', 'on', 'enable', 'enabled'].includes(normalized)) {
+    return true
+  }
+  return true
 }
 
 export async function sendSummaryEmail(to: string, subject: string, body: string) {
@@ -9,6 +18,11 @@ export async function sendSummaryEmail(to: string, subject: string, body: string
 
   if (!areSummaryEmailsEnabled()) {
     console.info('Session summary email delivery disabled via ENABLE_SESSION_EMAILS flag.')
+    return { skipped: true }
+  }
+
+  if (!to || !/.+@.+/.test(to)) {
+    console.info('Session summary email skipped because no valid recipient was provided.')
     return { skipped: true }
   }
 

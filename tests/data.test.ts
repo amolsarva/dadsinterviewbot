@@ -79,6 +79,22 @@ describe('finalizeSession', () => {
     expect(foxes.some((fox) => fox.id === 'theory-4-email-status-error')).toBe(true)
   })
 
+  it('skips summary email when the session has no recipient', async () => {
+    const data = await import('../lib/data')
+    const session = await data.createSession({ email_to: '' })
+    await data.appendTurn(session.id, { role: 'assistant', text: 'hello there' })
+
+    const result = await data.finalizeSession(session.id, { clientDurationMs: 10 })
+    if (!('session' in result)) {
+      throw new Error('Expected session result')
+    }
+
+    expect(sendEmailMock).not.toHaveBeenCalled()
+    expect(result.emailed).toBe(false)
+    expect(result.emailStatus).toEqual({ skipped: true })
+    expect(result.session.status).toBe('completed')
+  })
+
   it('persists session audio artifacts when provided', async () => {
     const data = await import('../lib/data')
     sendEmailMock.mockResolvedValue({ skipped: true })

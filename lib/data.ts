@@ -238,18 +238,25 @@ export async function finalizeSession(
     inlineAwareLabel('Transcript (json)', s.artifacts.transcript_json),
     inlineAwareLabel('Session audio', s.artifacts.session_audio),
   ].join('\n')
-  let emailStatus: Awaited<ReturnType<typeof sendSummaryEmail>> | { ok: false; provider: 'unknown'; error: string }
-  try {
-    emailStatus = await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText)
-  } catch (e: any) {
-    emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
-    flagFox({
-      id: 'theory-4-email-send-failed',
-      theory: 4,
-      level: 'error',
-      message: 'Failed to send session summary email from finalizeSession.',
-      details: { sessionId: s.id, error: e?.message || 'send_failed' },
-    })
+  let emailStatus:
+    | Awaited<ReturnType<typeof sendSummaryEmail>>
+    | { ok: false; provider: 'unknown'; error: string }
+    | { skipped: true }
+  if (!s.email_to || !/.+@.+/.test(s.email_to)) {
+    emailStatus = { skipped: true }
+  } else {
+    try {
+      emailStatus = await sendSummaryEmail(s.email_to, `Interview session – ${date}`, bodyText)
+    } catch (e: any) {
+      emailStatus = { ok: false, provider: 'unknown', error: e?.message || 'send_failed' }
+      flagFox({
+        id: 'theory-4-email-send-failed',
+        theory: 4,
+        level: 'error',
+        message: 'Failed to send session summary email from finalizeSession.',
+        details: { sessionId: s.id, error: e?.message || 'send_failed' },
+      })
+    }
   }
 
   if ('ok' in emailStatus && emailStatus.ok) {
