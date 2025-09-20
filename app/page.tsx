@@ -6,6 +6,7 @@ import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 
 const SESSION_STORAGE_KEY = 'sessionId'
+const HARD_TURN_LIMIT_MS = 90_000
 
 type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
 
@@ -104,14 +105,14 @@ const STATE_VISUALS: Record<
     icon: '✨',
     badge: 'Ready',
     title: 'Ready to begin',
-    description: 'I’ll start the conversation and listen automatically. That glowing circle is all you need.',
+    description: 'I’ll start the conversation for you—just settle in and listen.',
     gradient: 'from-sky-400/40 via-blue-500/30 to-indigo-500/40',
   },
   recording: {
     icon: '🎤',
     badge: 'Listening',
     title: 'Listening',
-    description: 'I am capturing every detail you say. Speak naturally and take your time.',
+    description: 'I’m capturing every detail you say. Speak naturally and tap the ring when you’d like me to stop listening.',
     gradient: 'from-emerald-400/40 via-lime-300/40 to-emerald-500/40',
   },
   thinking: {
@@ -125,14 +126,14 @@ const STATE_VISUALS: Record<
     icon: '💬',
     badge: 'Speaking',
     title: 'Speaking',
-    description: 'Here is what I heard and how I would respond to keep you going.',
+    description: 'Sharing what I heard and how we can keep going.',
     gradient: 'from-amber-400/40 via-orange-500/40 to-amber-600/40',
   },
   readyToContinue: {
     icon: '✨',
     badge: 'Ready',
     title: 'Ready for more',
-    description: 'I’m ready for whatever you want to share next—just start speaking.',
+    description: 'Just start speaking whenever you’re ready for the next part.',
     gradient: 'from-sky-400/40 via-cyan-400/40 to-blue-500/40',
   },
   doneSuccess: {
@@ -158,9 +159,10 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turn, setTurn] = useState<number>(0)
   const [hasStarted, setHasStarted] = useState(false)
-  const [disabledNext, setDisabledNext] = useState(false)
   const [finishRequested, setFinishRequested] = useState(false)
+  const [manualStopRequested, setManualStopRequested] = useState(false)
   const inTurnRef = useRef(false)
+  const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
   const sessionAudioUrlRef = useRef<string | null>(null)
   const sessionAudioDurationRef = useRef<number>(0)
@@ -171,6 +173,13 @@ export default function Home() {
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
+
+  const updateMachineState = useCallback(
+    (next: 'idle' | 'recording' | 'thinking' | 'playing' | 'readyToContinue' | 'doneSuccess') => {
+      useInterviewMachine.setState((prev) => (prev.state === next ? prev : { ...prev, state: next }))
+    },
+    [],
+  )
 
   useEffect(() => {
     finishRequestedRef.current = finishRequested
@@ -323,7 +332,9 @@ export default function Home() {
 
   const finalizeNow = useCallback(async () => {
     if (!sessionId) return
-    setDisabledNext(true)
+    setManualStopRequested(false)
+    manualStopRef.current = false
+    updateMachineState('thinking')
     try {
       let sessionAudioUrl = sessionAudioUrlRef.current
       let sessionAudioDurationMs = sessionAudioDurationRef.current
@@ -461,13 +472,21 @@ export default function Home() {
       toDone()
     } catch {
       pushLog('Finalize failed')
+      updateMachineState('readyToContinue')
     } finally {
       conversationRef.current = []
       finishRequestedRef.current = false
       setFinishRequested(false)
-      setDisabledNext(false)
     }
-  }, [pushLog, sessionId, toDone])
+  }, [pushLog, sessionId, toDone, updateMachineState])
+
+  const requestManualStop = useCallback(() => {
+    if (!inTurnRef.current) return
+    if (manualStopRef.current) return
+    manualStopRef.current = true
+    setManualStopRequested(true)
+    pushLog('Manual stop requested')
+  }, [manualStopRef, pushLog])
 
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
@@ -477,19 +496,29 @@ export default function Home() {
       autoAdvanceTimeoutRef.current = null
     }
     inTurnRef.current = true
-    setDisabledNext(true)
+    manualStopRef.current = false
+    setManualStopRequested(false)
+    updateMachineState('recording')
     try {
       pushLog('Recording started')
       let b64 = ''
       let recDuration = 0
       try {
-        const baseline = await calibrateRMS(0.5)
+        const baseline = await calibrateRMS(1.0)
+        const hardStopAt = Date.now() + HARD_TURN_LIMIT_MS
         const rec = await recordUntilSilence({
           baseline,
-          minDurationMs: 600,
-          silenceMs: 800,
-          graceMs: 200,
-          shouldForceStop: () => false,
+          minDurationMs: 800,
+          maxDurationMs: HARD_TURN_LIMIT_MS,
+          silenceMs: 900,
+          graceMs: 300,
+          startRatio: 2.4,
+          stopRatio: 1.5,
+          shouldForceStop: () => {
+            if (finishRequestedRef.current) return true
+            if (manualStopRef.current) return true
+            return Date.now() >= hardStopAt
+          },
         })
         b64 = await blobToBase64(rec.blob)
         recDuration = rec.durationMs || 0
@@ -498,7 +527,10 @@ export default function Home() {
         b64 = await blobToBase64(silent)
         recDuration = 500
       }
+      manualStopRef.current = false
+      setManualStopRequested(false)
       pushLog('Recording stopped → thinking')
+      updateMachineState('thinking')
 
       const askRes = await fetch('/api/ask-audio', {
         method: 'POST',
@@ -522,6 +554,7 @@ export default function Home() {
       }
 
       let assistantPlayback: AssistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
+      updateMachineState('playing')
       try {
         assistantPlayback = await playAssistantResponse(reply)
       } catch {
@@ -576,9 +609,13 @@ export default function Home() {
       inTurnRef.current = false
 
       if (shouldEnd) {
+        if (!finishRequestedRef.current) {
+          finishRequestedRef.current = true
+          setFinishRequested(true)
+        }
         await finalizeNow()
       } else {
-        setDisabledNext(false)
+        updateMachineState('readyToContinue')
         if (!finishRequestedRef.current && typeof window !== 'undefined') {
           if (autoAdvanceTimeoutRef.current !== null) {
             window.clearTimeout(autoAdvanceTimeoutRef.current)
@@ -588,15 +625,26 @@ export default function Home() {
             if (!finishRequestedRef.current) {
               runTurnLoop().catch(() => {})
             }
-          }, 600)
+          }, 700)
         }
       }
     } catch (e) {
       pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
-      setDisabledNext(false)
+      manualStopRef.current = false
+      setManualStopRequested(false)
+      updateMachineState('readyToContinue')
     }
-  }, [MAX_TURNS, finalizeNow, playAssistantResponse, pushLog, sessionId, turn])
+  }, [
+    MAX_TURNS,
+    finalizeNow,
+    manualStopRef,
+    playAssistantResponse,
+    pushLog,
+    sessionId,
+    turn,
+    updateMachineState,
+  ])
 
   const startSession = useCallback(async () => {
     if (hasStarted) return
@@ -604,8 +652,9 @@ export default function Home() {
     conversationRef.current = []
     setFinishRequested(false)
     finishRequestedRef.current = false
+    setManualStopRequested(false)
+    manualStopRef.current = false
     setHasStarted(true)
-    setDisabledNext(true)
     let introMessage = ''
     try {
       try {
@@ -639,6 +688,7 @@ export default function Home() {
       } catch {}
 
       pushLog('Intro message ready → playing')
+      updateMachineState('playing')
       try {
         await playAssistantResponse(introMessage)
       } catch {
@@ -649,7 +699,9 @@ export default function Home() {
         await playWithSpeechSynthesis(INTRO_FALLBACK)
       } catch {}
     } finally {
-      setDisabledNext(false)
+      if (!finishRequestedRef.current) {
+        updateMachineState('readyToContinue')
+      }
       if (!finishRequestedRef.current && typeof window !== 'undefined') {
         if (autoAdvanceTimeoutRef.current !== null) {
           window.clearTimeout(autoAdvanceTimeoutRef.current)
@@ -662,7 +714,17 @@ export default function Home() {
         }, 700)
       }
     }
-  }, [ensureSessionRecorder, hasStarted, playAssistantResponse, playWithSpeechSynthesis, pushLog, runTurnLoop, sessionId])
+  }, [
+    ensureSessionRecorder,
+    hasStarted,
+    manualStopRef,
+    playAssistantResponse,
+    playWithSpeechSynthesis,
+    pushLog,
+    runTurnLoop,
+    sessionId,
+    updateMachineState,
+  ])
 
   const requestFinish = useCallback(async () => {
     if (finishRequestedRef.current) return
@@ -670,10 +732,11 @@ export default function Home() {
     pushLog('Finish requested by user')
     if (inTurnRef.current) {
       pushLog('Finishing after the current turn completes')
+      requestManualStop()
       return
     }
     await finalizeNow()
-  }, [finalizeNow, pushLog])
+  }, [finalizeNow, pushLog, requestManualStop])
 
   useEffect(() => {
     if (!sessionId) return
@@ -681,84 +744,121 @@ export default function Home() {
     startSession().catch(() => {})
   }, [hasStarted, sessionId, startSession])
 
-  const onNext = useCallback(async () => {
-    if (disabledNext) return
-    if (!hasStarted) {
-      await startSession()
-      return
+  const handleHeroPress = useCallback(() => {
+    if (machineState === 'recording') {
+      requestManualStop()
     }
-    if (!inTurnRef.current) {
-      await runTurnLoop()
-    }
-  }, [disabledNext, hasStarted, runTurnLoop, startSession])
+  }, [machineState, requestManualStop])
 
   const visual = STATE_VISUALS[machineState] ?? STATE_VISUALS.idle
   const isInitialState = !hasStarted && machineState === 'idle'
-  const heroBadge = finishRequested ? 'Finishing' : visual.badge
-  const heroIcon = finishRequested ? '📁' : visual.icon
-  const heroTitle = finishRequested ? 'Wrapping up' : isInitialState ? 'Ready to begin' : visual.title
-  const heroDescription = finishRequested
-    ? 'Hold tight while I save your conversation and prepare your history.'
-    : isInitialState
-      ? 'I’ll start with a welcome and remember every word you share.'
-      : disabledNext && machineState === 'thinking'
-        ? 'Working through what you just said—this only takes a moment.'
-        : disabledNext
-          ? 'I’m listening closely. Take your time and keep talking whenever you’re ready.'
-          : visual.description
-  const heroGradient = finishRequested ? 'from-amber-400/40 via-amber-500/40 to-orange-500/40' : visual.gradient
-  const statusMessage = !hasStarted
-    ? 'Preparing to begin—I’ll speak first.'
-    : finishRequested
-      ? 'Wrapping up your session.'
-      : machineState === 'doneSuccess'
-        ? 'Session saved. Tap Start Again to record another memory.'
-        : disabledNext
-          ? machineState === 'thinking'
-            ? 'Processing your story...'
-            : 'Listening for you now. Take your time.'
-          : 'I’m ready when you are—just start speaking.'
+  const heroBadge = finishRequested ? 'Finishing' : manualStopRequested ? 'Stopping' : visual.badge
+  const heroIcon = finishRequested ? '📁' : manualStopRequested ? '⏹️' : visual.icon
+  const heroTitle = finishRequested
+    ? 'Wrapping up'
+    : manualStopRequested
+      ? 'Stopping the recording'
+      : isInitialState
+        ? 'Ready to begin'
+        : visual.title
+  const heroDescription = (() => {
+    if (finishRequested) {
+      return 'Hold tight while I save your conversation and prepare your history.'
+    }
+    if (manualStopRequested) {
+      return 'Closing this turn—give me a moment to capture what you said.'
+    }
+    if (isInitialState) {
+      return 'I’ll start with a welcome and remember every word you share.'
+    }
+    switch (machineState) {
+      case 'recording':
+        return 'Speak naturally. Tap the glowing ring whenever you want me to stop listening.'
+      case 'thinking':
+        return 'Working through what you just said—this only takes a moment.'
+      case 'playing':
+        return 'Sharing what I heard and how we can keep going.'
+      case 'readyToContinue':
+        return 'I’m ready whenever you are—just start speaking.'
+      default:
+        return visual.description
+    }
+  })()
+  const heroGradient = finishRequested
+    ? 'from-amber-400/40 via-amber-500/40 to-orange-500/40'
+    : manualStopRequested
+      ? 'from-rose-400/40 via-rose-500/40 to-red-500/40'
+      : visual.gradient
+  const heroAriaLabel = finishRequested
+    ? 'Wrapping up the session'
+    : manualStopRequested
+      ? 'Stopping the recording'
+      : machineState === 'recording'
+        ? 'Listening. Tap to finish your turn.'
+        : 'Session status indicator'
+  const statusMessage = (() => {
+    if (!hasStarted) {
+      return 'Let me welcome you first—I’ll begin automatically.'
+    }
+    if (finishRequested) {
+      return 'Wrapping up your session.'
+    }
+    if (manualStopRequested) {
+      return 'Stopping the recording now.'
+    }
+    switch (machineState) {
+      case 'recording':
+        return 'Listening now. Take your time and tap the ring when you’re finished.'
+      case 'thinking':
+        return 'Processing what you shared…'
+      case 'playing':
+        return 'Sharing what I heard back to you.'
+      case 'readyToContinue':
+        return 'Ready when you are—just start speaking.'
+      case 'doneSuccess':
+        return 'Session saved. Tap Start Again to record another memory.'
+      default:
+        return 'Preparing to begin—I’ll speak first.'
+    }
+  })()
 
   return (
     <main className="mt-6 flex justify-center px-4 pb-16">
       <div className="flex w-full max-w-4xl flex-col items-center gap-12">
         <div className="flex w-full flex-col items-center gap-8">
           <div className="relative w-full max-w-[min(90vw,460px)]">
-            <div className="relative aspect-square w-full">
-              <div className="absolute inset-0 rounded-full bg-black/20 blur-3xl" aria-hidden="true" />
-              <div
+            <button
+              type="button"
+              onClick={handleHeroPress}
+              className="group relative aspect-square w-full overflow-hidden rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white/60"
+              aria-label={heroAriaLabel}
+            >
+              <span className="absolute inset-0 rounded-full bg-black/20 blur-3xl" aria-hidden="true" />
+              <span
                 className={`absolute inset-[8%] rounded-full bg-gradient-to-br ${heroGradient} animate-soft-pulse shadow-[0_0_80px_rgba(255,255,255,0.18)]`}
                 aria-hidden="true"
               />
-              <div className="absolute inset-[12%] rounded-full border border-white/15 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
-              <div className="absolute inset-[18%] rounded-full border border-white/10 animate-slow-ripple" aria-hidden="true" />
-              <div
+              <span className="absolute inset-[12%] rounded-full border border-white/15 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+              <span className="absolute inset-[18%] rounded-full border border-white/10 animate-slow-ripple" aria-hidden="true" />
+              <span
                 className="absolute inset-[18%] rounded-full border border-white/5 animate-slow-ripple"
                 style={{ animationDelay: '1.2s' }}
                 aria-hidden="true"
               />
-              <div className="absolute inset-[18%] flex flex-col items-center justify-center px-8 text-center">
-                <div className="text-5xl md:text-6xl" aria-hidden="true">
+              <span className="absolute inset-[18%] flex flex-col items-center justify-center px-8 text-center">
+                <span className="text-5xl md:text-6xl" aria-hidden="true">
                   {heroIcon}
-                </div>
-                <div className="mt-4 text-[11px] uppercase tracking-[0.45em] text-white/50">{heroBadge}</div>
-                <div className="mt-3 text-3xl font-semibold md:text-4xl">{heroTitle}</div>
-                <p className="mt-4 text-sm text-white/70 md:text-base">{heroDescription}</p>
-              </div>
-            </div>
+                </span>
+                <span className="mt-4 text-[11px] uppercase tracking-[0.45em] text-white/50">{heroBadge}</span>
+                <span className="mt-3 text-3xl font-semibold md:text-4xl">{heroTitle}</span>
+                <span className="mt-4 text-sm text-white/70 md:text-base">{heroDescription}</span>
+              </span>
+            </button>
           </div>
 
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col items-center gap-4 text-center">
             <div className="text-sm text-white/70">{statusMessage}</div>
-            {machineState !== 'doneSuccess' ? (
-              <button
-                onClick={onNext}
-                disabled={disabledNext}
-                className="rounded-full bg-white px-10 py-3 text-lg font-semibold text-black shadow-xl transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60 disabled:cursor-not-allowed disabled:bg-white/70 disabled:text-black/60"
-              >
-                Next
-              </button>
-            ) : (
+            {machineState === 'doneSuccess' ? (
               <button
                 onClick={() => {
                   try {
@@ -772,12 +872,15 @@ export default function Home() {
                   setTurn(0)
                   setFinishRequested(false)
                   finishRequestedRef.current = false
+                  manualStopRef.current = false
+                  setManualStopRequested(false)
+                  updateMachineState('idle')
                 }}
                 className="rounded-full bg-white px-8 py-3 text-lg font-semibold text-black shadow-lg transition hover:bg-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
               >
                 Start Again
               </button>
-            )}
+            ) : null}
             {machineState !== 'doneSuccess' && (
               <button
                 onClick={requestFinish}
