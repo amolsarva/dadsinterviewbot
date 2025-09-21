@@ -727,6 +727,7 @@ export default function Home() {
 
       const completionIntent = detectCompletionIntent(transcript)
       const completionDetected = completionIntent.shouldStop && completionIntent.confidence !== 'low'
+      const providerSuggestedStop = endIntent === true
       if (completionIntent.shouldStop) {
         const match = completionIntent.matchedPhrases.join(', ')
         const suffix = match.length ? `: ${match}` : ''
@@ -801,8 +802,12 @@ export default function Home() {
 
       pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
+      if (providerSuggestedStop && !completionDetected && !finishRequestedRef.current) {
+        pushLog('Provider end intent ignored—no user stop detected')
+      }
+
       const shouldEnd =
-        finishRequestedRef.current || endIntent || reachedMax || completionDetected
+        finishRequestedRef.current || reachedMax || completionDetected
       inTurnRef.current = false
 
       if (shouldEnd) {
