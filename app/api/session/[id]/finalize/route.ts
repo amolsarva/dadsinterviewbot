@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { finalizeSession } from '@/lib/data'
+import { normalizeUserId } from '@/lib/users'
 import { z } from 'zod'
 
 const schema = z.object({
@@ -29,7 +30,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const { clientDurationMs, sessionAudioUrl } = parsed.data
 
   try {
-    const result = await finalizeSession(params.id, { clientDurationMs, sessionAudioUrl })
+    const userId = normalizeUserId(req.nextUrl.searchParams.get('user'))
+    const result = await finalizeSession(userId, params.id, { clientDurationMs, sessionAudioUrl })
     return NextResponse.json(result)
   } catch (e: any) {
     const message = typeof e?.message === 'string' ? e.message : ''

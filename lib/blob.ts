@@ -1,4 +1,10 @@
-import { put, list as vercelList, type ListBlobResult, type ListCommandOptions } from '@vercel/blob'
+import {
+  put,
+  list as vercelList,
+  del as vercelDel,
+  type ListBlobResult,
+  type ListCommandOptions,
+} from '@vercel/blob'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -54,6 +60,28 @@ export function getFallbackBlob(path: string): (MemoryBlobRecord & { pathname: s
 
 export function clearFallbackBlobs() {
   memoryStore.clear()
+}
+
+function deleteFallbackByPrefix(prefix: string) {
+  let removed = 0
+  for (const key of Array.from(memoryStore.keys())) {
+    if (!prefix || key.startsWith(prefix)) {
+      memoryStore.delete(key)
+      removed += 1
+    }
+  }
+  return removed
+}
+
+function deleteFallbackByUrl(url: string) {
+  for (const key of Array.from(memoryStore.keys())) {
+    const record = memoryStore.get(key)
+    if (record && record.dataUrl === url) {
+      memoryStore.delete(key)
+      return true
+    }
+  }
+  return false
 }
 
 export async function putBlobFromBuffer(
@@ -125,6 +153,85 @@ export async function listBlobs(options: ListCommandOptions | undefined = {}): P
 
   const listOptions: ListCommandOptions = { ...(options || {}), token }
   return vercelList(listOptions)
+}
+
+export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
+  const token = getBlobToken()
+
+  if (!token) {
+    return deleteFallbackByPrefix(prefix)
+  }
+
+  let cursor: string | undefined
+  let removed = 0
+
+  do {
+    const { blobs, hasMore, cursor: nextCursor } = await vercelList({
+      prefix,
+      cursor,
+      limit: 100,
+      token,
+    })
+
+    const urls = blobs
+      .map((blob) => blob.url || blob.downloadUrl)
+      .filter((url): url is string => typeof url === 'string' && url.length > 0)
+
+    if (urls.length) {
+      await vercelDel(urls, { token })
+      removed += urls.length
+    }
+
+    cursor = hasMore ? nextCursor : undefined
+  } while (cursor)
+
+  return removed
+}
+
+export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
+  const token = getBlobToken()
+
+  if (!token) {
+    if (memoryStore.delete(pathOrUrl)) {
+      return true
+    }
+    if (pathOrUrl.startsWith('data:')) {
+      return deleteFallbackByUrl(pathOrUrl)
+    }
+    return false
+  }
+
+  if (!pathOrUrl) return false
+
+  if (/^https?:/i.test(pathOrUrl) || pathOrUrl.startsWith('data:')) {
+    await vercelDel(pathOrUrl, { token })
+    return true
+  }
+
+  let cursor: string | undefined
+  let deleted = false
+
+  do {
+    const { blobs, hasMore, cursor: nextCursor } = await vercelList({
+      prefix: pathOrUrl,
+      cursor,
+      limit: 50,
+      token,
+    })
+
+    const urls = blobs
+      .map((blob) => blob.url || blob.downloadUrl)
+      .filter((url): url is string => typeof url === 'string' && url.length > 0)
+
+    if (urls.length) {
+      await vercelDel(urls, { token })
+      deleted = true
+    }
+
+    cursor = hasMore ? nextCursor : undefined
+  } while (cursor)
+
+  return deleted
 }
 
 export async function blobHealth() {

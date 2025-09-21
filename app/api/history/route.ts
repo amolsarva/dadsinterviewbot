@@ -1,13 +1,21 @@
-import { NextResponse } from 'next/server'
-import { listSessions } from '@/lib/data'
+import { NextRequest, NextResponse } from 'next/server'
+import { listSessions, clearAllSessions } from '@/lib/data'
 import { fetchStoredSessions } from '@/lib/history'
+import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
+import { normalizeUserId } from '@/lib/users'
 
-export async function GET() {
-  const items = await listSessions()
+export async function GET(req: NextRequest) {
+  const userId = normalizeUserId(req.nextUrl.searchParams.get('user'))
+  const items = await listSessions(userId)
   const rows = items.map(s => ({
     id: s.id,
     created_at: s.created_at,
-    title: s.title || null,
+    title:
+      s.title ||
+      generateSessionTitle(s.turns, {
+        fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+      }) ||
+      null,
     status: s.status,
     total_turns: s.total_turns,
     artifacts: {
@@ -23,13 +31,26 @@ export async function GET() {
     sessionAudioUrl: s.artifacts?.session_audio || null,
   }))
 
-  const { items: stored } = await fetchStoredSessions({ limit: 50 })
+  const { items: stored } = await fetchStoredSessions({ userId, limit: 50 })
   for (const session of stored) {
     if (rows.some(r => r.id === session.sessionId)) continue
+    const summarizableTurns: SummarizableTurn[] = (session.turns || []).flatMap((turn) =>
+      [
+        { role: 'user' as const, text: turn.transcript },
+        turn.assistantReply ? { role: 'assistant' as const, text: turn.assistantReply } : null,
+      ].filter(Boolean) as SummarizableTurn[],
+    )
+
     rows.push({
       id: session.sessionId,
       created_at: session.startedAt || session.endedAt || new Date().toISOString(),
-      title: null,
+      title:
+        generateSessionTitle(summarizableTurns, {
+          fallback: `Session on ${
+            new Date(session.startedAt || session.endedAt || new Date().toISOString()).toLocaleDateString()
+          }`,
+        }) ||
+        null,
       status: 'completed',
       total_turns: session.totalTurns,
       artifacts: {
@@ -61,6 +82,19 @@ export async function GET() {
     const raw = (globalThis as any)?.localStorage?.getItem?.('demoHistory')
     if (raw) demo = JSON.parse(raw)
   } catch {}
-  const demoRows = (demo||[]).map(d => ({ id: d.id, created_at: d.created_at, title: 'Demo session', status:'completed', total_turns: 1, artifacts:{ transcript_txt: null, transcript_json: null } }))
-  return NextResponse.json({ items: [...demoRows, ...rows] })
+  const demoRows = (demo || []).map((d: any) => ({
+    id: d.id,
+    created_at: d.created_at,
+    title: typeof d.title === 'string' && d.title.length ? d.title : null,
+    status: 'completed',
+    total_turns: 1,
+    artifacts: { transcript_txt: null, transcript_json: null },
+  }))
+  return NextResponse.json({ items: [...demoRows, ...rows], user: userId })
+}
+
+export async function DELETE(req: NextRequest) {
+  const userId = normalizeUserId(req.nextUrl.searchParams.get('user'))
+  await clearAllSessions(userId)
+  return NextResponse.json({ ok: true, items: [] })
 }

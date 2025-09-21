@@ -1,8 +1,16 @@
 import 'server-only'
 import { getSession } from '@/lib/data'
+import { normalizeUserId } from '@/lib/users'
 
-export default async function SessionPage({ params }: { params: { id: string } }) {
-  const s = await getSession(params.id)
+type SessionPageProps = {
+  params: { id: string }
+  searchParams?: Record<string, string | string[] | undefined>
+}
+
+export default async function SessionPage({ params, searchParams }: SessionPageProps) {
+  const rawUser = searchParams?.user
+  const userId = Array.isArray(rawUser) ? rawUser[0] : rawUser
+  const s = await getSession(normalizeUserId(userId ?? 'default'), params.id)
   if (!s) return <main>Not found.</main>
   return (
     <main>

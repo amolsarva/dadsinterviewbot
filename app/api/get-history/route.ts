@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { list } from '@vercel/blob'
+import { buildUserScopedPath, normalizeUserId } from '@/lib/users'
 
 type HistoryEntry = {
   sessionId: string
@@ -16,13 +17,17 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url)
     const page = Number(url.searchParams.get('page') || '1')
     const limit = Number(url.searchParams.get('limit') || '10')
+    const userId = normalizeUserId(url.searchParams.get('user'))
 
-    const prefix = 'sessions/'
+    const prefix = buildUserScopedPath(userId, 'sessions/')
     const { blobs } = await list({ prefix, limit: 2000 })
     const sessions = new Map<string, HistoryEntry>()
 
     for (const blob of blobs) {
-      const match = blob.pathname.match(/^sessions\/([^/]+)\/(.+)$/)
+      const relative = blob.pathname.startsWith(prefix)
+        ? blob.pathname.slice(prefix.length)
+        : blob.pathname
+      const match = relative.match(/^([^/]+)\/(.+)$/)
       if (!match) continue
       const id = match[1]
       const name = match[2]
