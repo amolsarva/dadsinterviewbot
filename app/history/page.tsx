@@ -1,5 +1,6 @@
 "use client"
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { normalizeUserId } from '@/lib/users'
 
 type Row = {
@@ -25,7 +26,7 @@ type HistoryPageProps = {
   userId?: string
 }
 
-export default function HistoryPage({ userId = 'default' }: HistoryPageProps) {
+function HistoryPageContent({ userId = 'default' }: HistoryPageProps) {
   const normalizedUserId = useMemo(() => normalizeUserId(userId), [userId])
   const [rows, setRows] = useState<Row[]>([])
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -126,11 +127,14 @@ export default function HistoryPage({ userId = 'default' }: HistoryPageProps) {
       {rows.length === 0 ? (
         <div className="rounded border border-dashed border-white/10 bg-white/5 p-4 text-sm text-white/70">
           <p className="font-medium text-white">No interviews yet.</p>
-          <p className="mt-1">Run a mock session from the home page or execute diagnostics to record a sample conversation. Your completed interviews will appear here once they are saved.</p>
+          <p className="mt-1">
+            Run a mock session from the home page or execute diagnostics to record a sample conversation. Your completed
+            interviews will appear here once they are saved.
+          </p>
         </div>
       ) : (
         <ul className="space-y-3">
-          {rows.map(s => (
+          {rows.map((s) => (
             <li key={s.id} className="bg-white/5 rounded p-3">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -198,7 +202,6 @@ export default function HistoryPage({ userId = 'default' }: HistoryPageProps) {
                       </a>
                     )}
                   </div>
-
                 </div>
               </div>
             </li>
@@ -220,3 +223,11 @@ export default function HistoryPage({ userId = 'default' }: HistoryPageProps) {
     </main>
   )
 }
+
+export default function HistoryPage() {
+  const searchParams = useSearchParams()
+  const userId = searchParams?.get('user') ?? 'default'
+  return <HistoryPageContent userId={userId} />
+}
+
+export { HistoryPageContent }

@@ -1,4 +1,4 @@
-import HistoryPage from '../../../history/page'
+import { HistoryPageContent } from '../../../history/page'
 import { normalizeUserId } from '@/lib/users'
 
 type UserHistoryPageProps = {
@@ -13,5 +13,5 @@ export default function UserHistoryPage({ params }: UserHistoryPageProps) {
   } catch {
     decoded = raw
   }
-  return <HistoryPage userId={normalizeUserId(decoded)} />
+  return <HistoryPageContent userId={normalizeUserId(decoded)} />
 }
