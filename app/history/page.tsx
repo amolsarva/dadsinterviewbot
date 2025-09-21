@@ -1,5 +1,11 @@
 "use client"
 import { useCallback, useEffect, useState } from 'react'
+import {
+  ACTIVE_USER_HANDLE_STORAGE_KEY,
+  DEMO_HISTORY_BASE_KEY,
+  normalizeHandle,
+  scopedStorageKey,
+} from '@/lib/user-scope'
 
 type Row = {
   id: string
@@ -24,14 +30,28 @@ export default function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([])
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
+  const [activeHandle, setActiveHandle] = useState<string | undefined>(undefined)
+
+  const getActiveHandle = useCallback(() => {
+    if (typeof window === 'undefined') return undefined
+    try {
+      const stored = window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+      return normalizeHandle(stored)
+    } catch {
+      return undefined
+    }
+  }, [])
 
   const loadHistory = useCallback(async () => {
     try {
+      const handle = getActiveHandle()
+      setActiveHandle(handle)
       const api = await (await fetch('/api/history')).json()
       const serverRows: Row[] = api?.items || []
       let demoRows: Row[] = []
       try {
-        const raw = localStorage.getItem('demoHistory')
+        const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
+        const raw = localStorage.getItem(key)
         if (raw) {
           const list = JSON.parse(raw) as { id: string; created_at: string; title?: string | null }[]
           demoRows = list.map((d) => ({
@@ -57,7 +77,7 @@ export default function HistoryPage() {
     } catch {
       setRows([])
     }
-  }, [])
+  }, [getActiveHandle])
 
   useEffect(() => {
     loadHistory()
@@ -65,17 +85,19 @@ export default function HistoryPage() {
 
   const removeDemoEntry = useCallback((id: string) => {
     try {
-      const raw = localStorage.getItem('demoHistory')
+      const handle = getActiveHandle()
+      const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
+      const raw = localStorage.getItem(key)
       if (!raw) return
       const list = JSON.parse(raw) as { id: string }[]
       const filtered = list.filter((entry) => entry.id !== id)
       if (filtered.length) {
-        localStorage.setItem('demoHistory', JSON.stringify(filtered))
+        localStorage.setItem(key, JSON.stringify(filtered))
       } else {
-        localStorage.removeItem('demoHistory')
+        localStorage.removeItem(key)
       }
     } catch {}
-  }, [])
+  }, [getActiveHandle])
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -98,7 +120,19 @@ export default function HistoryPage() {
     try {
       const resp = await fetch('/api/history', { method: 'DELETE' })
       if (resp.ok) {
-        localStorage.removeItem('demoHistory')
+        if (typeof window !== 'undefined') {
+          const keysToRemove: string[] = []
+          for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index)
+            if (!key) continue
+            if (key === DEMO_HISTORY_BASE_KEY || key.startsWith(`${DEMO_HISTORY_BASE_KEY}:`)) {
+              keysToRemove.push(key)
+            }
+          }
+          for (const key of keysToRemove) {
+            localStorage.removeItem(key)
+          }
+        }
         setRows([])
       }
     } finally {
@@ -109,6 +143,11 @@ export default function HistoryPage() {
   return (
     <main>
       <h2 className="text-lg font-semibold mb-4">Sessions</h2>
+      {activeHandle && (
+        <p className="-mt-2 mb-4 text-xs text-white/60">
+          Showing sessions saved for <span className="font-semibold text-white">@{activeHandle}</span>
+        </p>
+      )}
       {rows.length === 0 ? (
         <div className="rounded border border-dashed border-white/10 bg-white/5 p-4 text-sm text-white/70">
           <p className="font-medium text-white">No interviews yet.</p>
