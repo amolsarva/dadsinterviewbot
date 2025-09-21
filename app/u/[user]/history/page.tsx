@@ -1,4 +1,4 @@
-import HistoryPage from '../../history/page'
+import HistoryPage from '../../../history/page'
 import { normalizeUserId } from '@/lib/users'
 
 type UserHistoryPageProps = {
