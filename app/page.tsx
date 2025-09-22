@@ -5,11 +5,18 @@ import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-brid
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 import { detectCompletionIntent } from '@/lib/intents'
+import {
+  ACTIVE_USER_HANDLE_STORAGE_KEY,
+  DEFAULT_NOTIFY_EMAIL,
+  DEMO_HISTORY_BASE_KEY,
+  EMAIL_ENABLED_STORAGE_BASE_KEY,
+  EMAIL_STORAGE_BASE_KEY,
+  SESSION_STORAGE_BASE_KEY,
+  deriveUserScopeKey,
+  normalizeHandle,
+  scopedStorageKey,
+} from '@/lib/user-scope'
 
-const SESSION_STORAGE_KEY = 'sessionId'
-const EMAIL_STORAGE_KEY = 'defaultEmail'
-const EMAIL_ENABLED_KEY = 'sendSummaryEmails'
-const DEFAULT_NOTIFY_EMAIL = 'a@sarva.co'
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
 const MIN_BASELINE = 0.0004
@@ -24,6 +31,10 @@ const clampBaseline = (value: number | null | undefined) => {
   return clamped
 }
 
+export default function RootPage() {
+  return <Home key="__default__" />
+}
+
 type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
 
 type SessionInitResult = {
@@ -36,8 +47,22 @@ type NetworkSessionResult = {
   source: Extract<SessionInitSource, 'network' | 'fallback'>
 }
 
-let inMemorySessionId: string | null = null
-let sessionStartPromise: Promise<NetworkSessionResult> | null = null
+type ScopedSessionState = {
+  inMemorySessionId: string | null
+  sessionStartPromise: Promise<NetworkSessionResult> | null
+}
+
+const scopedSessionStates = new Map<string, ScopedSessionState>()
+
+function getScopedSessionState(handle?: string | null) {
+  const key = deriveUserScopeKey(handle)
+  let state = scopedSessionStates.get(key)
+  if (!state) {
+    state = { inMemorySessionId: null, sessionStartPromise: null }
+    scopedSessionStates.set(key, state)
+  }
+  return { key, state }
+}
 
 const createLocalSessionId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -46,30 +71,34 @@ const createLocalSessionId = () => {
   return Math.random().toString(36).slice(2)
 }
 
-const readStoredSessionId = () => {
+const readStoredSessionId = (handle?: string | null) => {
   if (typeof window === 'undefined') return null
   try {
-    const stored = window.sessionStorage.getItem(SESSION_STORAGE_KEY)
+    const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
+    const stored = window.sessionStorage.getItem(key)
     return stored && typeof stored === 'string' ? stored : null
   } catch {
     return null
   }
 }
 
-const persistSessionId = (id: string) => {
+const persistSessionId = (id: string, handle?: string | null) => {
   if (typeof window === 'undefined') return
   try {
-    window.sessionStorage.setItem(SESSION_STORAGE_KEY, id)
+    const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
+    window.sessionStorage.setItem(key, id)
   } catch {}
 }
 
-const readEmailPreferences = () => {
+const readEmailPreferences = (handle?: string | null) => {
   if (typeof window === 'undefined') {
     return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
   }
   try {
-    const email = window.localStorage.getItem(EMAIL_STORAGE_KEY) || DEFAULT_NOTIFY_EMAIL
-    const rawEnabled = window.localStorage.getItem(EMAIL_ENABLED_KEY)
+    const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, handle)
+    const email = window.localStorage.getItem(emailKey) || DEFAULT_NOTIFY_EMAIL
+    const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, handle)
+    const rawEnabled = window.localStorage.getItem(enabledKey)
     const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
     return { email, emailsEnabled }
   } catch {
@@ -77,55 +106,61 @@ const readEmailPreferences = () => {
   }
 }
 
-const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
+const requestNewSessionId = async (handle?: string | null): Promise<NetworkSessionResult> => {
+  const { state } = getScopedSessionState(handle)
+
   if (typeof window === 'undefined') {
     const fallbackId = createLocalSessionId()
+    state.inMemorySessionId = fallbackId
     return { id: fallbackId, source: 'fallback' as const }
   }
 
   try {
-    const { email, emailsEnabled } = readEmailPreferences()
+    const { email, emailsEnabled } = readEmailPreferences(handle)
     const res = await fetch('/api/session/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email, emailsEnabled }),
+      body: JSON.stringify({ email, emailsEnabled, userHandle: normalizeHandle(handle) ?? null }),
     })
     const data = await res.json().catch(() => ({}))
     const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
     const source: NetworkSessionResult['source'] =
       typeof data?.id === 'string' && data.id ? 'network' : 'fallback'
-    inMemorySessionId = id
-    persistSessionId(id)
+    state.inMemorySessionId = id
+    persistSessionId(id, handle)
     return { id, source }
   } catch {
-    let id = readStoredSessionId()
+    let id = readStoredSessionId(handle)
     if (!id) {
       id = createLocalSessionId()
     }
-    inMemorySessionId = id
-    persistSessionId(id)
+    state.inMemorySessionId = id
+    persistSessionId(id, handle)
     return { id, source: 'fallback' as const }
   }
 }
 
-const ensureSessionIdOnce = async (): Promise<SessionInitResult> => {
-  if (inMemorySessionId) {
-    return { id: inMemorySessionId, source: 'memory' }
+const ensureSessionIdOnce = async (handle?: string | null): Promise<SessionInitResult> => {
+  const { state } = getScopedSessionState(handle)
+
+  if (state.inMemorySessionId) {
+    return { id: state.inMemorySessionId, source: 'memory' }
   }
 
-  const stored = readStoredSessionId()
+  const stored = readStoredSessionId(handle)
   if (stored) {
-    inMemorySessionId = stored
+    state.inMemorySessionId = stored
     return { id: stored, source: 'storage' }
   }
 
-  if (!sessionStartPromise) {
-    sessionStartPromise = requestNewSessionId().finally(() => {
-      sessionStartPromise = null
+  if (!state.sessionStartPromise) {
+    state.sessionStartPromise = requestNewSessionId(handle).finally(() => {
+      const current = getScopedSessionState(handle).state
+      current.sessionStartPromise = null
     })
   }
 
-  const result = await sessionStartPromise
+  const result = await state.sessionStartPromise
   return result
 }
 
@@ -207,7 +242,9 @@ type AssistantPlayback = {
   durationMs: number
 }
 
-export default function Home() {
+export function Home({ userHandle }: { userHandle?: string }) {
+  const normalizedHandle = normalizeHandle(userHandle)
+  const displayHandle = userHandle?.trim() || null
   const machineState = useInterviewMachine((state) => state.state)
   const debugLog = useInterviewMachine((state) => state.debugLog)
   const pushLog = useInterviewMachine((state) => state.pushLog)
@@ -226,6 +263,7 @@ export default function Home() {
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
+  const lastLoggedHandleRef = useRef<string | null>(null)
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
 
@@ -253,13 +291,32 @@ export default function Home() {
   }, [finishRequested])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (normalizedHandle) {
+      window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalizedHandle)
+    } else {
+      window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+    }
+  }, [normalizedHandle])
+
+  useEffect(() => {
+    if (!normalizedHandle) {
+      lastLoggedHandleRef.current = null
+      return
+    }
+    if (lastLoggedHandleRef.current === normalizedHandle) return
+    lastLoggedHandleRef.current = normalizedHandle
+    pushLog(`Viewing account: /u/${normalizedHandle}`)
+  }, [normalizedHandle, pushLog])
+
+  useEffect(() => {
     if (sessionInitRef.current) return
     sessionInitRef.current = true
     if (typeof window === 'undefined') return
 
     let cancelled = false
 
-    ensureSessionIdOnce()
+    ensureSessionIdOnce(normalizedHandle)
       .then((result) => {
         if (cancelled) return
         setSessionId(result.id)
@@ -278,8 +335,9 @@ export default function Home() {
       .catch(() => {
         if (cancelled) return
         const fallbackId = createLocalSessionId()
-        inMemorySessionId = fallbackId
-        persistSessionId(fallbackId)
+        const { state } = getScopedSessionState(normalizedHandle)
+        state.inMemorySessionId = fallbackId
+        persistSessionId(fallbackId, normalizedHandle)
         setSessionId(fallbackId)
         if (lastAnnouncedSessionIdRef.current !== fallbackId) {
           lastAnnouncedSessionIdRef.current = fallbackId
@@ -290,7 +348,7 @@ export default function Home() {
     return () => {
       cancelled = true
     }
-  }, [pushLog])
+  }, [normalizedHandle, pushLog])
 
   useEffect(() => {
     return () => {
@@ -517,7 +575,7 @@ export default function Home() {
       sessionAudioUrlRef.current = sessionAudioUrl
       sessionAudioDurationRef.current = sessionAudioDurationMs
 
-      const { email: preferredEmail, emailsEnabled } = readEmailPreferences()
+      const { email: preferredEmail, emailsEnabled } = readEmailPreferences(normalizedHandle)
       const trimmedEmail = preferredEmail && preferredEmail.trim().length ? preferredEmail.trim() : undefined
       const emailForSession = emailsEnabled ? trimmedEmail : undefined
 
@@ -604,14 +662,15 @@ export default function Home() {
       if (!memOk) throw new Error('Finalize failed')
 
       try {
-        const demo = JSON.parse(localStorage.getItem('demoHistory') || '[]')
+        const historyKey = scopedStorageKey(DEMO_HISTORY_BASE_KEY, normalizedHandle)
+        const demo = JSON.parse(localStorage.getItem(historyKey) || '[]')
         const stamp = new Date().toISOString()
         const summaryTitle =
           generateSessionTitle(conversationRef.current, {
             fallback: `Session on ${new Date(stamp).toLocaleDateString()}`,
           }) || null
         demo.unshift({ id: sessionId, created_at: stamp, title: summaryTitle })
-        localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0, 50)))
+        localStorage.setItem(historyKey, JSON.stringify(demo.slice(0, 50)))
       } catch {}
 
       toDone()
@@ -623,7 +682,7 @@ export default function Home() {
       finishRequestedRef.current = false
       setFinishRequested(false)
     }
-  }, [pushLog, sessionId, toDone, updateMachineState])
+  }, [normalizedHandle, pushLog, sessionId, toDone, updateMachineState])
 
   const requestManualStop = useCallback(() => {
     if (!inTurnRef.current) return
@@ -727,6 +786,7 @@ export default function Home() {
 
       const completionIntent = detectCompletionIntent(transcript)
       const completionDetected = completionIntent.shouldStop && completionIntent.confidence !== 'low'
+      const providerSuggestedStop = endIntent === true
       if (completionIntent.shouldStop) {
         const match = completionIntent.matchedPhrases.join(', ')
         const suffix = match.length ? `: ${match}` : ''
@@ -801,8 +861,12 @@ export default function Home() {
 
       pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
+      if (providerSuggestedStop && !completionDetected && !finishRequestedRef.current) {
+        pushLog('Provider end intent ignored—no user stop detected')
+      }
+
       const shouldEnd =
-        finishRequestedRef.current || endIntent || reachedMax || completionDetected
+        finishRequestedRef.current || reachedMax || completionDetected
       inTurnRef.current = false
 
       if (shouldEnd) {
@@ -1062,6 +1126,11 @@ export default function Home() {
     <main className="mt-6 flex justify-center px-4 pb-16">
       <div className="flex w-full max-w-4xl flex-col items-center gap-12">
         <div className="flex w-full flex-col items-center gap-8">
+          {displayHandle && (
+            <div className="text-sm text-white/70">
+              Account: <span className="font-semibold text-white">@{displayHandle.toLowerCase()}</span>
+            </div>
+          )}
           <div className="relative w-full max-w-[min(90vw,460px)]">
             <button
               type="button"
