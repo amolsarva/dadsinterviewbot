@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
-import { listSessions, clearAllSessions } from '@/lib/data'
+import { listSessions, clearAllSessions, deleteSessionsByHandle } from '@/lib/data'
 import { fetchStoredSessions } from '@/lib/history'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 
-export async function GET() {
-  const items = await listSessions()
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const handle = url.searchParams.get('handle')
+  const items = await listSessions(handle)
   const rows = items.map(s => ({
     id: s.id,
     created_at: s.created_at,
@@ -29,7 +31,7 @@ export async function GET() {
     sessionAudioUrl: s.artifacts?.session_audio || null,
   }))
 
-  const { items: stored } = await fetchStoredSessions({ limit: 50 })
+  const { items: stored } = await fetchStoredSessions({ limit: 50, handle })
   for (const session of stored) {
     if (rows.some(r => r.id === session.sessionId)) continue
     const summarizableTurns: SummarizableTurn[] = (session.turns || []).flatMap((turn) =>
@@ -91,7 +93,13 @@ export async function GET() {
   return NextResponse.json({ items: [...demoRows, ...rows] })
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const url = new URL(request.url)
+  const handle = url.searchParams.get('handle')
+  if (handle) {
+    const result = await deleteSessionsByHandle(handle)
+    return NextResponse.json({ ok: true, deleted: result.deleted, items: [] })
+  }
   await clearAllSessions()
   return NextResponse.json({ ok: true, items: [] })
 }

@@ -2,12 +2,14 @@ import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from '.
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
+import { normalizeHandle } from './user-scope'
 
 export type Session = {
   id: string
   created_at: string
   title?: string
   email_to: string
+  user_handle?: string | null
   status: 'in_progress' | 'completed' | 'emailed' | 'error'
   duration_ms: number
   total_turns: number
@@ -288,13 +290,21 @@ export async function dbHealth() {
   return { ok: true, mode: 'memory' }
 }
 
-export async function createSession({ email_to }: { email_to: string }): Promise<Session> {
+export async function createSession({
+  email_to,
+  user_handle,
+}: {
+  email_to: string
+  user_handle?: string | null
+}): Promise<Session> {
   await ensureSessionMemoryHydrated().catch(() => undefined)
   await getMemoryPrimer().catch(() => undefined)
+  const normalizedHandle = normalizeHandle(user_handle ?? undefined) ?? null
   const s: RememberedSession = {
     id: uid(),
     created_at: new Date().toISOString(),
     email_to,
+    user_handle: normalizedHandle,
     status: 'in_progress',
     duration_ms: 0,
     total_turns: 0,
@@ -444,6 +454,8 @@ export async function finalizeSession(
     sessionId: s.id,
     created_at: s.created_at,
     email: s.email_to,
+    user_handle: s.user_handle ?? null,
+    userHandle: s.user_handle ?? null,
     title: s.title,
     totals: { turns: turns.length, durationMs: s.duration_ms },
     turns: turns.map((t) => ({ id: t.id, role: t.role, text: t.text, audio: t.audio || null })),
@@ -630,10 +642,47 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
   return { ok: true }
 }
 
-export async function listSessions(): Promise<Session[]> {
+export async function deleteSessionsByHandle(
+  handle?: string | null,
+): Promise<{ ok: boolean; deleted: number }> {
   await ensureSessionMemoryHydrated().catch(() => undefined)
+  const normalizedHandle = normalizeHandle(handle ?? undefined)
+  const idsToDelete: string[] = []
+  for (const session of mem.sessions.values()) {
+    const sessionHandle = normalizeHandle(session.user_handle ?? undefined)
+    if (normalizedHandle) {
+      if (sessionHandle === normalizedHandle) {
+        idsToDelete.push(session.id)
+      }
+    } else if (!sessionHandle) {
+      idsToDelete.push(session.id)
+    }
+  }
+
+  let deleted = 0
+  for (const id of idsToDelete) {
+    try {
+      const result = await deleteSession(id)
+      if (result.deleted) deleted += 1
+    } catch {
+      // ignore errors so one bad session doesn't block others
+    }
+  }
+
+  return { ok: true, deleted }
+}
+
+export async function listSessions(handle?: string | null): Promise<Session[]> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+  const normalizedHandle = normalizeHandle(handle ?? undefined)
   const seen = new Map<string, RememberedSession>()
   for (const session of mem.sessions.values()) {
+    const sessionHandle = normalizeHandle(session.user_handle ?? undefined)
+    if (normalizedHandle) {
+      if (sessionHandle !== normalizedHandle) continue
+    } else if (sessionHandle) {
+      continue
+    }
     seen.set(session.id, { ...session, turns: session.turns ? [...session.turns] : [] })
   }
   return Array.from(seen.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
@@ -796,6 +845,14 @@ export function buildSessionFromManifest(
     created_at: createdAt,
     title: typeof data.title === 'string' ? data.title : undefined,
     email_to: typeof data.email === 'string' ? data.email : process.env.DEFAULT_NOTIFY_EMAIL || '',
+    user_handle:
+      normalizeHandle(
+        typeof data.user_handle === 'string'
+          ? data.user_handle
+          : typeof data.userHandle === 'string'
+          ? data.userHandle
+          : undefined,
+      ) ?? null,
     status: 'completed',
     duration_ms: durationMs,
     total_turns: totalTurns,
