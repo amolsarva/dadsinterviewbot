@@ -56,31 +56,43 @@ export function generateSessionTitle(
     return fallback
   }
 
-  const candidates: { sentence: string; score: number; role: SummarizableTurn['role'] }[] = []
+  const normalizeTurns = (source: SummarizableTurn[] | undefined | null) =>
+    (source || []).filter((turn): turn is SummarizableTurn & { text: string } => {
+      return Boolean(turn && typeof turn.text === 'string' && turn.text.trim())
+    })
 
-  for (const turn of turns) {
-    if (!turn || typeof turn.text !== 'string') continue
-    const trimmed = turn.text.replace(/\s+/g, ' ').trim()
-    if (!trimmed) continue
-    const sentences = splitIntoSentences(trimmed)
-    for (const sentence of sentences) {
-      const scored = scoreSentence(sentence, turn.role)
-      if (scored <= 0) continue
-      candidates.push({ sentence, score: scored, role: turn.role })
+  const buildCandidates = (source: SummarizableTurn[]) => {
+    const candidates: { sentence: string; score: number; role: SummarizableTurn['role'] }[] = []
+    for (const turn of source) {
+      const trimmed = turn.text.replace(/\s+/g, ' ').trim()
+      if (!trimmed) continue
+      const sentences = splitIntoSentences(trimmed)
+      for (const sentence of sentences) {
+        const scored = scoreSentence(sentence, turn.role)
+        if (scored <= 0) continue
+        candidates.push({ sentence, score: scored, role: turn.role })
+      }
     }
+    return candidates
   }
 
-  if (!candidates.length) {
-    return fallback
+  const pickCandidate = (candidates: { sentence: string; score: number; role: SummarizableTurn['role'] }[]) => {
+    if (!candidates.length) return undefined
+    candidates.sort((a, b) => b.score - a.score)
+    const preferred = candidates.find((entry) => entry.role === 'user' && entry.sentence.split(' ').length >= 3)
+    const chosen = preferred || candidates[0]
+    const finalized = finalizeSentence(chosen.sentence)
+    return finalized || undefined
   }
 
-  candidates.sort((a, b) => b.score - a.score)
+  const normalized = normalizeTurns(turns)
+  const userTurns = normalized.filter((turn) => turn.role === 'user')
 
-  const preferred = candidates.find((entry) => entry.role === 'user' && entry.sentence.split(' ').length >= 3)
-  const chosen = preferred || candidates[0]
-  const finalized = finalizeSentence(chosen.sentence)
-  if (finalized) {
-    return finalized
-  }
+  const userTitle = pickCandidate(buildCandidates(userTurns))
+  if (userTitle) return userTitle
+
+  const fallbackTitle = pickCandidate(buildCandidates(normalized))
+  if (fallbackTitle) return fallbackTitle
+
   return fallback
 }
