@@ -1,24 +1,31 @@
 import { NextResponse } from 'next/server'
-import { listSessions, clearAllSessions } from '@/lib/data'
+import { listSessions, clearAllSessions, deleteSessionsByHandle } from '@/lib/data'
 import { fetchStoredSessions } from '@/lib/history'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 
-export async function GET() {
-  const items = await listSessions()
-  const rows = items.map(s => ({
-    id: s.id,
-    created_at: s.created_at,
-    title:
-      s.title ||
-      generateSessionTitle(s.turns, {
-        fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
-      }) ||
-      null,
-    status: s.status,
-    total_turns: s.total_turns,
-    artifacts: {
-      transcript_txt: s.artifacts?.transcript_txt || null,
-      transcript_json: s.artifacts?.transcript_json || null,
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const handle = url.searchParams.get('handle')
+  const items = await listSessions(handle)
+  const rows = items.map((s) => {
+    const summarizableTurns: SummarizableTurn[] = (s.turns || [])
+      .filter((turn) => turn.role === 'user' && typeof turn.text === 'string')
+      .map((turn) => ({ role: 'user' as const, text: turn.text }))
+
+    return {
+      id: s.id,
+      created_at: s.created_at,
+      title:
+        s.title ||
+        generateSessionTitle(summarizableTurns, {
+          fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+        }) ||
+        null,
+      status: s.status,
+      total_turns: s.total_turns,
+      artifacts: {
+        transcript_txt: s.artifacts?.transcript_txt || null,
+        transcript_json: s.artifacts?.transcript_json || null,
 
       session_manifest: s.artifacts?.session_manifest || s.artifacts?.manifest || null,
       session_audio: s.artifacts?.session_audio || null,
@@ -26,18 +33,16 @@ export async function GET() {
     },
     manifestUrl: s.artifacts?.session_manifest || s.artifacts?.manifest || null,
     firstAudioUrl: s.turns?.find(t => t.audio_blob_url)?.audio_blob_url || null,
-    sessionAudioUrl: s.artifacts?.session_audio || null,
-  }))
+      sessionAudioUrl: s.artifacts?.session_audio || null,
+    }
+  })
 
-  const { items: stored } = await fetchStoredSessions({ limit: 50 })
+  const { items: stored } = await fetchStoredSessions({ limit: 50, handle })
   for (const session of stored) {
     if (rows.some(r => r.id === session.sessionId)) continue
-    const summarizableTurns: SummarizableTurn[] = (session.turns || []).flatMap((turn) =>
-      [
-        { role: 'user' as const, text: turn.transcript },
-        turn.assistantReply ? { role: 'assistant' as const, text: turn.assistantReply } : null,
-      ].filter(Boolean) as SummarizableTurn[],
-    )
+    const summarizableTurns: SummarizableTurn[] = (session.turns || [])
+      .filter((turn) => typeof turn?.transcript === 'string')
+      .map((turn) => ({ role: 'user' as const, text: turn.transcript }))
 
     rows.push({
       id: session.sessionId,
@@ -91,7 +96,13 @@ export async function GET() {
   return NextResponse.json({ items: [...demoRows, ...rows] })
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const url = new URL(request.url)
+  const handle = url.searchParams.get('handle')
+  if (handle) {
+    const result = await deleteSessionsByHandle(handle)
+    return NextResponse.json({ ok: true, deleted: result.deleted, items: [] })
+  }
   await clearAllSessions()
   return NextResponse.json({ ok: true, items: [] })
 }

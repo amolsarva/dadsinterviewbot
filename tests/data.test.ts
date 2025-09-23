@@ -199,4 +199,27 @@ describe('session deletion helpers', () => {
     const sessions = await data.listSessions()
     expect(sessions).toEqual([])
   })
+
+  it('scopes listing and deletion by user handle', async () => {
+    const data = await import('../lib/data')
+    sendEmailMock.mockResolvedValue({ skipped: true })
+
+    const defaultSession = await data.createSession({ email_to: '' })
+    const handledSession = await data.createSession({ email_to: '', user_handle: 'Amol' })
+
+    const defaultSessions = await data.listSessions()
+    expect(defaultSessions.map((s) => s.id)).toContain(defaultSession.id)
+    expect(defaultSessions.some((s) => s.id === handledSession.id)).toBe(false)
+
+    const scopedSessions = await data.listSessions('amol')
+    expect(scopedSessions.map((s) => s.id)).toEqual([handledSession.id])
+
+    await data.deleteSessionsByHandle('amol')
+
+    const afterDeletionScoped = await data.listSessions('amol')
+    expect(afterDeletionScoped).toEqual([])
+
+    const remainingDefault = await data.listSessions()
+    expect(remainingDefault.map((s) => s.id)).toContain(defaultSession.id)
+  })
 })

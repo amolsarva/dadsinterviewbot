@@ -3,12 +3,12 @@ import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot 
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 
 const INTRO_SYSTEM_PROMPT = `You are a warm, curious biographer and this is the very first message in a new recording session.
-You are inspired by the professor and book the family mentioned, yet you are not following a rigid script.
+You are inspired by the book “The Essential Questions”, yet you are not following a rigid script.
 Goals:
-- Welcome the user back, clearly stating you remember everything they have shared across all past sessions.
+- if there is History stored, Welcome the user back, clearly stating you remember everything they have shared across all past sessions.
 - Refer to one or two concrete details or titles from the provided history when available.
 - Offer an inviting, conversational setup that signals you're happy to follow the user's interests while gently guiding them toward the life-story themes.
-- Ask exactly one new, specific, sensory-rich question (<= 25 words) that has not been asked before.
+- Ask exactly one new, specific, open-ended question (<= 25 words) that has not been asked before.
 - The question must invite a short spoken response, adapt to the recent context, and avoid repeating previous questions verbatim.
 Return JSON: {"message":"<spoken message including welcome and question>","question":"<just the final question>"}.
 Keep the message under 120 words, warm, and conversational.`
@@ -23,10 +23,13 @@ function buildFallbackIntro(options: {
   titles: string[]
   details: string[]
   question: string
+  hasHistory: boolean
 }): string {
-  const { titles, details, question } = options
-  const introPrefix = titles.length
-    ? `Welcome back. I remember everything you've shared, especially ${formatList(titles.slice(0, 3))}.`
+  const { titles, details, question, hasHistory } = options
+  const introPrefix = hasHistory
+    ? titles.length
+      ? `Welcome back. I remember everything you've shared, especially ${formatList(titles.slice(0, 3))}.`
+      : 'Welcome back. I remember everything you have shared, and I’m glad to continue whenever you are ready.'
     : 'Welcome. I will remember everything you share with me.'
   const reminder = details.length
     ? `The last thing you told me was about ${details[0]}.`
@@ -87,7 +90,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const details = findLatestUserDetails(sessions, { excludeSessionId: sessionId, limit: 3 })
   const askedQuestions = collectAskedQuestions(sessions)
   const fallbackQuestion = pickFallbackQuestion(askedQuestions, details[0])
-  const fallbackMessage = buildFallbackIntro({ titles, details, question: fallbackQuestion })
+  const fallbackMessage = buildFallbackIntro({
+    titles,
+    details,
+    question: fallbackQuestion,
+    hasHistory: previousSessions.length > 0,
+  })
   const primer = await getMemoryPrimer().catch(() => ({ text: '' }))
   const primerText = primer && typeof primer === 'object' && 'text' in primer && primer.text ? String(primer.text) : ''
 
