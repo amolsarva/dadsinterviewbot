@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from './lib/audio'
 
 const PROVIDER_DEFAULT = 'google'
@@ -16,20 +16,24 @@ export default function App(){
   useEffect(()=>{ sessionStorage.setItem('sessionId', sessionId) }, [sessionId])
   useEffect(()=>{ localStorage.setItem('email', email) }, [email])
 
-  useEffect(()=>{
-    if (!spokenOnceRef.current) {
-      spokenOnceRef.current = true
-      speak(OPENING, ()=> { setState('user:listening'); runUserTurn() })
-    }
-  }, [])
-
-  function speak(text, onend){
+  const speak = useCallback((text, onend)=>{
     const u = new SpeechSynthesisUtterance(text); u.rate=1; u.pitch=1; u.onend=onend
     window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); setState('assistant:speaking')
     // TODO(later): reuse the OpenAI speech helper here once we have a node-side relay endpoint.
-  }
+  }, [])
 
-  async function runUserTurn(){
+  const finalizeSession = useCallback(async ()=>{
+    try{
+      window.speechSynthesis.cancel(); setState('assistant:thinking')
+      // REMINDER: capture latency metrics so we can compare browser TTS vs OpenAI Neural voices.
+      const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
+      const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
+      setState('idle'); const sent = j.emailStatus && (j.emailStatus.ok || j.emailStatus.skipped)
+      alert(`Session saved. ${sent? (j.emailStatus.skipped? 'Email skipped.' : 'Email sent.') : 'Email failed.'}`)
+    }catch(e){ console.error(e); alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.'); setState('idle') }
+  }, [email, sessionId])
+
+  const runUserTurn = useCallback(async ()=>{
     try{
       forceStopRef.current = false
       setState('user:listening')
@@ -59,18 +63,14 @@ export default function App(){
     }catch(e){
       console.error(e); alert('There was a problem saving or asking. Check /api/health and env keys.'); setState('idle')
     }
-  }
+  }, [finalizeSession, sessionId, speak, turn])
 
-  async function finalizeSession(){
-    try{
-      window.speechSynthesis.cancel(); setState('assistant:thinking')
-      // REMINDER: capture latency metrics so we can compare browser TTS vs OpenAI Neural voices.
-      const resp = await fetch('/api/finalize-session', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId, email }) })
-      const j = await resp.json().catch(()=>({ ok:false })); if (!resp.ok || !j.ok) throw new Error('Finalize failed')
-      setState('idle'); const sent = j.emailStatus && (j.emailStatus.ok || j.emailStatus.skipped)
-      alert(`Session saved. ${sent? (j.emailStatus.skipped? 'Email skipped.' : 'Email sent.') : 'Email failed.'}`)
-    }catch(e){ console.error(e); alert('Finalize failed. Open /api/health to verify env, and ensure at least one /api/save-turn succeeded.'); setState('idle') }
-  }
+  useEffect(()=>{
+    if (!spokenOnceRef.current) {
+      spokenOnceRef.current = true
+      speak(OPENING, ()=> { setState('user:listening'); runUserTurn() })
+    }
+  }, [runUserTurn, speak])
 
   function startAgain(){ window.speechSynthesis.cancel(); const next=crypto.randomUUID(); setSessionId(next); setTurn(0); setState('assistant:intro'); spokenOnceRef.current=false; speak(OPENING, ()=>{ setState('user:listening'); runUserTurn() }) }
 
