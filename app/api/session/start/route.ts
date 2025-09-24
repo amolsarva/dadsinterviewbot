@@ -18,10 +18,17 @@ export async function POST(req: NextRequest) {
   const emailsEnabled = payload?.emailsEnabled !== false
   const defaultEmail = process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co'
   const targetEmail = emailsEnabled ? rawEmail || defaultEmail : ''
+  const userHandle =
+    typeof payload?.userHandle === 'string'
+      ? payload.userHandle
+      : typeof payload?.user_handle === 'string'
+      ? payload.user_handle
+      : null
 
   try {
     const session = await createSession({
       email_to: targetEmail,
+      user_handle: userHandle,
     })
     return NextResponse.json({ id: session.id, email: session.email_to, emailsEnabled: emailsEnabled })
   } catch (error: any) {

@@ -1,5 +1,11 @@
 "use client"
 import { useCallback, useEffect, useState } from 'react'
+import {
+  ACTIVE_USER_HANDLE_STORAGE_KEY,
+  DEMO_HISTORY_BASE_KEY,
+  normalizeHandle,
+  scopedStorageKey,
+} from '@/lib/user-scope'
 
 type Row = {
   id: string
@@ -24,14 +30,29 @@ export default function HistoryPage() {
   const [rows, setRows] = useState<Row[]>([])
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
+  const [activeHandle, setActiveHandle] = useState<string | undefined>(undefined)
+
+  const getActiveHandle = useCallback(() => {
+    if (typeof window === 'undefined') return undefined
+    try {
+      const stored = window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+      return normalizeHandle(stored)
+    } catch {
+      return undefined
+    }
+  }, [])
 
   const loadHistory = useCallback(async () => {
     try {
-      const api = await (await fetch('/api/history')).json()
+      const handle = getActiveHandle()
+      setActiveHandle(handle)
+      const query = handle ? `?handle=${encodeURIComponent(handle)}` : ''
+      const api = await (await fetch(`/api/history${query}`)).json()
       const serverRows: Row[] = api?.items || []
       let demoRows: Row[] = []
       try {
-        const raw = localStorage.getItem('demoHistory')
+        const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
+        const raw = localStorage.getItem(key)
         if (raw) {
           const list = JSON.parse(raw) as { id: string; created_at: string; title?: string | null }[]
           demoRows = list.map((d) => ({
@@ -57,7 +78,7 @@ export default function HistoryPage() {
     } catch {
       setRows([])
     }
-  }, [])
+  }, [getActiveHandle])
 
   useEffect(() => {
     loadHistory()
@@ -65,17 +86,19 @@ export default function HistoryPage() {
 
   const removeDemoEntry = useCallback((id: string) => {
     try {
-      const raw = localStorage.getItem('demoHistory')
+      const handle = getActiveHandle()
+      const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
+      const raw = localStorage.getItem(key)
       if (!raw) return
       const list = JSON.parse(raw) as { id: string }[]
       const filtered = list.filter((entry) => entry.id !== id)
       if (filtered.length) {
-        localStorage.setItem('demoHistory', JSON.stringify(filtered))
+        localStorage.setItem(key, JSON.stringify(filtered))
       } else {
-        localStorage.removeItem('demoHistory')
+        localStorage.removeItem(key)
       }
     } catch {}
-  }, [])
+  }, [getActiveHandle])
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -96,61 +119,88 @@ export default function HistoryPage() {
   const handleClearAll = useCallback(async () => {
     setClearingAll(true)
     try {
-      const resp = await fetch('/api/history', { method: 'DELETE' })
+      const handle = getActiveHandle()
+      const query = handle ? `?handle=${encodeURIComponent(handle)}` : ''
+      const resp = await fetch(`/api/history${query}`, { method: 'DELETE' })
       if (resp.ok) {
-        localStorage.removeItem('demoHistory')
+        if (typeof window !== 'undefined') {
+          const scopedKey = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
+          localStorage.removeItem(scopedKey)
+        }
         setRows([])
       }
     } finally {
       setClearingAll(false)
     }
-  }, [])
+  }, [getActiveHandle])
 
   return (
-    <main>
-      <h2 className="text-lg font-semibold mb-4">Sessions</h2>
+    <main className="flex flex-col gap-6 text-[rgba(255,247,237,0.9)]">
+      <div>
+        <h2 className="text-2xl font-semibold text-white">Sessions</h2>
+        {activeHandle && (
+          <p className="mt-1 text-xs text-[rgba(255,247,237,0.7)]">
+            Showing sessions saved for <span className="font-semibold text-white">@{activeHandle}</span>
+          </p>
+        )}
+      </div>
       {rows.length === 0 ? (
-        <div className="rounded border border-dashed border-white/10 bg-white/5 p-4 text-sm text-white/70">
+        <div className="rounded-3xl border border-dashed border-[rgba(255,214,150,0.35)] bg-[rgba(33,12,53,0.55)] p-6 text-sm leading-relaxed text-[rgba(255,247,237,0.78)] shadow-[0_18px_50px_rgba(120,45,110,0.25)]">
           <p className="font-medium text-white">No interviews yet.</p>
-          <p className="mt-1">Run a mock session from the home page or execute diagnostics to record a sample conversation. Your completed interviews will appear here once they are saved.</p>
+          <p className="mt-2">Brew a fresh cup of chai and record a new memory from the home page—your saved sessions will glow here once they are captured.</p>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {rows.map(s => (
-            <li key={s.id} className="bg-white/5 rounded p-3">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="font-medium">
-                    {s.title || `Session from ${new Date(s.created_at).toLocaleString()}`}
+        <ul className="space-y-4">
+          {rows.map((s) => (
+            <li
+              key={s.id}
+              className="rounded-3xl border border-[rgba(255,214,150,0.28)] bg-[rgba(24,9,42,0.7)] p-4 shadow-[0_18px_60px_rgba(120,45,110,0.28)]"
+            >
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6">
+                <div className="flex min-w-[220px] flex-1 flex-col gap-1 text-left">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <span aria-hidden>🪷</span>
+                    <span>{s.title || `Session from ${new Date(s.created_at).toLocaleString()}`}</span>
                   </div>
-                  <div className="text-xs opacity-70">{new Date(s.created_at).toLocaleString()}</div>
-                  <div className="text-xs opacity-70">Turns: {s.total_turns} • Status: {s.status}</div>
+                  <div className="text-xs text-[rgba(255,247,237,0.65)]">{new Date(s.created_at).toLocaleString()}</div>
+                  <div className="text-xs text-[rgba(255,247,237,0.65)]">Turns: {s.total_turns} • Status: {s.status}</div>
                 </div>
-                <div className="flex flex-col gap-2 text-sm max-w-xl items-end">
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(s.id)}
-                    disabled={deletingId === s.id || clearingAll}
-                    className="text-xs text-red-200/80 hover:text-red-100 disabled:opacity-50"
-                    aria-label="Delete session"
-                  >
-                    {deletingId === s.id ? 'Deleting…' : '🗑 Remove'}
-                  </button>
+                <div className="flex w-full flex-col items-stretch gap-3 text-sm sm:w-auto sm:items-end">
+                  <div className="flex items-center justify-between gap-2 sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(s.id)}
+                      disabled={deletingId === s.id || clearingAll}
+                      className="flex h-9 w-9 items-center justify-center rounded-full border border-[rgba(249,115,22,0.35)] bg-[rgba(249,115,22,0.12)] text-[rgba(255,247,237,0.85)] transition hover:border-[rgba(249,115,22,0.6)] hover:bg-[rgba(249,115,22,0.22)] hover:text-white disabled:cursor-not-allowed disabled:border-[rgba(255,214,150,0.15)] disabled:text-[rgba(255,247,237,0.4)]"
+                      aria-label="Delete session"
+                    >
+                      {deletingId === s.id ? (
+                        <span
+                          aria-hidden="true"
+                          className="h-4 w-4 animate-spin rounded-full border-2 border-[rgba(255,247,237,0.85)] border-t-transparent"
+                        />
+                      ) : (
+                        <span aria-hidden="true">🪣</span>
+                      )}
+                    </button>
+                  </div>
                   {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
                     <audio
                       controls
                       src={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
-                      className="w-full"
+                      className="w-full rounded-lg bg-[rgba(10,4,24,0.8)] sm:w-60"
                     />
                   )}
-                  <div className="flex flex-wrap gap-2">
-                    <a className="underline" href={`/session/${s.id}`}>
+                  <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+                    <a
+                      className="rounded-full border border-[rgba(249,115,22,0.4)] px-3 py-1 text-xs font-medium text-[rgba(255,247,237,0.9)] underline decoration-[rgba(249,115,22,0.5)] transition hover:bg-[rgba(249,115,22,0.2)]"
+                      href={`/session/${s.id}`}
+                    >
                       Open
                     </a>
-
                     {(s.manifestUrl || s.artifacts?.session_manifest) && (
                       <a
-                        className="underline"
+                        className="rounded-full border border-[rgba(156,163,255,0.35)] px-3 py-1 text-xs text-[rgba(255,247,237,0.85)] underline decoration-[rgba(156,163,255,0.4)] transition hover:bg-[rgba(129,140,248,0.18)]"
                         href={(s.manifestUrl || s.artifacts?.session_manifest) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
@@ -159,23 +209,38 @@ export default function HistoryPage() {
                       </a>
                     )}
                     {s.firstAudioUrl && (
-                      <a className="underline" href={s.firstAudioUrl} target="_blank" rel="noreferrer">
+                      <a
+                        className="rounded-full border border-[rgba(16,185,129,0.35)] px-3 py-1 text-xs text-[rgba(209,250,229,0.9)] underline decoration-[rgba(16,185,129,0.4)] transition hover:bg-[rgba(16,185,129,0.2)]"
+                        href={s.firstAudioUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         First turn audio
                       </a>
                     )}
                     {s.artifacts?.transcript_txt && (
-                      <a className="underline" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
+                      <a
+                        className="rounded-full border border-[rgba(129,140,248,0.35)] px-3 py-1 text-xs text-[rgba(255,247,237,0.85)] underline decoration-[rgba(129,140,248,0.35)] transition hover:bg-[rgba(129,140,248,0.18)]"
+                        href={s.artifacts.transcript_txt}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Transcript (txt)
                       </a>
                     )}
                     {s.artifacts?.transcript_json && (
-                      <a className="underline" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
+                      <a
+                        className="rounded-full border border-[rgba(129,140,248,0.35)] px-3 py-1 text-xs text-[rgba(255,247,237,0.85)] underline decoration-[rgba(129,140,248,0.35)] transition hover:bg-[rgba(129,140,248,0.18)]"
+                        href={s.artifacts.transcript_json}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Transcript (json)
                       </a>
                     )}
                     {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
                       <a
-                        className="underline"
+                        className="rounded-full border border-[rgba(14,165,233,0.35)] px-3 py-1 text-xs text-[rgba(224,242,254,0.9)] underline decoration-[rgba(56,189,248,0.4)] transition hover:bg-[rgba(14,165,233,0.18)]"
                         href={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
@@ -184,7 +249,6 @@ export default function HistoryPage() {
                       </a>
                     )}
                   </div>
-
                 </div>
               </div>
             </li>
@@ -192,12 +256,12 @@ export default function HistoryPage() {
         </ul>
       )}
       {rows.length > 0 && (
-        <div className="mt-6 flex justify-end">
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={handleClearAll}
             disabled={clearingAll || !!deletingId}
-            className="rounded border border-white/20 px-3 py-1 text-sm text-white/80 hover:border-white/40 hover:text-white disabled:opacity-50"
+            className="rounded-full border border-[rgba(249,115,22,0.4)] bg-[rgba(249,115,22,0.18)] px-4 py-2 text-sm font-medium text-[rgba(255,247,237,0.9)] transition hover:border-[rgba(249,115,22,0.6)] hover:bg-[rgba(249,115,22,0.3)] hover:text-white disabled:cursor-not-allowed disabled:border-[rgba(255,214,150,0.2)] disabled:bg-[rgba(249,115,22,0.08)] disabled:text-[rgba(255,247,237,0.45)]"
           >
             {clearingAll ? 'Clearing…' : 'Clear all history'}
           </button>
@@ -205,4 +269,5 @@ export default function HistoryPage() {
       )}
     </main>
   )
+
 }

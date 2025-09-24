@@ -5,11 +5,18 @@ import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-brid
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 import { detectCompletionIntent } from '@/lib/intents'
+import {
+  ACTIVE_USER_HANDLE_STORAGE_KEY,
+  DEFAULT_NOTIFY_EMAIL,
+  DEMO_HISTORY_BASE_KEY,
+  EMAIL_ENABLED_STORAGE_BASE_KEY,
+  EMAIL_STORAGE_BASE_KEY,
+  SESSION_STORAGE_BASE_KEY,
+  deriveUserScopeKey,
+  normalizeHandle,
+  scopedStorageKey,
+} from '@/lib/user-scope'
 
-const SESSION_STORAGE_KEY = 'sessionId'
-const EMAIL_STORAGE_KEY = 'defaultEmail'
-const EMAIL_ENABLED_KEY = 'sendSummaryEmails'
-const DEFAULT_NOTIFY_EMAIL = 'a@sarva.co'
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
 const MIN_BASELINE = 0.0004
@@ -24,6 +31,10 @@ const clampBaseline = (value: number | null | undefined) => {
   return clamped
 }
 
+export default function RootPage() {
+  return <Home key="__default__" />
+}
+
 type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
 
 type SessionInitResult = {
@@ -36,8 +47,22 @@ type NetworkSessionResult = {
   source: Extract<SessionInitSource, 'network' | 'fallback'>
 }
 
-let inMemorySessionId: string | null = null
-let sessionStartPromise: Promise<NetworkSessionResult> | null = null
+type ScopedSessionState = {
+  inMemorySessionId: string | null
+  sessionStartPromise: Promise<NetworkSessionResult> | null
+}
+
+const scopedSessionStates = new Map<string, ScopedSessionState>()
+
+function getScopedSessionState(handle?: string | null) {
+  const key = deriveUserScopeKey(handle)
+  let state = scopedSessionStates.get(key)
+  if (!state) {
+    state = { inMemorySessionId: null, sessionStartPromise: null }
+    scopedSessionStates.set(key, state)
+  }
+  return { key, state }
+}
 
 const createLocalSessionId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -46,30 +71,34 @@ const createLocalSessionId = () => {
   return Math.random().toString(36).slice(2)
 }
 
-const readStoredSessionId = () => {
+const readStoredSessionId = (handle?: string | null) => {
   if (typeof window === 'undefined') return null
   try {
-    const stored = window.sessionStorage.getItem(SESSION_STORAGE_KEY)
+    const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
+    const stored = window.sessionStorage.getItem(key)
     return stored && typeof stored === 'string' ? stored : null
   } catch {
     return null
   }
 }
 
-const persistSessionId = (id: string) => {
+const persistSessionId = (id: string, handle?: string | null) => {
   if (typeof window === 'undefined') return
   try {
-    window.sessionStorage.setItem(SESSION_STORAGE_KEY, id)
+    const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
+    window.sessionStorage.setItem(key, id)
   } catch {}
 }
 
-const readEmailPreferences = () => {
+const readEmailPreferences = (handle?: string | null) => {
   if (typeof window === 'undefined') {
     return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
   }
   try {
-    const email = window.localStorage.getItem(EMAIL_STORAGE_KEY) || DEFAULT_NOTIFY_EMAIL
-    const rawEnabled = window.localStorage.getItem(EMAIL_ENABLED_KEY)
+    const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, handle)
+    const email = window.localStorage.getItem(emailKey) || DEFAULT_NOTIFY_EMAIL
+    const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, handle)
+    const rawEnabled = window.localStorage.getItem(enabledKey)
     const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
     return { email, emailsEnabled }
   } catch {
@@ -77,55 +106,61 @@ const readEmailPreferences = () => {
   }
 }
 
-const requestNewSessionId = async (): Promise<NetworkSessionResult> => {
+const requestNewSessionId = async (handle?: string | null): Promise<NetworkSessionResult> => {
+  const { state } = getScopedSessionState(handle)
+
   if (typeof window === 'undefined') {
     const fallbackId = createLocalSessionId()
+    state.inMemorySessionId = fallbackId
     return { id: fallbackId, source: 'fallback' as const }
   }
 
   try {
-    const { email, emailsEnabled } = readEmailPreferences()
+    const { email, emailsEnabled } = readEmailPreferences(handle)
     const res = await fetch('/api/session/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email, emailsEnabled }),
+      body: JSON.stringify({ email, emailsEnabled, userHandle: normalizeHandle(handle) ?? null }),
     })
     const data = await res.json().catch(() => ({}))
     const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
     const source: NetworkSessionResult['source'] =
       typeof data?.id === 'string' && data.id ? 'network' : 'fallback'
-    inMemorySessionId = id
-    persistSessionId(id)
+    state.inMemorySessionId = id
+    persistSessionId(id, handle)
     return { id, source }
   } catch {
-    let id = readStoredSessionId()
+    let id = readStoredSessionId(handle)
     if (!id) {
       id = createLocalSessionId()
     }
-    inMemorySessionId = id
-    persistSessionId(id)
+    state.inMemorySessionId = id
+    persistSessionId(id, handle)
     return { id, source: 'fallback' as const }
   }
 }
 
-const ensureSessionIdOnce = async (): Promise<SessionInitResult> => {
-  if (inMemorySessionId) {
-    return { id: inMemorySessionId, source: 'memory' }
+const ensureSessionIdOnce = async (handle?: string | null): Promise<SessionInitResult> => {
+  const { state } = getScopedSessionState(handle)
+
+  if (state.inMemorySessionId) {
+    return { id: state.inMemorySessionId, source: 'memory' }
   }
 
-  const stored = readStoredSessionId()
+  const stored = readStoredSessionId(handle)
   if (stored) {
-    inMemorySessionId = stored
+    state.inMemorySessionId = stored
     return { id: stored, source: 'storage' }
   }
 
-  if (!sessionStartPromise) {
-    sessionStartPromise = requestNewSessionId().finally(() => {
-      sessionStartPromise = null
+  if (!state.sessionStartPromise) {
+    state.sessionStartPromise = requestNewSessionId(handle).finally(() => {
+      const current = getScopedSessionState(handle).state
+      current.sessionStartPromise = null
     })
   }
 
-  const result = await sessionStartPromise
+  const result = await state.sessionStartPromise
   return result
 }
 
@@ -148,56 +183,56 @@ const STATE_VISUALS: Record<
     badge: 'Ready',
     title: 'Ready to begin',
     description: 'I’ll start the conversation for you—just settle in and listen.',
-    gradient: 'from-sky-400/40 via-blue-500/30 to-indigo-500/40',
+    gradient: 'from-[#f59e0b]/45 via-[#f97316]/45 to-[#d946ef]/40',
   },
   calibrating: {
     icon: '🎚️',
     badge: 'Preparing',
     title: 'Getting ready to listen',
     description: 'Give me a moment to measure the room noise before I start recording.',
-    gradient: 'from-cyan-400/40 via-sky-400/40 to-indigo-400/40',
+    gradient: 'from-[#fcd34d]/45 via-[#fb923c]/40 to-[#f97316]/45',
   },
   recording: {
     icon: '🎤',
     badge: 'Listening',
     title: 'Listening',
     description: 'I’m capturing every detail you say. Speak naturally and tap the ring when you’d like me to stop listening.',
-    gradient: 'from-emerald-400/40 via-lime-300/40 to-emerald-500/40',
+    gradient: 'from-[#f97316]/45 via-[#facc15]/40 to-[#f59e0b]/45',
   },
   thinking: {
     icon: '🤔',
     badge: 'Thinking',
     title: 'Thinking',
     description: 'Give me a brief moment while I make sense of what you shared.',
-    gradient: 'from-fuchsia-400/40 via-purple-500/40 to-indigo-600/40',
+    gradient: 'from-[#d946ef]/45 via-[#a855f7]/40 to-[#7c3aed]/45',
   },
   speakingPrep: {
     icon: '🔄',
     badge: 'Warming up',
     title: 'Preparing to speak',
     description: 'Spinning up my voice so I can respond clearly.',
-    gradient: 'from-amber-300/40 via-amber-400/40 to-orange-500/40',
+    gradient: 'from-[#fb923c]/45 via-[#f97316]/45 to-[#ef4444]/40',
   },
   playing: {
     icon: '💬',
     badge: 'Speaking',
     title: 'Speaking',
     description: 'Sharing what I heard and how we can keep going.',
-    gradient: 'from-amber-400/40 via-orange-500/40 to-amber-600/40',
+    gradient: 'from-[#f97316]/45 via-[#f472b6]/40 to-[#7c3aed]/45',
   },
   readyToContinue: {
     icon: '✨',
     badge: 'Ready',
     title: 'Ready for more',
     description: 'Just start speaking whenever you’re ready for the next part.',
-    gradient: 'from-sky-400/40 via-cyan-400/40 to-blue-500/40',
+    gradient: 'from-[#fbbf24]/45 via-[#f97316]/45 to-[#a855f7]/40',
   },
   doneSuccess: {
     icon: '✅',
     badge: 'Complete',
     title: 'Session complete',
     description: 'Review your links or start another memory when you feel inspired.',
-    gradient: 'from-slate-400/40 via-slate-500/40 to-slate-600/40',
+    gradient: 'from-[#34d399]/35 via-[#38bdf8]/35 to-[#6366f1]/35',
   },
 }
 
@@ -207,7 +242,9 @@ type AssistantPlayback = {
   durationMs: number
 }
 
-export default function Home() {
+export function Home({ userHandle }: { userHandle?: string }) {
+  const normalizedHandle = normalizeHandle(userHandle)
+  const displayHandle = userHandle?.trim() || null
   const machineState = useInterviewMachine((state) => state.state)
   const debugLog = useInterviewMachine((state) => state.debugLog)
   const pushLog = useInterviewMachine((state) => state.pushLog)
@@ -226,6 +263,7 @@ export default function Home() {
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
+  const lastLoggedHandleRef = useRef<string | null>(null)
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
 
@@ -253,13 +291,32 @@ export default function Home() {
   }, [finishRequested])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (normalizedHandle) {
+      window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalizedHandle)
+    } else {
+      window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+    }
+  }, [normalizedHandle])
+
+  useEffect(() => {
+    if (!normalizedHandle) {
+      lastLoggedHandleRef.current = null
+      return
+    }
+    if (lastLoggedHandleRef.current === normalizedHandle) return
+    lastLoggedHandleRef.current = normalizedHandle
+    pushLog(`Viewing account: /u/${normalizedHandle}`)
+  }, [normalizedHandle, pushLog])
+
+  useEffect(() => {
     if (sessionInitRef.current) return
     sessionInitRef.current = true
     if (typeof window === 'undefined') return
 
     let cancelled = false
 
-    ensureSessionIdOnce()
+    ensureSessionIdOnce(normalizedHandle)
       .then((result) => {
         if (cancelled) return
         setSessionId(result.id)
@@ -278,8 +335,9 @@ export default function Home() {
       .catch(() => {
         if (cancelled) return
         const fallbackId = createLocalSessionId()
-        inMemorySessionId = fallbackId
-        persistSessionId(fallbackId)
+        const { state } = getScopedSessionState(normalizedHandle)
+        state.inMemorySessionId = fallbackId
+        persistSessionId(fallbackId, normalizedHandle)
         setSessionId(fallbackId)
         if (lastAnnouncedSessionIdRef.current !== fallbackId) {
           lastAnnouncedSessionIdRef.current = fallbackId
@@ -290,7 +348,7 @@ export default function Home() {
     return () => {
       cancelled = true
     }
-  }, [pushLog])
+  }, [normalizedHandle, pushLog])
 
   useEffect(() => {
     return () => {
@@ -517,7 +575,7 @@ export default function Home() {
       sessionAudioUrlRef.current = sessionAudioUrl
       sessionAudioDurationRef.current = sessionAudioDurationMs
 
-      const { email: preferredEmail, emailsEnabled } = readEmailPreferences()
+      const { email: preferredEmail, emailsEnabled } = readEmailPreferences(normalizedHandle)
       const trimmedEmail = preferredEmail && preferredEmail.trim().length ? preferredEmail.trim() : undefined
       const emailForSession = emailsEnabled ? trimmedEmail : undefined
 
@@ -604,14 +662,15 @@ export default function Home() {
       if (!memOk) throw new Error('Finalize failed')
 
       try {
-        const demo = JSON.parse(localStorage.getItem('demoHistory') || '[]')
+        const historyKey = scopedStorageKey(DEMO_HISTORY_BASE_KEY, normalizedHandle)
+        const demo = JSON.parse(localStorage.getItem(historyKey) || '[]')
         const stamp = new Date().toISOString()
         const summaryTitle =
           generateSessionTitle(conversationRef.current, {
             fallback: `Session on ${new Date(stamp).toLocaleDateString()}`,
           }) || null
         demo.unshift({ id: sessionId, created_at: stamp, title: summaryTitle })
-        localStorage.setItem('demoHistory', JSON.stringify(demo.slice(0, 50)))
+        localStorage.setItem(historyKey, JSON.stringify(demo.slice(0, 50)))
       } catch {}
 
       toDone()
@@ -623,7 +682,7 @@ export default function Home() {
       finishRequestedRef.current = false
       setFinishRequested(false)
     }
-  }, [pushLog, sessionId, toDone, updateMachineState])
+  }, [normalizedHandle, pushLog, sessionId, toDone, updateMachineState])
 
   const requestManualStop = useCallback(() => {
     if (!inTurnRef.current) return
@@ -727,6 +786,7 @@ export default function Home() {
 
       const completionIntent = detectCompletionIntent(transcript)
       const completionDetected = completionIntent.shouldStop && completionIntent.confidence !== 'low'
+      const providerSuggestedStop = endIntent === true
       if (completionIntent.shouldStop) {
         const match = completionIntent.matchedPhrases.join(', ')
         const suffix = match.length ? `: ${match}` : ''
@@ -801,8 +861,12 @@ export default function Home() {
 
       pushLog('Finished playing → ready')
       const reachedMax = nextTurn >= MAX_TURNS
+      if (providerSuggestedStop && !completionDetected && !finishRequestedRef.current) {
+        pushLog('Provider end intent ignored—no user stop detected')
+      }
+
       const shouldEnd =
-        finishRequestedRef.current || endIntent || reachedMax || completionDetected
+        finishRequestedRef.current || reachedMax || completionDetected
       inTurnRef.current = false
 
       if (shouldEnd) {
@@ -1059,25 +1123,31 @@ export default function Home() {
   })()
 
   return (
-    <main className="mt-6 flex justify-center px-4 pb-16">
+    <main className="flex w-full flex-col items-center gap-12 pb-6">
       <div className="flex w-full max-w-4xl flex-col items-center gap-12">
-        <div className="flex w-full flex-col items-center gap-8">
-          <div className="relative w-full max-w-[min(90vw,460px)]">
+        <div className="flex w-full flex-col items-center gap-9">
+          {displayHandle && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(255,214,150,0.3)] bg-[rgba(251,191,36,0.12)] px-4 py-1 text-sm text-[rgba(255,247,237,0.85)]">
+              <span aria-hidden>🪔</span>
+              Account <span className="font-semibold text-white">@{displayHandle.toLowerCase()}</span>
+            </div>
+          )}
+          <div className="relative w-full max-w-[min(92vw,480px)]">
             <button
               type="button"
               onClick={handleHeroPress}
-              className="group relative aspect-square w-full overflow-hidden rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white/60"
+              className="group relative aspect-square w-full overflow-hidden rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[rgba(251,191,36,0.6)]"
               aria-label={heroAriaLabel}
             >
-              <span className="absolute inset-0 rounded-full bg-black/20 blur-3xl" aria-hidden="true" />
+              <span className="absolute inset-0 rounded-full bg-[rgba(249,115,22,0.22)] blur-3xl" aria-hidden="true" />
               <span
-                className={`absolute inset-[8%] rounded-full bg-gradient-to-br ${heroGradient} animate-soft-pulse shadow-[0_0_80px_rgba(255,255,255,0.18)]`}
+                className={`absolute inset-[8%] rounded-full bg-gradient-to-br ${heroGradient} animate-soft-pulse shadow-[0_0_90px_rgba(249,196,79,0.35)]`}
                 aria-hidden="true"
               />
-              <span className="absolute inset-[12%] rounded-full border border-white/15 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
-              <span className="absolute inset-[18%] rounded-full border border-white/10 animate-slow-ripple" aria-hidden="true" />
+              <span className="absolute inset-[12%] rounded-full border border-[rgba(255,247,237,0.22)] bg-[rgba(30,12,48,0.65)] backdrop-blur" aria-hidden="true" />
+              <span className="absolute inset-[18%] rounded-full border border-[rgba(255,214,150,0.35)] animate-slow-ripple" aria-hidden="true" />
               <span
-                className="absolute inset-[18%] rounded-full border border-white/5 animate-slow-ripple"
+                className="absolute inset-[18%] rounded-full border border-[rgba(217,70,239,0.35)] animate-slow-ripple"
                 style={{ animationDelay: '1.2s' }}
                 aria-hidden="true"
               />
@@ -1085,15 +1155,15 @@ export default function Home() {
                 <span className="text-5xl md:text-6xl" aria-hidden="true">
                   {heroIcon}
                 </span>
-                <span className="mt-4 text-[11px] uppercase tracking-[0.45em] text-white/50">{heroBadge}</span>
-                <span className="mt-3 text-3xl font-semibold md:text-4xl">{heroTitle}</span>
-                <span className="mt-4 text-sm text-white/70 md:text-base">{heroDescription}</span>
+                <span className="mt-4 text-[11px] uppercase tracking-[0.45em] text-[rgba(255,247,237,0.65)]">{heroBadge}</span>
+                <span className="mt-3 text-3xl font-semibold text-white md:text-4xl">{heroTitle}</span>
+                <span className="mt-4 text-sm text-[rgba(255,247,237,0.78)] md:text-base">{heroDescription}</span>
               </span>
             </button>
           </div>
 
           <div className="flex flex-col items-center gap-4 text-center">
-            <div className="text-sm text-white/70">{statusMessage}</div>
+            <div className="text-sm text-[rgba(255,247,237,0.8)]">{statusMessage}</div>
             {machineState === 'doneSuccess' ? (
               <button
                 onClick={() => {
@@ -1112,7 +1182,7 @@ export default function Home() {
                   setManualStopRequested(false)
                   updateMachineState('idle')
                 }}
-                className="rounded-full bg-white px-8 py-3 text-lg font-semibold text-black shadow-lg transition hover:bg-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
+                className="rounded-full bg-gradient-to-r from-[#f59e0b] via-[#f97316] to-[#d946ef] px-10 py-3 text-lg font-semibold text-white shadow-[0_20px_45px_rgba(249,115,22,0.35)] transition hover:from-[#f97316] hover:via-[#ec4899] hover:to-[#8b5cf6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[rgba(249,196,79,0.6)]"
               >
                 Start Again
               </button>
@@ -1121,7 +1191,7 @@ export default function Home() {
               <button
                 onClick={requestFinish}
                 disabled={!hasStarted || finishRequested}
-                className="rounded-full border border-white/20 bg-white/5 px-5 py-2 text-sm font-medium text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/40 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
+                className="rounded-full border border-[rgba(255,214,150,0.35)] bg-[rgba(33,12,53,0.6)] px-5 py-2 text-sm font-medium text-[rgba(255,247,237,0.85)] transition hover:border-[rgba(249,115,22,0.6)] hover:bg-[rgba(249,115,22,0.18)] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[rgba(249,196,79,0.45)] disabled:cursor-not-allowed disabled:border-[rgba(255,214,150,0.2)] disabled:text-[rgba(255,247,237,0.4)]"
               >
                 I’m finished
               </button>
@@ -1130,20 +1200,20 @@ export default function Home() {
         </div>
 
         <div className="w-full max-w-2xl">
-          <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-white/40">
+          <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-[rgba(255,247,237,0.5)]">
             <span>Diagnostics log</span>
-            <a className="text-xs font-medium uppercase tracking-[0.2em] text-white/50 underline hover:text-white/80" href="/diagnostics">
+            <a className="text-xs font-medium uppercase tracking-[0.2em] text-[rgba(255,247,237,0.7)] underline decoration-[rgba(255,247,237,0.4)] transition hover:text-white" href="/diagnostics">
               Open
             </a>
           </div>
           <textarea
             value={debugLog.join('\n')}
             readOnly
-            className="mt-2 h-28 w-full resize-none rounded border border-white/10 bg-black/30 p-3 text-[11px] leading-relaxed text-white/70"
+            className="mt-3 h-32 w-full resize-none rounded-2xl border border-[rgba(255,214,150,0.25)] bg-[rgba(16,7,32,0.7)] p-4 text-[11px] leading-relaxed text-[rgba(255,247,237,0.8)] shadow-[0_18px_45px_rgba(120,45,110,0.25)]"
           />
-          <div className="mt-1 text-[11px] text-white/40">
+          <div className="mt-2 text-[11px] text-[rgba(255,247,237,0.62)]">
             Need more detail?{' '}
-            <a className="underline hover:text-white/80" href="/diagnostics">
+            <a className="underline decoration-[rgba(255,247,237,0.4)] transition hover:text-white" href="/diagnostics">
               Visit Diagnostics
             </a>
             .

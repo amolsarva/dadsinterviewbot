@@ -44,7 +44,12 @@ export default function App(){
       const { reply, transcript, end_intent } = askRes
 
       const endRegex = /(i[' ]?m done|stop for now|that’s all|i’m finished|we’re done|let’s stop)/i
-      const shouldEnd = end_intent === true || (transcript && endRegex.test(transcript))
+      const providerSuggestedStop = end_intent === true
+      const userRequestedStop = Boolean(transcript && endRegex.test(transcript))
+      if (providerSuggestedStop && !userRequestedStop) {
+        console.debug('Provider end intent ignored — awaiting user request to finish.')
+      }
+      const shouldEnd = userRequestedStop
 
       const save = await fetch('/api/save-turn', {
         method:'POST', headers:{'Content-Type':'application/json'},

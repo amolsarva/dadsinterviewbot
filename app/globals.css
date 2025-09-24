@@ -1,10 +1,55 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-:root { --bg: #0b0c10; --fg: #e5e7eb; }
-html, body { height: 100%; }
-body { background: var(--bg); color: var(--fg); }
-button { @apply rounded-2xl px-4 py-2 font-medium; }
+:root {
+  --bg-gradient: radial-gradient(circle at 20% -10%, rgba(255, 214, 150, 0.5), transparent 55%),
+    radial-gradient(circle at 80% 0%, rgba(186, 104, 200, 0.45), transparent 50%),
+    linear-gradient(135deg, #1a1032 0%, #261046 35%, #431b63 68%, #190b2d 100%);
+  --bg-overlay: radial-gradient(circle at 50% 120%, rgba(255, 140, 66, 0.35), transparent 70%);
+  --fg: #fff7ed;
+  --card: rgba(33, 12, 53, 0.78);
+  --card-border: rgba(255, 244, 214, 0.14);
+  --muted: rgba(255, 247, 237, 0.75);
+  --accent: #f59e0b;
+  --accent-strong: #f97316;
+  --deep-purple: #5b21b6;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--bg-gradient);
+  color: var(--fg);
+  font-family: 'Inter', 'Noto Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  position: relative;
+  overflow-x: hidden;
+}
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: -10%;
+  pointer-events: none;
+  background: var(--bg-overlay);
+  opacity: 0.75;
+  mix-blend-mode: screen;
+  filter: blur(18px);
+  z-index: -2;
+}
+body::after {
+  inset: auto;
+  top: 25%;
+  right: -30%;
+  bottom: -20%;
+  left: auto;
+  background: radial-gradient(circle at 30% 30%, rgba(245, 158, 11, 0.3), transparent 60%),
+    radial-gradient(circle at 70% 70%, rgba(91, 33, 182, 0.28), transparent 65%);
+  opacity: 0.6;
+}
+button {
+  @apply rounded-2xl px-4 py-2 font-medium;
+}
 textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
 a { text-underline-offset: 2px; }
 

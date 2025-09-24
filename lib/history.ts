@@ -1,5 +1,6 @@
 import { list } from '@vercel/blob'
 import { getBlobToken } from './blob'
+import { normalizeHandle } from './user-scope'
 
 type RawTurnBlob = { url: string; downloadUrl?: string; uploadedAt: string; name: string }
 
@@ -34,6 +35,7 @@ export type StoredSession = {
   totalDurationMs: number
   turns: StoredTurn[]
   artifacts?: StoredArtifacts
+  userHandle: string | null
 }
 
 type SessionEntry = StoredSession & {
@@ -108,6 +110,16 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       if (Number.isFinite(totalTurnsFromManifest)) {
         entry.totalTurns = totalTurnsFromManifest as number
       }
+      const manifestHandle = normalizeHandle(
+        typeof json?.user_handle === 'string'
+          ? json.user_handle
+          : typeof json?.userHandle === 'string'
+          ? json.userHandle
+          : undefined,
+      )
+      if (manifestHandle) {
+        entry.userHandle = manifestHandle
+      }
       if (!entry.artifacts.transcript_txt && json?.artifacts?.transcript_txt) {
         entry.artifacts.transcript_txt = json.artifacts.transcript_txt
       }
@@ -147,6 +159,7 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
       session_manifest: entry.artifacts.session_manifest ?? entry.manifestUrl ?? null,
 
     },
+    userHandle: entry.userHandle ?? null,
   }
 }
 
@@ -171,6 +184,7 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
         turnBlobs: [],
         latestUploadedAt: '0',
         artifacts: {},
+        userHandle: null,
       } as SessionEntry)
 
     if (/^turn-\d+\.json$/.test(name)) {
@@ -216,7 +230,8 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
 export async function fetchStoredSessions({
   page = 1,
   limit = 10,
-}: { page?: number; limit?: number } = {}): Promise<{ items: StoredSession[] }> {
+  handle,
+}: { page?: number; limit?: number; handle?: string | null } = {}): Promise<{ items: StoredSession[] }> {
   try {
     const token = ensureToken()
     const { blobs } = await list({ prefix: 'sessions/', limit: 2000, token })
@@ -227,10 +242,21 @@ export async function fetchStoredSessions({
     )
 
     const start = Math.max(0, (page - 1) * limit)
-    const paged = sorted.slice(start, start + limit)
     const items: StoredSession[] = []
-    for (const entry of paged) {
-      items.push(await enrich(entry))
+    const normalizedHandle = normalizeHandle(handle ?? undefined)
+    let matched = 0
+    for (const entry of sorted) {
+      const enriched = await enrich(entry)
+      if (normalizedHandle) {
+        if (enriched.userHandle !== normalizedHandle) continue
+      } else if (enriched.userHandle) {
+        continue
+      }
+      if (matched >= start && items.length < limit) {
+        items.push(enriched)
+      }
+      matched += 1
+      if (items.length >= limit) break
     }
     return { items }
   } catch {
