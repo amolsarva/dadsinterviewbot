@@ -148,56 +148,68 @@ export default function DiagnosticsPage() {
   }
 
   return (
-    <main>
-      <h2 className="text-lg font-semibold mb-3">Diagnostics</h2>
-      <button
-        onClick={runDiagnostics}
-        disabled={isRunning}
-        className="bg-white/10 px-4 py-2 rounded-2xl disabled:opacity-50"
-      >
-        {isRunning ? 'Running…' : 'Run full diagnostics'}
-      </button>
+    <main className="flex flex-col gap-6 text-[rgba(255,247,237,0.9)]">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-white">Diagnostics</h2>
+          <p className="text-xs text-[rgba(255,247,237,0.7)]">Check on our services and keep the interview studio running smoothly.</p>
+        </div>
+        <button
+          onClick={runDiagnostics}
+          disabled={isRunning}
+          className="rounded-full border border-[rgba(249,115,22,0.45)] bg-gradient-to-r from-[#f59e0b] via-[#f97316] to-[#d946ef] px-5 py-2 text-sm font-semibold text-white shadow-[0_15px_45px_rgba(249,115,22,0.35)] transition hover:from-[#f97316] hover:via-[#ec4899] hover:to-[#8b5cf6] disabled:cursor-not-allowed disabled:border-[rgba(255,214,150,0.2)] disabled:bg-[rgba(249,115,22,0.12)] disabled:text-[rgba(255,247,237,0.5)]"
+        >
+          {isRunning ? 'Running…' : 'Run full diagnostics'}
+        </button>
+      </div>
 
-      <div className="mt-4 space-y-3">
-        {TEST_ORDER.map(key => {
+      <div className="space-y-3">
+        {TEST_ORDER.map((key) => {
           const result = results[key]
           return (
-            <div key={key} className="bg-white/5 rounded-xl px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xl leading-none">{statusIcon[result.status]}</span>
-                <span className="font-medium">{TEST_CONFIG[key].label}</span>
+            <div
+              key={key}
+              className="rounded-3xl border border-[rgba(156,163,255,0.3)] bg-[rgba(24,9,42,0.7)] px-4 py-4 shadow-[0_15px_50px_rgba(91,33,182,0.25)]"
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-xl leading-none text-[rgba(255,247,237,0.9)]">{statusIcon[result.status]}</span>
+                <span className="text-sm font-semibold text-white">{TEST_CONFIG[key].label}</span>
               </div>
               {result.message && (
-                <div className="mt-1 text-sm opacity-80 whitespace-pre-wrap">{result.message}</div>
+                <div className="mt-2 text-sm text-[rgba(255,247,237,0.78)] whitespace-pre-wrap">{result.message}</div>
               )}
             </div>
           )
         })}
       </div>
 
+      <label className="mt-2 text-xs uppercase tracking-[0.4em] text-[rgba(255,247,237,0.6)]">Log output</label>
       <textarea
         value={log}
         readOnly
-        className="mt-4 w-full h-96 bg-black/30 p-2 rounded"
+        className="h-80 w-full rounded-3xl border border-[rgba(156,163,255,0.35)] bg-[rgba(10,4,24,0.8)] p-4 text-sm leading-relaxed text-[rgba(255,247,237,0.82)] shadow-[0_15px_60px_rgba(91,33,182,0.3)]"
       />
 
-      <div className="mt-4">
-        <h3 className="font-semibold mb-2">Tracked foxes</h3>
+      <div className="space-y-3">
+        <h3 className="text-lg font-semibold text-white">Tracked foxes</h3>
         {foxes.length === 0 ? (
-          <p className="text-sm opacity-70">No foxes have been triggered yet.</p>
+          <p className="text-sm text-[rgba(255,247,237,0.7)]">No foxes have been triggered yet.</p>
         ) : (
-          <ul className="space-y-2 text-sm">
-            {foxes.map(fox => (
-              <li key={fox.id} className="bg-white/5 rounded-xl px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">Theory {fox.theory} – {fox.message}</span>
-                  <span className="text-xs uppercase tracking-wide opacity-70">{fox.level}</span>
+          <ul className="space-y-3 text-sm">
+            {foxes.map((fox) => (
+              <li
+                key={fox.id}
+                className="rounded-3xl border border-[rgba(249,115,22,0.35)] bg-[rgba(33,12,53,0.75)] px-4 py-3 shadow-[0_15px_50px_rgba(249,115,22,0.25)]"
+              >
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="font-medium text-white">Theory {fox.theory} – {fox.message}</span>
+                  <span className="text-xs uppercase tracking-wide text-[rgba(255,247,237,0.65)]">{fox.level}</span>
                 </div>
-                <div className="text-xs opacity-70 mt-1">
+                <div className="mt-1 text-xs text-[rgba(255,247,237,0.65)]">
                   Count: {fox.count} · Last: {new Date(fox.lastTriggeredAt).toLocaleString()}
                 </div>
                 {fox.details && (
-                  <pre className="mt-2 text-xs bg-black/40 p-2 rounded whitespace-pre-wrap">
+                  <pre className="mt-2 rounded-2xl bg-[rgba(10,4,24,0.85)] p-3 text-xs text-[rgba(255,247,237,0.8)] whitespace-pre-wrap">
                     {JSON.stringify(fox.details, null, 2)}
                   </pre>
                 )}
