@@ -30,29 +30,86 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <html lang="en">
-      <body className="min-h-screen">
-        <div className="max-w-3xl mx-auto px-4 py-6">
-          <header className="flex items-center justify-between mb-6">
-            <h1 className="text-xl font-semibold">Dad&apos;s Interview Bot</h1>
-            <nav className="space-x-4 text-sm opacity-90">
-              <a href="/" className="underline">Home</a>
-              <a href="/history" className="underline">History</a>
-              <a href="/settings" className="underline">Settings</a>
-              <a href="/diagnostics" className="underline">Diagnostics</a>
-            </nav>
+      <body className="min-h-screen text-[var(--fg)] antialiased">
+        <div className="pointer-events-none fixed inset-x-0 top-0 flex justify-center gap-10 px-8 pt-12 text-4xl text-amber-200/80 sm:text-5xl">
+          <span className="drop-shadow-[0_0_18px_rgba(249,196,79,0.55)]" aria-hidden>
+            🪔
+          </span>
+          <span className="drop-shadow-[0_0_18px_rgba(129,140,248,0.45)]" aria-hidden>
+            🪷
+          </span>
+          <span className="drop-shadow-[0_0_20px_rgba(236,72,153,0.4)]" aria-hidden>
+            🫖
+          </span>
+        </div>
+        <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 py-12 sm:px-8">
+          <header className="relative overflow-hidden rounded-[32px] border border-[rgba(255,244,214,0.14)] bg-[rgba(33,12,53,0.82)] px-6 py-6 shadow-[0_25px_80px_rgba(120,45,110,0.35)] backdrop-blur-xl sm:px-10">
+            <div
+              className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-[rgba(249,196,79,0.1)] to-[rgba(91,33,182,0.25)]"
+              aria-hidden
+            />
+            <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="max-w-xl">
+                <p className="text-xs uppercase tracking-[0.5em] text-[rgba(255,247,237,0.6)]">Story Studio</p>
+                <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Dad&apos;s Interview Bot</h1>
+                <p className="mt-3 text-sm leading-relaxed text-[rgba(255,247,237,0.72)]">
+                  A warm, colourful space for capturing the stories that make your family shine. Settle in with a cup of chai and let the conversation flow.
+                </p>
+              </div>
+              <nav className="flex flex-wrap items-center gap-2 text-sm">
+                {[
+                  { href: '/', label: 'Home' },
+                  { href: '/history', label: 'History' },
+                  { href: '/settings', label: 'Settings' },
+                  { href: '/diagnostics', label: 'Diagnostics' },
+                ].map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className="group relative overflow-hidden rounded-full border border-[rgba(255,214,150,0.35)] bg-[rgba(251,191,36,0.08)] px-4 py-2 font-medium text-[rgba(255,247,237,0.85)] transition hover:border-[rgba(249,115,22,0.5)] hover:bg-[rgba(249,115,22,0.16)] hover:text-white"
+                  >
+                    <span className="absolute inset-0 translate-y-full bg-gradient-to-r from-[rgba(249,115,22,0.35)] via-[rgba(217,70,239,0.2)] to-[rgba(129,140,248,0.35)] transition-transform duration-300 ease-out group-hover:translate-y-0" aria-hidden />
+                    <span className="relative">{item.label}</span>
+                  </a>
+                ))}
+              </nav>
+            </div>
           </header>
-          {children}
-          <footer className="mt-10 text-xs opacity-70">
-            {commitUrl ? (
-              <a href={commitUrl} className="underline">
-                {shortSha} — {commitMessage}
-              </a>
-            ) : (
-              <span>
-                {shortSha} — {commitMessage}
-              </span>
-            )}{' '}
-            · {formattedTime}
+
+          <div className="relative flex-1">
+            <div className="relative overflow-hidden rounded-[36px] border border-[rgba(255,244,214,0.14)] bg-[rgba(33,12,53,0.86)] px-5 py-8 shadow-[0_30px_90px_rgba(120,45,110,0.35)] backdrop-blur-xl sm:px-12 sm:py-12">
+              <div
+                className="pointer-events-none absolute inset-0 opacity-80"
+                style={{
+                  background:
+                    'radial-gradient(circle at 12% 20%, rgba(249, 196, 79, 0.18), transparent 60%), radial-gradient(circle at 88% 14%, rgba(217, 70, 239, 0.16), transparent 55%), radial-gradient(circle at 35% 80%, rgba(56, 189, 248, 0.12), transparent 60%)',
+                }}
+                aria-hidden
+              />
+              <div className="relative">{children}</div>
+            </div>
+          </div>
+
+          <footer className="relative overflow-hidden rounded-[28px] border border-[rgba(255,244,214,0.14)] bg-[rgba(33,12,53,0.78)] px-6 py-4 text-xs text-[rgba(255,247,237,0.7)] shadow-[0_18px_60px_rgba(120,45,110,0.3)] backdrop-blur-xl sm:px-10">
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-[rgba(249,196,79,0.08)] to-[rgba(91,33,182,0.18)]" aria-hidden />
+            <div className="relative flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                {commitUrl ? (
+                  <a href={commitUrl} className="underline">
+                    {shortSha} — {commitMessage}
+                  </a>
+                ) : (
+                  <span>
+                    {shortSha} — {commitMessage}
+                  </span>
+                )}{' '}
+                · {formattedTime}
+              </div>
+              <div className="flex items-center gap-2 text-[rgba(255,247,237,0.7)]">
+                <span aria-hidden>🪔</span>
+                <span>Crafted with warmth for every family gathering.</span>
+              </div>
+            </div>
           </footer>
         </div>
       </body>
