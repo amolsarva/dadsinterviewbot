@@ -452,7 +452,8 @@ textarea.diagnostics-log {
 
 .diagnostics-card {
   width: 100%;
-  max-width: 720px;
+  max-width: none;
+  align-self: stretch;
 }
 
 .diagnostics-card .diagnostics-head {
