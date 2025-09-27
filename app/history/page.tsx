@@ -26,25 +26,36 @@ type Row = {
   sessionAudioUrl?: string | null
 }
 
-export default function HistoryPage() {
+export function HistoryView({ userHandle }: { userHandle?: string }) {
+  const normalizedPropHandle = normalizeHandle(userHandle)
   const [rows, setRows] = useState<Row[]>([])
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
-  const [activeHandle, setActiveHandle] = useState<string | undefined>(undefined)
+  const [activeHandle, setActiveHandle] = useState<string | undefined>(normalizedPropHandle)
 
-  const getActiveHandle = useCallback(() => {
+  const resolveHandle = useCallback(() => {
+    if (normalizedPropHandle) return normalizedPropHandle
     if (typeof window === 'undefined') return undefined
     try {
-      const stored = window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
-      return normalizeHandle(stored)
+      return normalizeHandle(window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY))
     } catch {
       return undefined
     }
-  }, [])
+  }, [normalizedPropHandle])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (normalizedPropHandle) {
+      window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalizedPropHandle)
+      setActiveHandle(normalizedPropHandle)
+    } else {
+      setActiveHandle(resolveHandle())
+    }
+  }, [normalizedPropHandle, resolveHandle])
 
   const loadHistory = useCallback(async () => {
     try {
-      const handle = getActiveHandle()
+      const handle = resolveHandle()
       setActiveHandle(handle)
       const query = handle ? `?handle=${encodeURIComponent(handle)}` : ''
       const api = await (await fetch(`/api/history${query}`)).json()
@@ -52,7 +63,7 @@ export default function HistoryPage() {
       let demoRows: Row[] = []
       try {
         const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
-        const raw = localStorage.getItem(key)
+        const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null
         if (raw) {
           const list = JSON.parse(raw) as { id: string; created_at: string; title?: string | null }[]
           demoRows = list.map((d) => ({
@@ -78,27 +89,30 @@ export default function HistoryPage() {
     } catch {
       setRows([])
     }
-  }, [getActiveHandle])
+  }, [resolveHandle])
 
   useEffect(() => {
     loadHistory()
   }, [loadHistory])
 
-  const removeDemoEntry = useCallback((id: string) => {
-    try {
-      const handle = getActiveHandle()
-      const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
-      const raw = localStorage.getItem(key)
-      if (!raw) return
-      const list = JSON.parse(raw) as { id: string }[]
-      const filtered = list.filter((entry) => entry.id !== id)
-      if (filtered.length) {
-        localStorage.setItem(key, JSON.stringify(filtered))
-      } else {
-        localStorage.removeItem(key)
-      }
-    } catch {}
-  }, [getActiveHandle])
+  const removeDemoEntry = useCallback(
+    (id: string) => {
+      try {
+        const handle = resolveHandle()
+        const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
+        const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null
+        if (!raw) return
+        const list = JSON.parse(raw) as { id: string }[]
+        const filtered = list.filter((entry) => entry.id !== id)
+        if (filtered.length) {
+          window.localStorage.setItem(key, JSON.stringify(filtered))
+        } else {
+          window.localStorage.removeItem(key)
+        }
+      } catch {}
+    },
+    [resolveHandle],
+  )
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -119,20 +133,28 @@ export default function HistoryPage() {
   const handleClearAll = useCallback(async () => {
     setClearingAll(true)
     try {
-      const handle = getActiveHandle()
+      const handle = resolveHandle()
       const query = handle ? `?handle=${encodeURIComponent(handle)}` : ''
       const resp = await fetch(`/api/history${query}`, { method: 'DELETE' })
       if (resp.ok) {
         if (typeof window !== 'undefined') {
           const scopedKey = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
-          localStorage.removeItem(scopedKey)
+          window.localStorage.removeItem(scopedKey)
         }
         setRows([])
       }
     } finally {
       setClearingAll(false)
     }
-  }, [getActiveHandle])
+  }, [resolveHandle])
+
+  const scopedSessionLink = useCallback(
+    (id: string) => {
+      const handle = activeHandle
+      return handle ? `/u/${handle}/session/${id}` : `/session/${id}`
+    },
+    [activeHandle],
+  )
 
   return (
     <main>
@@ -180,7 +202,7 @@ export default function HistoryPage() {
                     )}
                   </div>
                   <div className="history-links">
-                    <a className="link" href={`/session/${s.id}`}>
+                    <a className="link" href={scopedSessionLink(s.id)}>
                       Open
                     </a>
                     {(s.manifestUrl || s.artifacts?.session_manifest) && (
@@ -199,12 +221,17 @@ export default function HistoryPage() {
                       </a>
                     )}
                     {s.artifacts?.transcript_txt && (
-                      <a className="link" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
+                      <a className="link" href={s.artifacts.transcript_txt ?? undefined} target="_blank" rel="noreferrer">
                         Transcript (txt)
                       </a>
                     )}
                     {s.artifacts?.transcript_json && (
-                      <a className="link" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
+                      <a
+                        className="link"
+                        href={s.artifacts.transcript_json ?? undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Transcript (json)
                       </a>
                     )}
@@ -215,7 +242,7 @@ export default function HistoryPage() {
                         target="_blank"
                         rel="noreferrer"
                       >
-                        Download session audio
+                        Session audio
                       </a>
                     )}
                   </div>
@@ -224,19 +251,16 @@ export default function HistoryPage() {
             ))}
           </ul>
         )}
-        {rows.length > 0 && (
-          <div className="history-footer">
-            <button
-              type="button"
-              onClick={handleClearAll}
-              disabled={clearingAll || !!deletingId}
-              className="btn-outline"
-            >
-              {clearingAll ? 'Clearing…' : 'Clear all history'}
-            </button>
-          </div>
-        )}
+        <div className="history-footer">
+          <button onClick={handleClearAll} disabled={clearingAll || rows.length === 0} className="btn-secondary">
+            {clearingAll ? 'Clearing…' : 'Clear all sessions'}
+          </button>
+        </div>
       </div>
     </main>
   )
+}
+
+export default function HistoryPage() {
+  return <HistoryView />
 }

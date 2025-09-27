@@ -10,6 +10,9 @@ import { detectCompletionIntent } from '@/lib/intents'
 
 const SYSTEM_PROMPT = `You are a warm, curious biographer inspired by the book “The Essential Questions”, but you are not following a rigid script.
 You remember every conversation provided in the memory section below.
+Conversation openings:
+- If the memory prompt indicates no previous sessions and no turns yet in the current session, greet the user with a unique welcome to Dad's Interview Bot, explain that the goal is to capture their stories, and invite them to begin when they feel ready.
+- Otherwise, begin by reminding the user that the goal is to preserve their memories, reassure them you are keeping track of everything they share, and, when natural, reference one specific detail supplied in the memory prompt to demonstrate that memory.
 Principles:
 - Follow the user's lead and respond directly to any instruction, question, or aside before you consider another prompt.
 - Be open to any topic the user brings up, gently weaving the discussion back toward the life-story themes when it feels natural.
@@ -18,6 +21,7 @@ Principles:
 - If a reply is brief or uncertain, adapt by changing angles or suggesting a different avenue instead of insisting on the same question.
 - Ask at most one short, specific, open-ended question (<= 20 words) only when the user seems ready to keep going.
 - Keep silence handling patient; do not rush to speak if the user pauses briefly.
+- When you refer to remembered details, say explicitly that you are remembering them for the user.
 - If the user signals they are finished for now, set end_intent to true and close warmly without pushing another question. Say you are happy to talk more later.
 Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|false}.`
 
@@ -51,8 +55,10 @@ type MemoryPrompt = {
   questionText: string
   recentConversation: string
   askedQuestions: string[]
-  detailForFallback?: string
+  highlightDetail?: string
   primerText: string
+  hasPriorSessions: boolean
+  hasCurrentConversation: boolean
 }
 
 function softenQuestion(question: string | null | undefined): string {
@@ -72,17 +78,21 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
       recentConversation: '',
       askedQuestions: [],
       primerText: '',
+      highlightDetail: undefined,
+      hasPriorSessions: false,
+      hasCurrentConversation: false,
     }
   }
 
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
   const askedQuestions = collectAskedQuestions(sessions)
-  const detailForFallback = findLatestUserDetails(sessions, { limit: 1 })[0]
+  const highlightDetail = findLatestUserDetails(sessions, { limit: 1 })[0]
   const primer = await getMemoryPrimer()
   const primerText = primer.text ? primer.text.trim() : ''
 
   const historyLines: string[] = []
   const priorSessions = sessions.filter((session) => session.id !== sessionId)
+  const hasPriorSessions = priorSessions.length > 0
   if (priorSessions.length) {
     historyLines.push('Highlights from previous sessions:')
     for (const session of priorSessions.slice(0, 4)) {
@@ -93,7 +103,8 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
   }
 
   const conversationLines: string[] = []
-  if (current && current.turns.length) {
+  const hasCurrentConversation = Boolean(current && current.turns.length)
+  if (hasCurrentConversation) {
     conversationLines.push('Current session so far:')
     for (const turn of current.turns.slice(-6)) {
       const roleLabel = turn.role === 'assistant' ? 'You' : 'User'
@@ -120,8 +131,10 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
     questionText: questionLines.join('\n'),
     recentConversation: conversationLines.join('\n'),
     askedQuestions,
-    detailForFallback,
+    highlightDetail,
     primerText,
+    hasPriorSessions,
+    hasCurrentConversation,
   }
 }
 
@@ -137,14 +150,16 @@ export async function POST(req: NextRequest) {
       await ensureSessionMemoryHydrated().catch(() => undefined)
     }
     const memory = await buildMemoryPrompt(sessionId)
-    const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.detailForFallback)
+    const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
-    const fallbackReply = memory.detailForFallback
-      ? `I remember you mentioned ${memory.detailForFallback}. We can stay with that or wander somewhere entirely new—whatever feels right to you.${
+    const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
+      ? "Welcome to Dad's Interview Bot! I'm here to help you capture the stories and details that matter so they stay vivid for the people you love. Whenever you're ready, tell me about a moment or tradition you'd like to remember."
+      : memory.highlightDetail
+      ? `It's good to be back with you. I remember you reflecting on ${memory.highlightDetail}, and I'll keep that and anything new you share safe for you.${
           fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
-      : `I'm here with you and happy to talk about anything on your mind.${
-          fallbackSuggestion ? ` ${fallbackSuggestion}` : ' If you’d like a prompt, I can offer one whenever you choose.'
+      : `I'm ready to keep collecting your memories and will remember everything you share so it stays vivid.${
+          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
 
     if (!process.env.GOOGLE_API_KEY) {
@@ -166,6 +181,9 @@ export async function POST(req: NextRequest) {
     parts.push({ text: memory.questionText })
     if (memory.recentConversation) {
       parts.push({ text: memory.recentConversation })
+    }
+    if (memory.highlightDetail) {
+      parts.push({ text: `Recent remembered detail: ${memory.highlightDetail}` })
     }
     if (audio) parts.push({ inlineData: { mimeType: `audio/${format}`, data: audio } })
     if (text) parts.push({ text })

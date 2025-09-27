@@ -1,5 +1,6 @@
 import './globals.css'
 import React from 'react'
+import { SiteNav } from './site-nav'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const commitSha =
@@ -16,15 +17,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const shortSha = commitSha ? commitSha.slice(0, 7) : 'local'
   const commitUrl = commitSha && repoOwner && repoSlug ? `https://github.com/${repoOwner}/${repoSlug}/commit/${commitSha}` : null
 
-  let formattedTime = 'just now (Eastern Time)'
+  const easternFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+  const fallbackEasternTime = `${easternFormatter.format(new Date())} Eastern Time`
+  let formattedTime = fallbackEasternTime
   if (commitTimestamp) {
     const parsed = new Date(commitTimestamp)
     if (!Number.isNaN(parsed.valueOf())) {
-      formattedTime = `${new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York',
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(parsed)} Eastern Time`
+      formattedTime = `${easternFormatter.format(parsed)} Eastern Time`
     }
   }
 
@@ -34,12 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="site-shell">
           <header className="site-header">
             <h1 className="site-title">Dad&apos;s Interview Bot</h1>
-            <nav className="site-nav">
-              <a href="/">Home</a>
-              <a href="/history">History</a>
-              <a href="/settings">Settings</a>
-              <a href="/diagnostics">Diagnostics</a>
-            </nav>
+            <SiteNav />
           </header>
           <div className="panel-section">{children}</div>
           <footer className="site-footer">

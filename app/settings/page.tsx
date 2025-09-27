@@ -9,11 +9,12 @@ import {
   scopedStorageKey,
 } from '@/lib/user-scope'
 
-export default function SettingsPage() {
+export function SettingsView({ userHandle }: { userHandle?: string }) {
+  const normalizedPropHandle = normalizeHandle(userHandle)
   const [email, setEmail] = useState('')
   const [sendEmails, setSendEmails] = useState(true)
   const [saved, setSaved] = useState(false)
-  const [activeHandle, setActiveHandle] = useState<string | undefined>(undefined)
+  const [activeHandle, setActiveHandle] = useState<string | undefined>(normalizedPropHandle)
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -22,9 +23,16 @@ export default function SettingsPage() {
       setActiveHandle(undefined)
       return
     }
+
     try {
-      const storedHandle = normalizeHandle(window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY))
+      const storedHandle = normalizedPropHandle
+        ? normalizedPropHandle
+        : normalizeHandle(window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY))
+      if (normalizedPropHandle) {
+        window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalizedPropHandle)
+      }
       setActiveHandle(storedHandle)
+
       const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, storedHandle)
       setEmail(window.localStorage.getItem(emailKey) || DEFAULT_NOTIFY_EMAIL)
       const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, storedHandle)
@@ -35,7 +43,7 @@ export default function SettingsPage() {
       setSendEmails(true)
       setActiveHandle(undefined)
     }
-  }, [])
+  }, [normalizedPropHandle])
 
   useEffect(() => {
     setSaved(false)
@@ -71,8 +79,10 @@ export default function SettingsPage() {
             onClick={() => {
               const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, activeHandle)
               const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, activeHandle)
-              localStorage.setItem(emailKey, email)
-              localStorage.setItem(enabledKey, sendEmails ? 'true' : 'false')
+              if (typeof window !== 'undefined') {
+                window.localStorage.setItem(emailKey, email)
+                window.localStorage.setItem(enabledKey, sendEmails ? 'true' : 'false')
+              }
               setSaved(true)
             }}
           >
@@ -83,4 +93,8 @@ export default function SettingsPage() {
       </div>
     </main>
   )
+}
+
+export default function SettingsPage() {
+  return <SettingsView />
 }
