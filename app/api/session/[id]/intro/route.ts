@@ -105,11 +105,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const details = findLatestUserDetails(previousSessionsWithDetails, { limit: 3 })
   const askedQuestions = collectAskedQuestions(sessions)
   const fallbackQuestion = pickFallbackQuestion(askedQuestions, details[0])
+  const hasHistory = previousSessionsWithDetails.length > 0
   const fallbackMessage = buildFallbackIntro({
     titles,
     details,
     question: fallbackQuestion,
-    hasHistory: previousSessionsWithDetails.length > 0,
+    hasHistory,
   })
   const primerText = buildMemoryPrimerPreview(previousSessionsWithDetails, {
     heading: "Here's what I'm already remembering for you:",
@@ -173,6 +174,18 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
     if (!message || !message.includes('?')) {
       message = `${message ? `${message} ` : ''}${fallbackQuestion}`.trim()
+    }
+
+    if (!hasHistory) {
+      const lowercaseMessage = message.toLowerCase()
+      const hasWarmGreeting =
+        lowercaseMessage.includes("i'm dad's interview bot") ||
+        lowercaseMessage.includes('welcome') ||
+        lowercaseMessage.includes('hello') ||
+        lowercaseMessage.includes("i'm here to")
+      if (!hasWarmGreeting) {
+        message = fallbackMessage
+      }
     }
 
     if (!message) {
