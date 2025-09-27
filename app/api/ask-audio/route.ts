@@ -48,7 +48,27 @@ type AskAudioResponse = {
   reply: string
   transcript: string
   end_intent: boolean
+  debug?: {
+    sessionId: string | null
+    turn: number | null
+    provider: string
+    usedFallback: boolean
+    reason?: string
+    providerResponseSnippet?: string
+    memory?: {
+      hasPriorSessions: boolean
+      hasCurrentConversation: boolean
+      highlightDetail: string | null
+      recentConversationPreview: string
+      historyPreview: string
+      questionPreview: string
+      primerPreview: string
+      askedQuestionsPreview: string[]
+    }
+  }
 }
+
+type AskAudioDebug = NonNullable<AskAudioResponse['debug']>
 
 type MemoryPrompt = {
   historyText: string
@@ -142,15 +162,36 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
 export async function POST(req: NextRequest) {
   const url = new URL(req.url)
   const provider = url.searchParams.get('provider') || process.env.PROVIDER || 'google'
+  let requestTurn: number | null = null
+  let requestSessionId: string | undefined
+  let debugMemory: AskAudioDebug['memory'] | undefined
   try {
     const raw = await req.text().catch(() => '')
     const body: AskAudioBody = raw && raw.length ? safeJsonParse(raw) : {}
     const { audio, format = 'webm', text, sessionId } = body || {}
+    requestTurn = typeof body?.turn === 'number' ? body.turn : null
+    requestSessionId = typeof sessionId === 'string' && sessionId ? sessionId : undefined
 
     if (sessionId) {
       await ensureSessionMemoryHydrated().catch(() => undefined)
     }
     const memory = await buildMemoryPrompt(sessionId)
+    debugMemory = {
+      hasPriorSessions: memory.hasPriorSessions,
+      hasCurrentConversation: memory.hasCurrentConversation,
+      highlightDetail: memory.highlightDetail ?? null,
+      recentConversationPreview: memory.recentConversation.slice(0, 400),
+      historyPreview: memory.historyText.slice(0, 400),
+      questionPreview: memory.questionText.slice(0, 400),
+      primerPreview: memory.primerText.slice(0, 400),
+      askedQuestionsPreview: memory.askedQuestions.slice(0, 10),
+    }
+    const debugBase = {
+      sessionId: requestSessionId ?? null,
+      turn: requestTurn,
+      provider,
+      memory: debugMemory,
+    }
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
     const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
@@ -170,6 +211,7 @@ export async function POST(req: NextRequest) {
         reply: fallbackReply,
         transcript: text || '',
         end_intent: detectCompletionIntent(text || '').shouldStop,
+        debug: { ...debugBase, usedFallback: true, reason: 'missing_api_key' },
       })
     }
 
@@ -209,6 +251,7 @@ export async function POST(req: NextRequest) {
       reply: fallbackReply,
       transcript: text || '',
       end_intent: detectCompletionIntent(text || '').shouldStop,
+      debug: { ...debugBase, usedFallback: true, reason: 'fallback_guard' },
     }
 
     try {
@@ -229,6 +272,11 @@ export async function POST(req: NextRequest) {
         reply,
         transcript: transcriptText,
         end_intent: Boolean(parsed.end_intent) || completion.shouldStop,
+        debug: {
+          ...debugBase,
+          usedFallback: false,
+          providerResponseSnippet: txt.slice(0, 400),
+        },
       })
     } catch {
       const normalized = normalizeQuestion(txt)
@@ -241,6 +289,12 @@ export async function POST(req: NextRequest) {
         reply: txt || fallback.reply,
         transcript: txt || fallback.transcript || '',
         end_intent: fallback.end_intent || completion.shouldStop,
+        debug: {
+          ...debugBase,
+          usedFallback: true,
+          reason: 'unstructured_response',
+          providerResponseSnippet: txt.slice(0, 400),
+        },
       })
     }
   } catch (e) {
@@ -250,6 +304,14 @@ export async function POST(req: NextRequest) {
       reply: 'Who else was there? Share a first name and one detail about them.',
       transcript: '',
       end_intent: false,
+      debug: {
+        sessionId: requestSessionId ?? null,
+        turn: requestTurn,
+        provider,
+        usedFallback: true,
+        reason: 'exception',
+        memory: debugMemory,
+      },
     })
   }
 }

@@ -99,8 +99,18 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const primer = await getMemoryPrimer().catch(() => ({ text: '' }))
   const primerText = primer && typeof primer === 'object' && 'text' in primer && primer.text ? String(primer.text) : ''
 
+  const debug = {
+    hasPriorSessions: previousSessions.length > 0,
+    sessionCount: sessions.length,
+    rememberedTitles: titles,
+    rememberedDetails: details,
+    askedQuestionsPreview: askedQuestions.slice(0, 10),
+    primerPreview: primerText.slice(0, 400),
+    fallbackQuestion,
+  }
+
   if (!process.env.GOOGLE_API_KEY) {
-    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true })
+    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
   }
 
   try {
@@ -148,12 +158,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     }
 
     if (!message) {
-      return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true })
+      return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
     }
 
-    return NextResponse.json({ ok: true, message, fallback: false })
+    return NextResponse.json({ ok: true, message, fallback: false, debug })
   } catch (error: any) {
     const reason = typeof error?.message === 'string' ? error.message : 'intro_failed'
-    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, reason })
+    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, reason, debug })
   }
 }
