@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import {
   collectAskedQuestions,
+  extractAskedQuestions,
   findLatestUserDetails,
   normalizeQuestion,
   pickFallbackQuestion,
@@ -113,7 +114,7 @@ function softenQuestion(question: string | null | undefined): string {
   if (!trimmed.length) return ''
   const withoutQuestion = trimmed.replace(/[?]+$/, '')
   const lowered = withoutQuestion.charAt(0).toLowerCase() + withoutQuestion.slice(1)
-  return `If you'd like, you could share ${lowered}.`
+  return `If you'd like, you could share ${lowered}?`
 }
 
 async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryPrompt> {
@@ -221,7 +222,7 @@ export async function POST(req: NextRequest) {
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
     const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
-      ? "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, share a moment or tradition you'd like me to remember."
+      ? "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, would you start with a memory you'd like me to remember?"
       : memory.highlightDetail
       ? `Welcome back. I'm still holding onto what you told me about ${memory.highlightDetail}. Let's add another chapter to your archive.${
           fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
@@ -282,18 +283,62 @@ export async function POST(req: NextRequest) {
 
     const parsed = parseJsonFromText(txt)
     if (parsed && typeof parsed === 'object') {
-      let reply = typeof (parsed as any).reply === 'string' ? (parsed as any).reply : fallback.reply
-      if (reply) {
-        const normalizedReply = normalizeQuestion(reply)
-        if (normalizedReply && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalizedReply)) {
-          reply = fallbackReply
-        }
-      }
+      const rawReply =
+        typeof (parsed as any).reply === 'string' && (parsed as any).reply.trim().length
+          ? (parsed as any).reply.trim()
+          : ''
       const transcriptText =
         typeof (parsed as any).transcript === 'string' && (parsed as any).transcript.trim().length
           ? (parsed as any).transcript
           : fallback.transcript || ''
       const completion = detectCompletionIntent(transcriptText || text || '')
+
+      let candidateQuestion =
+        typeof (parsed as any).question === 'string' && (parsed as any).question.trim().length
+          ? (parsed as any).question.trim()
+          : null
+
+      if (!candidateQuestion && rawReply) {
+        const questionsInReply = extractAskedQuestions(rawReply)
+        if (questionsInReply.length) {
+          candidateQuestion = questionsInReply[questionsInReply.length - 1]
+        }
+      }
+
+      if (candidateQuestion) {
+        const normalizedCandidate = normalizeQuestion(candidateQuestion)
+        if (
+          normalizedCandidate &&
+          memory.askedQuestions.some((question) => normalizeQuestion(question) === normalizedCandidate)
+        ) {
+          candidateQuestion = fallbackQuestion
+        }
+      }
+
+      let reply = rawReply
+      if (candidateQuestion) {
+        reply = reply && !reply.includes(candidateQuestion) ? `${reply} ${candidateQuestion}`.trim() : reply || candidateQuestion
+      } else if (fallbackSuggestion) {
+        reply = reply ? `${reply} ${fallbackSuggestion}`.trim() : fallbackSuggestion
+      }
+
+      if (!reply) {
+        reply = fallbackReply
+      }
+
+      reply = reply.trim()
+
+      const extractedQuestions = extractAskedQuestions(reply)
+      const normalizedFinalQuestion = extractedQuestions.length
+        ? normalizeQuestion(extractedQuestions[extractedQuestions.length - 1])
+        : ''
+      if (
+        normalizedFinalQuestion &&
+        memory.askedQuestions.some((question) => normalizeQuestion(question) === normalizedFinalQuestion)
+      ) {
+        reply = reply.includes(fallbackQuestion) ? reply : `${reply} ${fallbackQuestion}`.trim()
+      }
+
       return NextResponse.json({
         ok: true,
         provider: 'google',

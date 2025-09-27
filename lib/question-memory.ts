@@ -1,16 +1,16 @@
 import type { SessionMemorySnapshot } from './data'
 
 const FALLBACK_QUESTION_POOL = [
-  'What tiny detail from that moment still feels sharp to you?',
-  'Who else was nearby, and what do you remember about them?',
-  'What sounds or scents come back when you picture it?',
-  'What happened just before that scene unfolded?',
-  'How did you feel right after it happened?',
-  'Is there an object or keepsake that still reminds you of it?',
-  'What was the weather or light like around you?',
-  'What music or voices were in the background?',
-  'What did you eat or drink around that time?',
-  'What colors or textures stand out when you think about it?',
+  'Could you set the scene for me—where were you when this memory took place?',
+  'Who else shared that moment with you, and what were they doing?',
+  'What was the very first thing you noticed as it unfolded?',
+  'What feeling rushed in right away?',
+  'Is there a small sound or scent that still brings it back to you?',
+  'Was there an object in the room that now holds extra meaning for you?',
+  'What was happening just a few moments before everything began?',
+  'How did the light or weather color that scene for you?',
+  'What voices or music drifted through the background?',
+  'Was there a taste or texture that anchors the memory for you?',
 ]
 
 export function normalizeQuestion(question: string): string {

@@ -19,6 +19,9 @@ function formatList(items: string[]): string {
   return `${items[0]}, ${items[1]}, and ${items[2]}`
 }
 
+const FIRST_TIME_INTRO_QUESTION =
+  "Would you start by telling me the first memory you'd like to save together?"
+
 function buildFallbackIntro(options: {
   titles: string[]
   details: string[]
@@ -35,7 +38,10 @@ function buildFallbackIntro(options: {
     ? `The last thing you shared was about ${details[0]}.`
     : "I'll remember every detail you share from this moment on."
   const invitation = hasHistory ? 'When you are ready,' : 'When you feel ready,'
-  return `${introPrefix} ${reminder} ${invitation} ${question}`.trim()
+  const closingQuestion = hasHistory
+    ? question || 'Where would you like to pick up the story?'
+    : FIRST_TIME_INTRO_QUESTION
+  return `${introPrefix} ${reminder} ${invitation} ${closingQuestion}`.trim()
 }
 
 function buildHistorySummary(
