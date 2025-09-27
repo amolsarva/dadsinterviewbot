@@ -103,10 +103,11 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
   }
 
   const conversationLines: string[] = []
-  const hasCurrentConversation = Boolean(current && current.turns.length)
+  const currentTurns = current?.turns ?? []
+  const hasCurrentConversation = currentTurns.length > 0
   if (hasCurrentConversation) {
     conversationLines.push('Current session so far:')
-    for (const turn of current.turns.slice(-6)) {
+    for (const turn of currentTurns.slice(-6)) {
       const roleLabel = turn.role === 'assistant' ? 'You' : 'User'
       conversationLines.push(`${roleLabel}: ${turn.text}`)
     }
