@@ -1,5 +1,6 @@
 "use client"
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
@@ -176,63 +177,93 @@ const STATE_VISUALS: Record<
   | 'playing'
   | 'readyToContinue'
   | 'doneSuccess',
-  { icon: string; badge: string; title: string; description: string; gradient: string }
+  {
+    icon: string
+    badge: string
+    title: string
+    description: string
+    tone: { accent: string; gradient: string }
+  }
 > = {
   idle: {
     icon: '✨',
     badge: 'Ready',
     title: 'Ready to begin',
     description: 'I’ll start the conversation for you—just settle in and listen.',
-    gradient: 'from-sky-400/40 via-blue-500/30 to-indigo-500/40',
+    tone: {
+      accent: '#1b8d55',
+      gradient: 'linear-gradient(135deg, rgba(255, 186, 102, 0.3), rgba(255, 247, 237, 0.88), rgba(121, 205, 159, 0.32))',
+    },
   },
   calibrating: {
     icon: '🎚️',
     badge: 'Preparing',
     title: 'Getting ready to listen',
     description: 'Give me a moment to measure the room noise before I start recording.',
-    gradient: 'from-cyan-400/40 via-sky-400/40 to-indigo-400/40',
+    tone: {
+      accent: '#0ea5e9',
+      gradient: 'linear-gradient(135deg, rgba(125, 211, 161, 0.28), rgba(14, 165, 233, 0.24))',
+    },
   },
   recording: {
     icon: '🎤',
     badge: 'Listening',
     title: 'Listening',
     description: 'I’m capturing every detail you say. Speak naturally and tap the ring when you’d like me to stop listening.',
-    gradient: 'from-emerald-400/40 via-lime-300/40 to-emerald-500/40',
+    tone: {
+      accent: '#f97316',
+      gradient: 'linear-gradient(135deg, rgba(255, 186, 102, 0.3), rgba(255, 247, 237, 0.82), rgba(19, 136, 8, 0.22))',
+    },
   },
   thinking: {
     icon: '🤔',
     badge: 'Thinking',
     title: 'Thinking',
     description: 'Give me a brief moment while I make sense of what you shared.',
-    gradient: 'from-fuchsia-400/40 via-purple-500/40 to-indigo-600/40',
+    tone: {
+      accent: '#9333ea',
+      gradient: 'linear-gradient(135deg, rgba(244, 187, 255, 0.28), rgba(190, 227, 248, 0.26))',
+    },
   },
   speakingPrep: {
     icon: '🔄',
     badge: 'Warming up',
     title: 'Preparing to speak',
     description: 'Spinning up my voice so I can respond clearly.',
-    gradient: 'from-amber-300/40 via-amber-400/40 to-orange-500/40',
+    tone: {
+      accent: '#f97316',
+      gradient: 'linear-gradient(135deg, rgba(255, 207, 134, 0.34), rgba(255, 247, 237, 0.86))',
+    },
   },
   playing: {
     icon: '💬',
     badge: 'Speaking',
     title: 'Speaking',
     description: 'Sharing what I heard and how we can keep going.',
-    gradient: 'from-amber-400/40 via-orange-500/40 to-amber-600/40',
+    tone: {
+      accent: '#f97316',
+      gradient: 'linear-gradient(135deg, rgba(255, 186, 102, 0.32), rgba(255, 247, 237, 0.86))',
+    },
   },
   readyToContinue: {
     icon: '✨',
     badge: 'Ready',
     title: 'Ready for more',
     description: 'Just start speaking whenever you’re ready for the next part.',
-    gradient: 'from-sky-400/40 via-cyan-400/40 to-blue-500/40',
+    tone: {
+      accent: '#1b8d55',
+      gradient: 'linear-gradient(135deg, rgba(121, 205, 159, 0.3), rgba(255, 247, 237, 0.8))',
+    },
   },
   doneSuccess: {
     icon: '✅',
     badge: 'Complete',
     title: 'Session complete',
     description: 'Review your links or start another memory when you feel inspired.',
-    gradient: 'from-slate-400/40 via-slate-500/40 to-slate-600/40',
+    tone: {
+      accent: '#0f7c4b',
+      gradient: 'linear-gradient(135deg, rgba(121, 205, 159, 0.26), rgba(255, 247, 237, 0.82))',
+    },
   },
 }
 
@@ -1076,11 +1107,23 @@ export function Home({ userHandle }: { userHandle?: string }) {
         return visual.description
     }
   })()
-  const heroGradient = finishRequested
-    ? 'from-amber-400/40 via-amber-500/40 to-orange-500/40'
+  const heroTone = finishRequested
+    ? { accent: '#f97316', gradient: 'linear-gradient(135deg, rgba(255, 186, 102, 0.36), rgba(255, 247, 237, 0.88))' }
     : manualStopRequested
-      ? 'from-rose-400/40 via-rose-500/40 to-red-500/40'
-      : visual.gradient
+      ? { accent: '#ef4444', gradient: 'linear-gradient(135deg, rgba(248, 113, 113, 0.26), rgba(244, 114, 182, 0.22))' }
+      : visual.tone
+  const heroStyles = {
+    '--hero-accent': heroTone.accent,
+    '--hero-gradient': heroTone.gradient,
+  } as CSSProperties
+  const heroButtonClasses = ['hero-button']
+  if (finishRequested) {
+    heroButtonClasses.push('is-finishing')
+  } else if (manualStopRequested) {
+    heroButtonClasses.push('is-stopping')
+  } else if (machineState === 'recording') {
+    heroButtonClasses.push('is-recording')
+  }
   const heroAriaLabel = finishRequested
     ? 'Wrapping up the session'
     : manualStopRequested
@@ -1123,100 +1166,84 @@ export function Home({ userHandle }: { userHandle?: string }) {
   })()
 
   return (
-    <main className="mt-6 flex justify-center px-4 pb-16">
-      <div className="flex w-full max-w-4xl flex-col items-center gap-12">
-        <div className="flex w-full flex-col items-center gap-8">
-          {displayHandle && (
-            <div className="text-sm text-white/70">
-              Account: <span className="font-semibold text-white">@{displayHandle.toLowerCase()}</span>
-            </div>
-          )}
-          <div className="relative w-full max-w-[min(90vw,460px)]">
+    <main className="home-main">
+      <div className="panel-card hero-card">
+        {displayHandle && (
+          <div className="account-chip">
+            Account: <span className="highlight">@{displayHandle.toLowerCase()}</span>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={handleHeroPress}
+          className={heroButtonClasses.join(' ')}
+          aria-label={heroAriaLabel}
+          style={heroStyles}
+        >
+          <span className="hero-button__gradient" aria-hidden="true" />
+          <span className="hero-button__pulse" aria-hidden="true" />
+          <span className="hero-button__dot" aria-hidden="true" />
+          <span className="hero-button__content">
+            <span className="hero-button__icon" aria-hidden="true">
+              {heroIcon}
+            </span>
+            <span className="hero-button__badge">{heroBadge}</span>
+            <span className="hero-button__title">{heroTitle}</span>
+            <span className="hero-button__description">{heroDescription}</span>
+          </span>
+        </button>
+
+        <div className="status-block">
+          <div className="status-text">{statusMessage}</div>
+          {machineState === 'doneSuccess' ? (
             <button
-              type="button"
-              onClick={handleHeroPress}
-              className="group relative aspect-square w-full overflow-hidden rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white/60"
-              aria-label={heroAriaLabel}
+              onClick={() => {
+                try {
+                  recorderRef.current?.cancel()
+                } catch {}
+                recorderRef.current = null
+                sessionAudioUrlRef.current = null
+                sessionAudioDurationRef.current = 0
+                conversationRef.current = []
+                setHasStarted(false)
+                setTurn(0)
+                setFinishRequested(false)
+                finishRequestedRef.current = false
+                manualStopRef.current = false
+                setManualStopRequested(false)
+                updateMachineState('idle')
+              }}
+              className="btn-secondary btn-large"
             >
-              <span className="absolute inset-0 rounded-full bg-black/20 blur-3xl" aria-hidden="true" />
-              <span
-                className={`absolute inset-[8%] rounded-full bg-gradient-to-br ${heroGradient} animate-soft-pulse shadow-[0_0_80px_rgba(255,255,255,0.18)]`}
-                aria-hidden="true"
-              />
-              <span className="absolute inset-[12%] rounded-full border border-white/15 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
-              <span className="absolute inset-[18%] rounded-full border border-white/10 animate-slow-ripple" aria-hidden="true" />
-              <span
-                className="absolute inset-[18%] rounded-full border border-white/5 animate-slow-ripple"
-                style={{ animationDelay: '1.2s' }}
-                aria-hidden="true"
-              />
-              <span className="absolute inset-[18%] flex flex-col items-center justify-center px-8 text-center">
-                <span className="text-5xl md:text-6xl" aria-hidden="true">
-                  {heroIcon}
-                </span>
-                <span className="mt-4 text-[11px] uppercase tracking-[0.45em] text-white/50">{heroBadge}</span>
-                <span className="mt-3 text-3xl font-semibold md:text-4xl">{heroTitle}</span>
-                <span className="mt-4 text-sm text-white/70 md:text-base">{heroDescription}</span>
-              </span>
+              Start Again
             </button>
-          </div>
-
-          <div className="flex flex-col items-center gap-4 text-center">
-            <div className="text-sm text-white/70">{statusMessage}</div>
-            {machineState === 'doneSuccess' ? (
-              <button
-                onClick={() => {
-                  try {
-                    recorderRef.current?.cancel()
-                  } catch {}
-                  recorderRef.current = null
-                  sessionAudioUrlRef.current = null
-                  sessionAudioDurationRef.current = 0
-                  conversationRef.current = []
-                  setHasStarted(false)
-                  setTurn(0)
-                  setFinishRequested(false)
-                  finishRequestedRef.current = false
-                  manualStopRef.current = false
-                  setManualStopRequested(false)
-                  updateMachineState('idle')
-                }}
-                className="rounded-full bg-white px-8 py-3 text-lg font-semibold text-black shadow-lg transition hover:bg-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/60"
-              >
-                Start Again
-              </button>
-            ) : null}
-            {machineState !== 'doneSuccess' && (
-              <button
-                onClick={requestFinish}
-                disabled={!hasStarted || finishRequested}
-                className="rounded-full border border-white/20 bg-white/5 px-5 py-2 text-sm font-medium text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/40 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
-              >
-                I’m finished
-              </button>
-            )}
-          </div>
+          ) : null}
+          {machineState !== 'doneSuccess' && (
+            <button
+              onClick={requestFinish}
+              disabled={!hasStarted || finishRequested}
+              className="btn-outline"
+            >
+              I’m finished
+            </button>
+          )}
         </div>
+      </div>
 
-        <div className="w-full max-w-2xl">
-          <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.4em] text-white/40">
-            <span>Diagnostics log</span>
-            <a className="text-xs font-medium uppercase tracking-[0.2em] text-white/50 underline hover:text-white/80" href="/diagnostics">
-              Open
-            </a>
-          </div>
-          <textarea
-            value={debugLog.join('\n')}
-            readOnly
-            className="mt-2 h-28 w-full resize-none rounded border border-white/10 bg-black/30 p-3 text-[11px] leading-relaxed text-white/70"
-          />
-          <div className="mt-1 text-[11px] text-white/40">
-            Need more detail?{' '}
-            <a className="underline hover:text-white/80" href="/diagnostics">
-              Visit Diagnostics
-            </a>
-            .
-          </div>
+      <div className="panel-card diagnostics-card">
+        <div className="diagnostics-head">
+          <span>Diagnostics log</span>
+          <a className="diagnostics-link" href="/diagnostics">
+            Open
+          </a>
+        </div>
+        <textarea value={debugLog.join('\n')} readOnly rows={6} className="diagnostics-log" />
+        <div className="page-subtext">
+          Need more detail?{' '}
+          <a className="link" href="/diagnostics">
+            Visit Diagnostics
+          </a>
+          .
         </div>
       </div>
     </main>

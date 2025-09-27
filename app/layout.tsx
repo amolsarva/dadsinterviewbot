@@ -30,21 +30,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <html lang="en">
-      <body className="min-h-screen">
-        <div className="max-w-3xl mx-auto px-4 py-6">
-          <header className="flex items-center justify-between mb-6">
-            <h1 className="text-xl font-semibold">Dad&apos;s Interview Bot</h1>
-            <nav className="space-x-4 text-sm opacity-90">
-              <a href="/" className="underline">Home</a>
-              <a href="/history" className="underline">History</a>
-              <a href="/settings" className="underline">Settings</a>
-              <a href="/diagnostics" className="underline">Diagnostics</a>
+      <body>
+        <div className="site-shell">
+          <header className="site-header">
+            <h1 className="site-title">Dad&apos;s Interview Bot</h1>
+            <nav className="site-nav">
+              <a href="/">Home</a>
+              <a href="/history">History</a>
+              <a href="/settings">Settings</a>
+              <a href="/diagnostics">Diagnostics</a>
             </nav>
           </header>
-          {children}
-          <footer className="mt-10 text-xs opacity-70">
+          <div className="panel-section">{children}</div>
+          <footer className="site-footer">
             {commitUrl ? (
-              <a href={commitUrl} className="underline">
+              <a href={commitUrl}>
                 {shortSha} — {commitMessage}
               </a>
             ) : (
