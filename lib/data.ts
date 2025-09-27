@@ -694,24 +694,49 @@ export type SessionMemorySnapshot = {
   title?: string
   status: Session['status']
   total_turns: number
+  user_handle?: string | null
   turns: { role: Turn['role']; text: string }[]
 }
 
 export function getSessionMemorySnapshot(
   focusSessionId?: string,
+  options: { handle?: string | null } = {},
 ): { current?: SessionMemorySnapshot; sessions: SessionMemorySnapshot[] } {
-  const sessions = Array.from(mem.sessions.values())
+  const requestedHandle = normalizeHandle(options.handle ?? undefined)
+
+  const snapshots = Array.from(mem.sessions.values())
     .map((session) => ({
       id: session.id,
       created_at: session.created_at,
       title: session.title,
       status: session.status,
       total_turns: session.total_turns,
+      user_handle: session.user_handle ?? null,
       turns: (session.turns || []).map((turn) => ({ role: turn.role, text: turn.text })),
+      normalized_handle: normalizeHandle(session.user_handle ?? undefined),
     }))
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
 
-  const current = focusSessionId ? sessions.find((session) => session.id === focusSessionId) : undefined
+  let focusHandle = requestedHandle
+  if (!focusHandle && focusSessionId) {
+    const focusSession = snapshots.find((session) => session.id === focusSessionId)
+    if (focusSession) {
+      focusHandle = focusSession.normalized_handle
+    }
+  }
+
+  const filtered = snapshots.filter((session) => {
+    if (focusHandle) {
+      return session.normalized_handle === focusHandle
+    }
+    return !session.normalized_handle
+  })
+
+  const currentRaw = focusSessionId ? filtered.find((session) => session.id === focusSessionId) : undefined
+  const sessions = filtered.map(({ normalized_handle, ...rest }) => rest as SessionMemorySnapshot)
+  const current = currentRaw
+    ? (({ normalized_handle, ...rest }) => rest as SessionMemorySnapshot)(currentRaw)
+    : undefined
 
   return { current, sessions }
 }
