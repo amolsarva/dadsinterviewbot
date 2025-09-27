@@ -43,32 +43,43 @@ export default function SettingsPage() {
 
   return (
     <main>
-      <h2 className="text-lg font-semibold mb-4">Settings</h2>
-      {activeHandle && (
-        <p className="-mt-2 mb-4 text-xs text-white/60">Active account: <span className="font-semibold text-white">@{activeHandle}</span></p>
-      )}
-      <label className="block text-sm mb-1">Default notify email</label>
-      <input value={email} onChange={e=>setEmail(e.target.value)} className="bg-white/10 rounded p-2 w-full max-w-md" />
-      <label className="flex items-center gap-2 text-sm mt-4">
-        <input
-          type="checkbox"
-          checked={sendEmails}
-          onChange={e => setSendEmails(e.target.checked)}
-        />
-        <span>Send session summaries by email</span>
-      </label>
-      <div className="mt-3">
-        <button
-          onClick={()=>{
-            const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, activeHandle)
-            const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, activeHandle)
-            localStorage.setItem(emailKey, email)
-            localStorage.setItem(enabledKey, sendEmails ? 'true' : 'false')
-            setSaved(true)
-          }}
-          className="bg-white/10 px-4 py-1 rounded"
-        >Save</button>
-        {saved && <span className="text-xs ml-3 opacity-70">Saved.</span>}
+      <div className="panel-card settings-card">
+        <h2 className="page-heading">Settings</h2>
+        {activeHandle && (
+          <p className="page-subtext">
+            Active account: <span className="highlight">@{activeHandle}</span>
+          </p>
+        )}
+        <div className="settings-field">
+          <label htmlFor="notify-email">Default notify email</label>
+          <input
+            id="notify-email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
+        <label className="settings-checkbox">
+          <input
+            type="checkbox"
+            checked={sendEmails}
+            onChange={(e) => setSendEmails(e.target.checked)}
+          />
+          <span>Send session summaries by email</span>
+        </label>
+        <div className="settings-actions">
+          <button
+            onClick={() => {
+              const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, activeHandle)
+              const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, activeHandle)
+              localStorage.setItem(emailKey, email)
+              localStorage.setItem(enabledKey, sendEmails ? 'true' : 'false')
+              setSaved(true)
+            }}
+          >
+            Save
+          </button>
+          {saved && <span className="status-note">Saved.</span>}
+        </div>
       </div>
     </main>
   )

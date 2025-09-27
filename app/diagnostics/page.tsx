@@ -149,62 +149,54 @@ export default function DiagnosticsPage() {
 
   return (
     <main>
-      <h2 className="text-lg font-semibold mb-3">Diagnostics</h2>
-      <button
-        onClick={runDiagnostics}
-        disabled={isRunning}
-        className="bg-white/10 px-4 py-2 rounded-2xl disabled:opacity-50"
-      >
-        {isRunning ? 'Running…' : 'Run full diagnostics'}
-      </button>
+      <div className="panel-card diagnostics-panel">
+        <h2 className="page-heading">Diagnostics</h2>
+        <button onClick={runDiagnostics} disabled={isRunning} className="btn-secondary btn-large">
+          {isRunning ? 'Running…' : 'Run full diagnostics'}
+        </button>
 
-      <div className="mt-4 space-y-3">
-        {TEST_ORDER.map(key => {
-          const result = results[key]
-          return (
-            <div key={key} className="bg-white/5 rounded-xl px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xl leading-none">{statusIcon[result.status]}</span>
-                <span className="font-medium">{TEST_CONFIG[key].label}</span>
+        <div className="diagnostics-tests">
+          {TEST_ORDER.map((key) => {
+            const result = results[key]
+            return (
+              <div key={key} className="diagnostic-card">
+                <div className="diagnostic-card-head">
+                  <span className="diagnostic-icon" aria-hidden="true">
+                    {statusIcon[result.status]}
+                  </span>
+                  <span className="diagnostic-label">{TEST_CONFIG[key].label}</span>
+                </div>
+                {result.message && <div className="diagnostic-message">{result.message}</div>}
               </div>
-              {result.message && (
-                <div className="mt-1 text-sm opacity-80 whitespace-pre-wrap">{result.message}</div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
 
-      <textarea
-        value={log}
-        readOnly
-        className="mt-4 w-full h-96 bg-black/30 p-2 rounded"
-      />
+        <textarea value={log} readOnly rows={12} className="diagnostics-log" />
 
-      <div className="mt-4">
-        <h3 className="font-semibold mb-2">Tracked foxes</h3>
-        {foxes.length === 0 ? (
-          <p className="text-sm opacity-70">No foxes have been triggered yet.</p>
-        ) : (
-          <ul className="space-y-2 text-sm">
-            {foxes.map(fox => (
-              <li key={fox.id} className="bg-white/5 rounded-xl px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">Theory {fox.theory} – {fox.message}</span>
-                  <span className="text-xs uppercase tracking-wide opacity-70">{fox.level}</span>
-                </div>
-                <div className="text-xs opacity-70 mt-1">
-                  Count: {fox.count} · Last: {new Date(fox.lastTriggeredAt).toLocaleString()}
-                </div>
-                {fox.details && (
-                  <pre className="mt-2 text-xs bg-black/40 p-2 rounded whitespace-pre-wrap">
-                    {JSON.stringify(fox.details, null, 2)}
-                  </pre>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="diagnostics-foxes">
+          <h3>Tracked foxes</h3>
+          {foxes.length === 0 ? (
+            <p className="status-note">No foxes have been triggered yet.</p>
+          ) : (
+            <ul className="diagnostics-fox-list">
+              {foxes.map((fox) => (
+                <li key={fox.id} className="diagnostic-card">
+                  <div className="fox-head">
+                    <span className="fox-title">Theory {fox.theory} – {fox.message}</span>
+                    <span className="fox-level">{fox.level}</span>
+                  </div>
+                  <div className="fox-meta">
+                    Count: {fox.count} · Last: {new Date(fox.lastTriggeredAt).toLocaleString()}
+                  </div>
+                  {fox.details && (
+                    <pre className="fox-details">{JSON.stringify(fox.details, null, 2)}</pre>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </main>
   )

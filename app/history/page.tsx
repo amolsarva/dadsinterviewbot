@@ -136,54 +136,56 @@ export default function HistoryPage() {
 
   return (
     <main>
-      <h2 className="text-lg font-semibold mb-4">Sessions</h2>
-      {activeHandle && (
-        <p className="-mt-2 mb-4 text-xs text-white/60">
-          Showing sessions saved for <span className="font-semibold text-white">@{activeHandle}</span>
-        </p>
-      )}
-      {rows.length === 0 ? (
-        <div className="rounded border border-dashed border-white/10 bg-white/5 p-4 text-sm text-white/70">
-          <p className="font-medium text-white">No interviews yet.</p>
-          <p className="mt-1">Run a mock session from the home page or execute diagnostics to record a sample conversation. Your completed interviews will appear here once they are saved.</p>
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {rows.map(s => (
-            <li key={s.id} className="bg-white/5 rounded p-3">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="font-medium">
-                    {s.title || `Session from ${new Date(s.created_at).toLocaleString()}`}
-                  </div>
-                  <div className="text-xs opacity-70">{new Date(s.created_at).toLocaleString()}</div>
-                  <div className="text-xs opacity-70">Turns: {s.total_turns} • Status: {s.status}</div>
+      <div className="panel-card">
+        <h2 className="page-heading">Sessions</h2>
+        {activeHandle && (
+          <p className="page-subtext">
+            Showing sessions saved for <span className="highlight">@{activeHandle}</span>
+          </p>
+        )}
+        {rows.length === 0 ? (
+          <div className="history-empty">
+            <p className="font-medium">No interviews yet.</p>
+            <p className="mt-1">
+              Run a mock session from the home page or execute diagnostics to record a sample conversation. Your completed
+              interviews will appear here once they are saved.
+            </p>
+          </div>
+        ) : (
+          <ul className="history-list">
+            {rows.map((s) => (
+              <li key={s.id} className="history-item">
+                <div className="history-item-header">
+                  <h3>{s.title || `Session from ${new Date(s.created_at).toLocaleString()}`}</h3>
+                  <div className="history-meta">{new Date(s.created_at).toLocaleString()}</div>
+                  <div className="history-meta">Turns: {s.total_turns} • Status: {s.status}</div>
                 </div>
-                <div className="flex flex-col gap-2 text-sm max-w-xl items-end">
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(s.id)}
-                    disabled={deletingId === s.id || clearingAll}
-                    className="text-xs text-red-200/80 hover:text-red-100 disabled:opacity-50"
-                    aria-label="Delete session"
-                  >
-                    {deletingId === s.id ? 'Deleting…' : '🗑 Remove'}
-                  </button>
-                  {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
-                    <audio
-                      controls
-                      src={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
-                      className="w-full"
-                    />
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    <a className="underline" href={`/session/${s.id}`}>
+                <div className="history-item-body">
+                  <div className="history-actions">
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(s.id)}
+                      disabled={deletingId === s.id || clearingAll}
+                      className="link-button link-danger"
+                      aria-label="Delete session"
+                    >
+                      {deletingId === s.id ? 'Deleting…' : '🗑 Remove'}
+                    </button>
+                    {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
+                      <audio
+                        controls
+                        src={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
+                        className="w-full"
+                      />
+                    )}
+                  </div>
+                  <div className="history-links">
+                    <a className="link" href={`/session/${s.id}`}>
                       Open
                     </a>
-
                     {(s.manifestUrl || s.artifacts?.session_manifest) && (
                       <a
-                        className="underline"
+                        className="link"
                         href={(s.manifestUrl || s.artifacts?.session_manifest) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
@@ -192,23 +194,23 @@ export default function HistoryPage() {
                       </a>
                     )}
                     {s.firstAudioUrl && (
-                      <a className="underline" href={s.firstAudioUrl} target="_blank" rel="noreferrer">
+                      <a className="link" href={s.firstAudioUrl} target="_blank" rel="noreferrer">
                         First turn audio
                       </a>
                     )}
                     {s.artifacts?.transcript_txt && (
-                      <a className="underline" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
+                      <a className="link" href={s.artifacts.transcript_txt} target="_blank" rel="noreferrer">
                         Transcript (txt)
                       </a>
                     )}
                     {s.artifacts?.transcript_json && (
-                      <a className="underline" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
+                      <a className="link" href={s.artifacts.transcript_json} target="_blank" rel="noreferrer">
                         Transcript (json)
                       </a>
                     )}
                     {(s.sessionAudioUrl || s.artifacts?.session_audio) && (
                       <a
-                        className="underline"
+                        className="link"
                         href={(s.sessionAudioUrl || s.artifacts?.session_audio) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
@@ -217,25 +219,24 @@ export default function HistoryPage() {
                       </a>
                     )}
                   </div>
-
                 </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {rows.length > 0 && (
-        <div className="mt-6 flex justify-end">
-          <button
-            type="button"
-            onClick={handleClearAll}
-            disabled={clearingAll || !!deletingId}
-            className="rounded border border-white/20 px-3 py-1 text-sm text-white/80 hover:border-white/40 hover:text-white disabled:opacity-50"
-          >
-            {clearingAll ? 'Clearing…' : 'Clear all history'}
-          </button>
-        </div>
-      )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {rows.length > 0 && (
+          <div className="history-footer">
+            <button
+              type="button"
+              onClick={handleClearAll}
+              disabled={clearingAll || !!deletingId}
+              className="btn-outline"
+            >
+              {clearingAll ? 'Clearing…' : 'Clear all history'}
+            </button>
+          </div>
+        )}
+      </div>
     </main>
   )
 }
