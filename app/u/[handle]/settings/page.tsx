@@ -1,4 +1,4 @@
-import { SettingsView } from '../../../settings/page'
+import SettingsView from '../../../settings/settings-view'
 
 export default function UserSettingsPage({ params }: { params: { handle: string } }) {
   const handle = params.handle || ''

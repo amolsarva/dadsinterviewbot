@@ -1,4 +1,4 @@
-import { HistoryView } from '../../../history/page'
+import HistoryView from '../../../history/history-view'
 
 export default function UserHistoryPage({ params }: { params: { handle: string } }) {
   const handle = params.handle || ''
