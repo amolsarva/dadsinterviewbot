@@ -8,22 +8,25 @@ import {
 } from '@/lib/question-memory'
 import { detectCompletionIntent } from '@/lib/intents'
 
-const SYSTEM_PROMPT = `You are a warm, curious biographer inspired by the book “The Essential Questions”, but you are not following a rigid script.
-You remember every conversation provided in the memory section below.
+const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
+Core responsibilities:
+- Listen closely to the newest user message. When audio is provided, transcribe it carefully into natural written English before responding.
+- Keep the goal of building a living archive front and center, reassuring the user that you will remember their stories for them.
 Conversation openings:
-- If the memory prompt indicates no previous sessions and no turns yet in the current session, greet the user with a unique welcome to Dad's Interview Bot, explain that the goal is to capture their stories, and invite them to begin when they feel ready.
-- Otherwise, begin by reminding the user that the goal is to preserve their memories, reassure them you are keeping track of everything they share, and, when natural, reference one specific detail supplied in the memory prompt to demonstrate that memory.
-Principles:
-- Follow the user's lead and respond directly to any instruction, question, or aside before you consider another prompt.
-- Be open to any topic the user brings up, gently weaving the discussion back toward the life-story themes when it feels natural.
-- Never repeat or paraphrase the user's own words, and do not repeat questions listed in the memory section.
-- Quickly summarize what you hear in each response before speaking further.
-- If a reply is brief or uncertain, adapt by changing angles or suggesting a different avenue instead of insisting on the same question.
-- Ask at most one short, specific, open-ended question (<= 20 words) only when the user seems ready to keep going.
-- Keep silence handling patient; do not rush to speak if the user pauses briefly.
-- When you refer to remembered details, say explicitly that you are remembering them for the user.
-- If the user signals they are finished for now, set end_intent to true and close warmly without pushing another question. Say you are happy to talk more later.
-Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|false}.`
+- If the memory prompt indicates no previous sessions and no turns yet in the current session, welcome the user to Dad's Interview Bot, explain that you're here to help save their stories, and invite them to begin when they feel ready.
+- Otherwise, remind the user that you are continuing their personal archive, explicitly mention that you're remembering what they've shared (reference a provided detail when available), and invite them to continue.
+Guidelines:
+- Start every reply with a concise acknowledgement or summary of what the user just shared.
+- Never repeat or closely paraphrase the user's exact phrasing.
+- Follow the user's lead and respond directly to any instruction, question, or aside before offering a new prompt.
+- Be flexible; if the user hesitates, gently shift the angle instead of repeating yourself.
+- Ask at most one short, specific, open-ended question (<= 20 words) only when the user seems ready to continue, and never repeat a question listed in the memory section.
+- When you reference remembered material, clearly say you are remembering it for them.
+- If the user indicates they are finished, set end_intent to true, respond warmly, and do not ask another question.
+Formatting:
+- Always respond with valid JSON matching {"reply":"...","transcript":"...","end_intent":true|false}. Do not include commentary, explanations, or code fences.
+- The "transcript" field must contain the user's latest message in text form (use your own transcription when audio is supplied).
+- Keep the spoken reply under 120 words, natural, and conversational.`
 
 function safeJsonParse(input: string | null | undefined) {
   if (!input) return {}
@@ -32,6 +35,29 @@ function safeJsonParse(input: string | null | undefined) {
   } catch {
     return {}
   }
+}
+
+function parseJsonFromText(raw: string | null | undefined) {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (!trimmed.length) return null
+  const withoutFence = trimmed.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  const attempts = [withoutFence]
+  const firstBrace = withoutFence.indexOf('{')
+  const lastBrace = withoutFence.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    attempts.push(withoutFence.slice(firstBrace, lastBrace + 1))
+  }
+  for (const attempt of attempts) {
+    const candidate = attempt.trim()
+    if (!candidate) continue
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 type AskAudioBody = {
@@ -195,12 +221,12 @@ export async function POST(req: NextRequest) {
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
     const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
-      ? "Welcome to Dad's Interview Bot! I'm here to help you capture the stories and details that matter so they stay vivid for the people you love. Whenever you're ready, tell me about a moment or tradition you'd like to remember."
+      ? "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, share a moment or tradition you'd like me to remember."
       : memory.highlightDetail
-      ? `It's good to be back with you. I remember you reflecting on ${memory.highlightDetail}, and I'll keep that and anything new you share safe for you.${
+      ? `Welcome back. I'm still holding onto what you told me about ${memory.highlightDetail}. Let's add another chapter to your archive.${
           fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
-      : `I'm ready to keep collecting your memories and will remember everything you share so it stays vivid.${
+      : `Welcome back—your story archive is open and I'm keeping track of everything you've trusted me with.${
           fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
 
@@ -230,7 +256,7 @@ export async function POST(req: NextRequest) {
     }
     if (audio) parts.push({ inlineData: { mimeType: `audio/${format}`, data: audio } })
     if (text) parts.push({ text })
-    parts.push({ text: 'Return JSON: {"reply":"...","transcript":"...","end_intent":false}' })
+    parts.push({ text: 'Respond only with JSON in the format {"reply":"...","transcript":"...","end_intent":false}.' })
 
     const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
     const response = await fetch(
@@ -254,49 +280,51 @@ export async function POST(req: NextRequest) {
       debug: { ...debugBase, usedFallback: true, reason: 'fallback_guard' },
     }
 
-    try {
-      const cleaned = txt.trim().replace(/^```(json)?/i, '').replace(/```$/i, '')
-      const parsed = JSON.parse(cleaned)
-      let reply = parsed.reply || fallback.reply
+    const parsed = parseJsonFromText(txt)
+    if (parsed && typeof parsed === 'object') {
+      let reply = typeof (parsed as any).reply === 'string' ? (parsed as any).reply : fallback.reply
       if (reply) {
-        const normalized = normalizeQuestion(reply)
-        if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
+        const normalizedReply = normalizeQuestion(reply)
+        if (normalizedReply && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalizedReply)) {
           reply = fallbackReply
         }
       }
-      const transcriptText = typeof parsed.transcript === 'string' ? parsed.transcript : fallback.transcript || ''
+      const transcriptText =
+        typeof (parsed as any).transcript === 'string' && (parsed as any).transcript.trim().length
+          ? (parsed as any).transcript
+          : fallback.transcript || ''
       const completion = detectCompletionIntent(transcriptText || text || '')
       return NextResponse.json({
         ok: true,
         provider: 'google',
         reply,
         transcript: transcriptText,
-        end_intent: Boolean(parsed.end_intent) || completion.shouldStop,
+        end_intent: Boolean((parsed as any).end_intent) || completion.shouldStop,
         debug: {
           ...debugBase,
           usedFallback: false,
           providerResponseSnippet: txt.slice(0, 400),
         },
       })
-    } catch {
-      const normalized = normalizeQuestion(txt)
-      if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
-        return NextResponse.json(fallback)
-      }
-      const completion = detectCompletionIntent(txt || text || '')
-      return NextResponse.json({
-        ...fallback,
-        reply: txt || fallback.reply,
-        transcript: txt || fallback.transcript || '',
-        end_intent: fallback.end_intent || completion.shouldStop,
-        debug: {
-          ...debugBase,
-          usedFallback: true,
-          reason: 'unstructured_response',
-          providerResponseSnippet: txt.slice(0, 400),
-        },
-      })
     }
+
+    const normalized = normalizeQuestion(txt)
+    if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
+      return NextResponse.json(fallback)
+    }
+    const completion = detectCompletionIntent(txt || text || '')
+    return NextResponse.json({
+      ...fallback,
+      reply: txt || fallback.reply,
+      transcript: txt || fallback.transcript || '',
+      end_intent: fallback.end_intent || completion.shouldStop,
+      debug: {
+        ...debugBase,
+        usedFallback: true,
+        reason: 'unstructured_response',
+        providerResponseSnippet: txt.slice(0, 400),
+      },
+    })
   } catch (e) {
     return NextResponse.json<AskAudioResponse>({
       ok: true,

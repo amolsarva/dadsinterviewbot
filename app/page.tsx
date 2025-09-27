@@ -13,6 +13,7 @@ import {
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
   SESSION_STORAGE_BASE_KEY,
+  buildScopedPath,
   deriveUserScopeKey,
   normalizeHandle,
   scopedStorageKey,
@@ -358,6 +359,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
+  const diagnosticsHref = buildScopedPath('/diagnostics', normalizedHandle)
   const lastLoggedHandleRef = useRef<string | null>(null)
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
@@ -1401,14 +1403,14 @@ export function Home({ userHandle }: { userHandle?: string }) {
       <div className="panel-card diagnostics-card">
         <div className="diagnostics-head">
           <span>Diagnostics log</span>
-          <a className="diagnostics-link" href="/diagnostics">
+          <a className="diagnostics-link" href={diagnosticsHref}>
             Open
           </a>
         </div>
         <textarea value={debugLog.join('\n')} readOnly rows={6} className="diagnostics-log" />
         <div className="page-subtext">
           Need more detail?{' '}
-          <a className="link" href="/diagnostics">
+          <a className="link" href={diagnosticsHref}>
             Visit Diagnostics
           </a>
           .

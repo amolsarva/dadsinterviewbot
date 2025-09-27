@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useMemo } from 'react'
 import { usePathname } from 'next/navigation'
-import { normalizeHandle } from '@/lib/user-scope'
+import { buildScopedPath, normalizeHandle } from '@/lib/user-scope'
 
 function deriveHandleFromPath(pathname: string | null): string | undefined {
   if (!pathname) return undefined
@@ -12,15 +12,6 @@ function deriveHandleFromPath(pathname: string | null): string | undefined {
     return normalizeHandle(segments[1] ?? undefined)
   }
   return undefined
-}
-
-function buildScopedPath(target: string, handle?: string): string {
-  if (!handle) return target
-  const normalizedTarget = target.startsWith('/') ? target : `/${target}`
-  if (normalizedTarget === '/' || normalizedTarget === '') {
-    return `/u/${handle}`
-  }
-  return `/u/${handle}${normalizedTarget}`
 }
 
 export function SiteNav() {
