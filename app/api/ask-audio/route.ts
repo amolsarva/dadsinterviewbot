@@ -1,25 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
+import { ensureSessionMemoryHydrated, getSessionMemorySnapshot } from '@/lib/data'
 import {
+  buildMemoryLogDocument,
+  buildMemoryPrimerPreview,
   collectAskedQuestions,
+  extractAskedQuestions,
   findLatestUserDetails,
   normalizeQuestion,
   pickFallbackQuestion,
+  sessionHasUserDetail,
 } from '@/lib/question-memory'
+import { normalizeHandle } from '@/lib/user-scope'
 import { detectCompletionIntent } from '@/lib/intents'
 
-const SYSTEM_PROMPT = `You are a warm, curious biographer inspired by the book “The Essential Questions”, but you are not following a rigid script.
-You remember every conversation provided in the memory section below.
-Principles:
-- Follow the user's lead and respond directly to any instruction, question, or aside before you consider another prompt.
-- Be open to any topic the user brings up, gently weaving the discussion back toward the life-story themes when it feels natural.
-- Never repeat or paraphrase the user's own words, and do not repeat questions listed in the memory section.
-- Quickly summarize what you hear in each response before speaking further.
-- If a reply is brief or uncertain, adapt by changing angles or suggesting a different avenue instead of insisting on the same question.
-- Ask at most one short, specific, open-ended question (<= 20 words) only when the user seems ready to keep going.
-- Keep silence handling patient; do not rush to speak if the user pauses briefly.
-- If the user signals they are finished for now, set end_intent to true and close warmly without pushing another question. Say you are happy to talk more later.
-Return a JSON object: {"reply":"...", "transcript":"...", "end_intent":true|false}.`
+const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
+Mission:
+- Open every reply by restating the goal of saving their stories and reassuring them you will remember what they share.
+- When the memory prompt shows no past sessions and no turns yet, deliver the bespoke welcome: introduce Dad's Interview Bot, explain that you're here to capture their memories, and invite them to begin when they're ready.
+- When history exists, greet them as a returning storyteller, mention you're continuing their archive, and refer to the provided highlight detail if one is available (never invent a detail).
+Core responsibilities:
+- Listen closely to the newest user message. When audio is provided, transcribe it carefully into natural written English before responding.
+- Summarize or acknowledge the user's latest contribution before moving the conversation forward.
+Guidelines:
+- Never repeat or closely paraphrase the user's exact phrasing.
+- Follow the user's lead and respond directly to any instruction, question, or aside before offering a new prompt.
+- Be flexible; if the user hesitates, gently shift the angle instead of repeating yourself.
+- Ask at most one short, specific, open-ended question (<= 20 words) only when the user seems ready to continue, and never repeat a question listed in the memory section.
+- When you reference remembered material, clearly say you are remembering it for them.
+- If the user indicates they are finished, set end_intent to true, respond warmly, and do not ask another question.
+Formatting:
+- Always respond with valid JSON matching {"reply":"...","transcript":"...","end_intent":true|false}. Do not include commentary, explanations, or code fences.
+- The "transcript" field must contain the user's latest message in text form (use your own transcription when audio is supplied).
+- Keep the spoken reply under 120 words, natural, and conversational.`
 
 function safeJsonParse(input: string | null | undefined) {
   if (!input) return {}
@@ -28,6 +40,29 @@ function safeJsonParse(input: string | null | undefined) {
   } catch {
     return {}
   }
+}
+
+function parseJsonFromText(raw: string | null | undefined) {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (!trimmed.length) return null
+  const withoutFence = trimmed.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  const attempts = [withoutFence]
+  const firstBrace = withoutFence.indexOf('{')
+  const lastBrace = withoutFence.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    attempts.push(withoutFence.slice(firstBrace, lastBrace + 1))
+  }
+  for (const attempt of attempts) {
+    const candidate = attempt.trim()
+    if (!candidate) continue
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 type AskAudioBody = {
@@ -44,15 +79,45 @@ type AskAudioResponse = {
   reply: string
   transcript: string
   end_intent: boolean
+  debug?: {
+    sessionId: string | null
+    turn: number | null
+    provider: string
+    usedFallback: boolean
+    reason?: string
+    providerResponseSnippet?: string
+    memoryLog?: string
+    memory?: {
+      hasPriorSessions: boolean
+      hasCurrentConversation: boolean
+      highlightDetail: string | null
+      recentConversationPreview: string
+      recentConversationFull?: string
+      historyPreview: string
+      historyFull?: string
+      questionPreview: string
+      questionFull?: string
+      primerPreview: string
+      primerFull?: string
+      askedQuestionsPreview: string[]
+    }
+  }
 }
+
+type AskAudioDebug = NonNullable<AskAudioResponse['debug']>
 
 type MemoryPrompt = {
   historyText: string
   questionText: string
   recentConversation: string
   askedQuestions: string[]
-  detailForFallback?: string
+  highlightDetail?: string
   primerText: string
+  hasPriorSessions: boolean
+  hasCurrentConversation: boolean
+  handle?: string | null
+  sessionCount: number
+  memoryLog: string
 }
 
 function softenQuestion(question: string | null | undefined): string {
@@ -61,28 +126,25 @@ function softenQuestion(question: string | null | undefined): string {
   if (!trimmed.length) return ''
   const withoutQuestion = trimmed.replace(/[?]+$/, '')
   const lowered = withoutQuestion.charAt(0).toLowerCase() + withoutQuestion.slice(1)
-  return `If you'd like, you could share ${lowered}.`
+  return `If you'd like, I'm curious: ${lowered}?`
 }
 
-async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryPrompt> {
-  if (!sessionId) {
-    return {
-      historyText: 'No session memory is available yet.',
-      questionText: 'No prior questions are on record.',
-      recentConversation: '',
-      askedQuestions: [],
-      primerText: '',
-    }
-  }
-
-  const { current, sessions } = getSessionMemorySnapshot(sessionId)
-  const askedQuestions = collectAskedQuestions(sessions)
-  const detailForFallback = findLatestUserDetails(sessions, { limit: 1 })[0]
-  const primer = await getMemoryPrimer()
-  const primerText = primer.text ? primer.text.trim() : ''
+async function buildMemoryPrompt(
+  sessionId: string | undefined,
+  options: { handle?: string | null } = {},
+): Promise<MemoryPrompt> {
+  const requestedHandle = normalizeHandle(options.handle ?? undefined)
+  const { current, sessions } = getSessionMemorySnapshot(sessionId, { handle: requestedHandle })
+  const priorSessions = sessions.filter((session) => session.id !== sessionId)
+  const priorSessionsWithDetails = priorSessions.filter(sessionHasUserDetail)
+  const hasPriorSessions = priorSessionsWithDetails.length > 0
+  const askedQuestionSource = current ? [current, ...priorSessions] : sessions
+  const askedQuestions = collectAskedQuestions(askedQuestionSource)
+  const highlightDetail = findLatestUserDetails(priorSessionsWithDetails, { limit: 1 })[0]
+  const primerText = buildMemoryPrimerPreview(priorSessionsWithDetails, { limit: 4 })
+  const sessionCount = sessions.length
 
   const historyLines: string[] = []
-  const priorSessions = sessions.filter((session) => session.id !== sessionId)
   if (priorSessions.length) {
     historyLines.push('Highlights from previous sessions:')
     for (const session of priorSessions.slice(0, 4)) {
@@ -93,9 +155,11 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
   }
 
   const conversationLines: string[] = []
-  if (current && current.turns.length) {
+  const currentTurns = current?.turns ?? []
+  const hasCurrentConversation = currentTurns.length > 0
+  if (hasCurrentConversation) {
     conversationLines.push('Current session so far:')
-    for (const turn of current.turns.slice(-6)) {
+    for (const turn of currentTurns.slice(-6)) {
       const roleLabel = turn.role === 'assistant' ? 'You' : 'User'
       conversationLines.push(`${roleLabel}: ${turn.text}`)
     }
@@ -115,36 +179,97 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
     ? ['Avoid repeating these prior questions:', ...uniqueQuestions.map((question) => `- ${question}`)]
     : ['No prior questions are on record.']
 
-  return {
-    historyText: historyLines.length ? historyLines.join('\n') : 'No previous transcript details are available yet.',
-    questionText: questionLines.join('\n'),
-    recentConversation: conversationLines.join('\n'),
-    askedQuestions,
-    detailForFallback,
+  const historyText = historyLines.length ? historyLines.join('\n') : 'No previous transcript details are available yet.'
+  const questionText = questionLines.join('\n')
+  const recentConversation = conversationLines.join('\n')
+  const derivedHandle =
+    requestedHandle ?? normalizeHandle(current?.user_handle ?? undefined) ?? normalizeHandle(sessions[0]?.user_handle ?? undefined)
+  const memoryLog = buildMemoryLogDocument({
+    handle: derivedHandle ?? null,
+    sessionId: sessionId ?? null,
+    sessions,
+    current,
+    hasPriorSessions,
+    hasCurrentConversation,
+    highlightDetail: highlightDetail ?? null,
+    historyText,
+    questionText,
     primerText,
+    askedQuestions,
+  })
+
+  return {
+    historyText,
+    questionText,
+    recentConversation,
+    askedQuestions,
+    highlightDetail,
+    primerText,
+    hasPriorSessions,
+    hasCurrentConversation,
+    handle: derivedHandle ?? null,
+    sessionCount,
+    memoryLog,
   }
 }
 
 export async function POST(req: NextRequest) {
   const url = new URL(req.url)
   const provider = url.searchParams.get('provider') || process.env.PROVIDER || 'google'
+  let requestTurn: number | null = null
+  let requestSessionId: string | undefined
+  let debugMemory: AskAudioDebug['memory'] | undefined
+  let memoryLogPreview: string | undefined
   try {
     const raw = await req.text().catch(() => '')
     const body: AskAudioBody = raw && raw.length ? safeJsonParse(raw) : {}
     const { audio, format = 'webm', text, sessionId } = body || {}
+    const requestHandleRaw =
+      typeof body?.userHandle === 'string'
+        ? body.userHandle
+        : typeof body?.user_handle === 'string'
+        ? body.user_handle
+        : undefined
+    const normalizedHandle = normalizeHandle(requestHandleRaw ?? undefined)
+    requestTurn = typeof body?.turn === 'number' ? body.turn : null
+    requestSessionId = typeof sessionId === 'string' && sessionId ? sessionId : undefined
 
     if (sessionId) {
       await ensureSessionMemoryHydrated().catch(() => undefined)
     }
-    const memory = await buildMemoryPrompt(sessionId)
-    const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.detailForFallback)
+    const memory = await buildMemoryPrompt(sessionId, { handle: normalizedHandle })
+    memoryLogPreview = memory.memoryLog.slice(0, 2000)
+    debugMemory = {
+      hasPriorSessions: memory.hasPriorSessions,
+      hasCurrentConversation: memory.hasCurrentConversation,
+      highlightDetail: memory.highlightDetail ?? null,
+      recentConversationPreview: memory.recentConversation.slice(0, 400),
+      recentConversationFull: memory.recentConversation.slice(0, 2000),
+      historyPreview: memory.historyText.slice(0, 400),
+      historyFull: memory.historyText.slice(0, 2000),
+      questionPreview: memory.questionText.slice(0, 400),
+      questionFull: memory.questionText.slice(0, 2000),
+      primerPreview: memory.primerText.slice(0, 400),
+      primerFull: memory.primerText.slice(0, 2000),
+      askedQuestionsPreview: memory.askedQuestions.slice(0, 10),
+    }
+    const debugBase = {
+      sessionId: requestSessionId ?? null,
+      turn: requestTurn,
+      provider,
+      memoryLog: memoryLogPreview,
+      memory: debugMemory,
+    }
+    const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
-    const fallbackReply = memory.detailForFallback
-      ? `I remember you mentioned ${memory.detailForFallback}. We can stay with that or wander somewhere entirely new—whatever feels right to you.${
+    const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
+      ? "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, let's begin with a memory you'd like me to hold onto—what comes to mind first?"
+      : memory.highlightDetail
+      ? `Welcome back. I'm still remembering what you told me about ${memory.highlightDetail}, and I'm ready to keep your archive growing.${
           fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
-      : `I'm here with you and happy to talk about anything on your mind.${
-          fallbackSuggestion ? ` ${fallbackSuggestion}` : ' If you’d like a prompt, I can offer one whenever you choose.'
+      : `Welcome back—your story archive is open and I'm keeping every detail you share safe.${
+          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
         }`
 
     if (!process.env.GOOGLE_API_KEY) {
@@ -154,6 +279,7 @@ export async function POST(req: NextRequest) {
         reply: fallbackReply,
         transcript: text || '',
         end_intent: detectCompletionIntent(text || '').shouldStop,
+        debug: { ...debugBase, usedFallback: true, reason: 'missing_api_key' },
       })
     }
 
@@ -167,9 +293,12 @@ export async function POST(req: NextRequest) {
     if (memory.recentConversation) {
       parts.push({ text: memory.recentConversation })
     }
+    if (memory.highlightDetail) {
+      parts.push({ text: `Recent remembered detail: ${memory.highlightDetail}` })
+    }
     if (audio) parts.push({ inlineData: { mimeType: `audio/${format}`, data: audio } })
     if (text) parts.push({ text })
-    parts.push({ text: 'Return JSON: {"reply":"...","transcript":"...","end_intent":false}' })
+    parts.push({ text: 'Respond only with JSON in the format {"reply":"...","transcript":"...","end_intent":false}.' })
 
     const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
     const response = await fetch(
@@ -190,40 +319,98 @@ export async function POST(req: NextRequest) {
       reply: fallbackReply,
       transcript: text || '',
       end_intent: detectCompletionIntent(text || '').shouldStop,
+      debug: { ...debugBase, usedFallback: true, reason: 'fallback_guard' },
     }
 
-    try {
-      const cleaned = txt.trim().replace(/^```(json)?/i, '').replace(/```$/i, '')
-      const parsed = JSON.parse(cleaned)
-      let reply = parsed.reply || fallback.reply
-      if (reply) {
-        const normalized = normalizeQuestion(reply)
-        if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
-          reply = fallbackReply
+    const parsed = parseJsonFromText(txt)
+    if (parsed && typeof parsed === 'object') {
+      const rawReply =
+        typeof (parsed as any).reply === 'string' && (parsed as any).reply.trim().length
+          ? (parsed as any).reply.trim()
+          : ''
+      const transcriptText =
+        typeof (parsed as any).transcript === 'string' && (parsed as any).transcript.trim().length
+          ? (parsed as any).transcript
+          : fallback.transcript || ''
+      const completion = detectCompletionIntent(transcriptText || text || '')
+
+      let candidateQuestion =
+        typeof (parsed as any).question === 'string' && (parsed as any).question.trim().length
+          ? (parsed as any).question.trim()
+          : null
+
+      if (!candidateQuestion && rawReply) {
+        const questionsInReply = extractAskedQuestions(rawReply)
+        if (questionsInReply.length) {
+          candidateQuestion = questionsInReply[questionsInReply.length - 1]
         }
       }
-      const transcriptText = typeof parsed.transcript === 'string' ? parsed.transcript : fallback.transcript || ''
-      const completion = detectCompletionIntent(transcriptText || text || '')
+
+      if (candidateQuestion) {
+        const normalizedCandidate = normalizeQuestion(candidateQuestion)
+        if (
+          normalizedCandidate &&
+          memory.askedQuestions.some((question) => normalizeQuestion(question) === normalizedCandidate)
+        ) {
+          candidateQuestion = fallbackQuestion
+        }
+      }
+
+      let reply = rawReply
+      if (candidateQuestion) {
+        reply = reply && !reply.includes(candidateQuestion) ? `${reply} ${candidateQuestion}`.trim() : reply || candidateQuestion
+      } else if (fallbackSuggestion) {
+        reply = reply ? `${reply} ${fallbackSuggestion}`.trim() : fallbackSuggestion
+      }
+
+      if (!reply) {
+        reply = fallbackReply
+      }
+
+      reply = reply.trim()
+
+      const extractedQuestions = extractAskedQuestions(reply)
+      const normalizedFinalQuestion = extractedQuestions.length
+        ? normalizeQuestion(extractedQuestions[extractedQuestions.length - 1])
+        : ''
+      if (
+        normalizedFinalQuestion &&
+        memory.askedQuestions.some((question) => normalizeQuestion(question) === normalizedFinalQuestion)
+      ) {
+        reply = reply.includes(fallbackQuestion) ? reply : `${reply} ${fallbackQuestion}`.trim()
+      }
+
       return NextResponse.json({
         ok: true,
         provider: 'google',
         reply,
         transcript: transcriptText,
-        end_intent: Boolean(parsed.end_intent) || completion.shouldStop,
-      })
-    } catch {
-      const normalized = normalizeQuestion(txt)
-      if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
-        return NextResponse.json(fallback)
-      }
-      const completion = detectCompletionIntent(txt || text || '')
-      return NextResponse.json({
-        ...fallback,
-        reply: txt || fallback.reply,
-        transcript: txt || fallback.transcript || '',
-        end_intent: fallback.end_intent || completion.shouldStop,
+        end_intent: Boolean((parsed as any).end_intent) || completion.shouldStop,
+        debug: {
+          ...debugBase,
+          usedFallback: false,
+          providerResponseSnippet: txt.slice(0, 400),
+        },
       })
     }
+
+    const normalized = normalizeQuestion(txt)
+    if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
+      return NextResponse.json(fallback)
+    }
+    const completion = detectCompletionIntent(txt || text || '')
+    return NextResponse.json({
+      ...fallback,
+      reply: txt || fallback.reply,
+      transcript: txt || fallback.transcript || '',
+      end_intent: fallback.end_intent || completion.shouldStop,
+      debug: {
+        ...debugBase,
+        usedFallback: true,
+        reason: 'unstructured_response',
+        providerResponseSnippet: txt.slice(0, 400),
+      },
+    })
   } catch (e) {
     return NextResponse.json<AskAudioResponse>({
       ok: true,
@@ -231,6 +418,15 @@ export async function POST(req: NextRequest) {
       reply: 'Who else was there? Share a first name and one detail about them.',
       transcript: '',
       end_intent: false,
+      debug: {
+        sessionId: requestSessionId ?? null,
+        turn: requestTurn,
+        provider,
+        usedFallback: true,
+        reason: 'exception',
+        memoryLog: memoryLogPreview,
+        memory: debugMemory,
+      },
     })
   }
 }

@@ -13,6 +13,7 @@ import {
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
   SESSION_STORAGE_BASE_KEY,
+  buildScopedPath,
   deriveUserScopeKey,
   normalizeHandle,
   scopedStorageKey,
@@ -32,6 +33,22 @@ const clampBaseline = (value: number | null | undefined) => {
   return clamped
 }
 
+const truncateForLog = (input: string | null | undefined, max: number = 200) => {
+  if (!input) return ''
+  const normalized = input.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= max) return normalized
+  return `${normalized.slice(0, Math.max(0, max - 1))}…`
+}
+
+const formatPreviewList = (items: string[] | undefined, max: number = 3) => {
+  if (!items || !items.length) return ''
+  return items
+    .filter((item) => typeof item === 'string' && item.trim().length)
+    .slice(0, max)
+    .map((item) => truncateForLog(item, 80))
+    .join(' | ')
+}
+
 export default function RootPage() {
   return <Home key="__default__" />
 }
@@ -46,6 +63,63 @@ type SessionInitResult = {
 type NetworkSessionResult = {
   id: string
   source: Extract<SessionInitSource, 'network' | 'fallback'>
+}
+
+type IntroDebugPayload = {
+  hasPriorSessions?: boolean
+  sessionCount?: number
+  rememberedTitles?: string[]
+  rememberedDetails?: string[]
+  askedQuestionsPreview?: string[]
+  primerPreview?: string
+  fallbackQuestion?: string
+  historyText?: string
+  questionText?: string
+  hasCurrentConversation?: boolean
+  memoryLog?: string
+}
+
+type IntroResponse = {
+  ok?: boolean
+  message?: string
+  fallback?: boolean
+  reason?: string
+  debug?: IntroDebugPayload | null
+}
+
+type AskDebugMemory = {
+  hasPriorSessions?: boolean
+  hasCurrentConversation?: boolean
+  highlightDetail?: string | null
+  recentConversationPreview?: string
+  recentConversationFull?: string
+  historyPreview?: string
+  historyFull?: string
+  questionPreview?: string
+  questionFull?: string
+  primerPreview?: string
+  primerFull?: string
+  askedQuestionsPreview?: string[]
+}
+
+type AskDebugPayload = {
+  sessionId?: string | null
+  turn?: number | null
+  provider?: string
+  usedFallback?: boolean
+  reason?: string
+  providerResponseSnippet?: string
+  memoryLog?: string
+  memory?: AskDebugMemory
+}
+
+type AskResponse = {
+  ok?: boolean
+  provider?: string
+  reply?: string
+  transcript?: string
+  end_intent?: boolean
+  debug?: AskDebugPayload | null
 }
 
 type ScopedSessionState = {
@@ -294,6 +368,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
+  const diagnosticsHref = buildScopedPath('/diagnostics', normalizedHandle)
   const lastLoggedHandleRef = useRef<string | null>(null)
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
@@ -797,17 +872,93 @@ export function Home({ userHandle }: { userHandle?: string }) {
       pushLog('Recording stopped → thinking')
       updateMachineState('thinking')
 
-      const askRes = await fetch('/api/ask-audio', {
+      const askRes = (await fetch('/api/ask-audio', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn + 1 }),
+        body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn + 1, userHandle: normalizedHandle }),
       })
         .then((r) => r.json())
-        .catch(() => ({ reply: 'Tell me one small detail you remember from that moment.', transcript: '', end_intent: false }))
+        .catch(
+          () =>
+            ({
+              reply: 'Tell me one small detail you remember from that moment.',
+              transcript: '',
+              end_intent: false,
+            }) as AskResponse,
+        )) as AskResponse
 
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
+      const turnNumber = turn + 1
+      const askDebug = askRes?.debug
+      if (askDebug?.memory) {
+        const memoryParts: string[] = []
+        memoryParts.push(`prior sessions: ${askDebug.memory.hasPriorSessions ? 'yes' : 'no'}`)
+        memoryParts.push(`current turns: ${askDebug.memory.hasCurrentConversation ? 'yes' : 'no'}`)
+        if (askDebug.memory.highlightDetail) {
+          memoryParts.push(`highlight: ${truncateForLog(askDebug.memory.highlightDetail || '', 120)}`)
+        }
+        if (askDebug.memory.historyPreview) {
+          memoryParts.push(`history preview: ${truncateForLog(askDebug.memory.historyPreview, 160)}`)
+        }
+        if (memoryParts.length) {
+          pushLog(`[turn ${turnNumber}] Memory snapshot → ${memoryParts.join(' · ')}`)
+        }
+        if (askDebug.memory.recentConversationPreview) {
+          pushLog(
+            `[turn ${turnNumber}] Recent conversation preview → ${truncateForLog(
+              askDebug.memory.recentConversationPreview,
+              180,
+            )}`,
+          )
+        }
+        if (askDebug.memory.askedQuestionsPreview && askDebug.memory.askedQuestionsPreview.length) {
+          const avoidList = formatPreviewList(askDebug.memory.askedQuestionsPreview, 4)
+          if (avoidList) {
+            pushLog(`[turn ${turnNumber}] Avoid repeating → ${avoidList}`)
+          }
+        }
+        if (askDebug.memory.primerPreview) {
+          pushLog(`[turn ${turnNumber}] Primer preview → ${truncateForLog(askDebug.memory.primerPreview, 160)}`)
+        }
+        if (askDebug.memory.historyFull) {
+          pushLog(`[turn ${turnNumber}] History summary →\n${askDebug.memory.historyFull}`)
+        }
+        if (askDebug.memory.questionFull) {
+          pushLog(`[turn ${turnNumber}] Avoid repeating list →\n${askDebug.memory.questionFull}`)
+        }
+        if (askDebug.memory.recentConversationFull) {
+          pushLog(`[turn ${turnNumber}] Recent conversation log →\n${askDebug.memory.recentConversationFull}`)
+        }
+        if (askDebug.memory.primerFull) {
+          pushLog(`[turn ${turnNumber}] Primer details →\n${askDebug.memory.primerFull}`)
+        }
+      }
+
+      if (askDebug?.memoryLog) {
+        pushLog(`[turn ${turnNumber}] MemoryLog →\n${askDebug.memoryLog}`)
+      }
+
+      const transcriptLog = transcript.trim().length ? truncateForLog(transcript, 200) : ''
+      if (transcriptLog) {
+        pushLog(`[turn ${turnNumber}] Heard → ${transcriptLog}`)
+      } else {
+        pushLog(`[turn ${turnNumber}] Heard → (no transcript captured)`)
+      }
+
+      const providerLabel = askDebug?.usedFallback
+        ? `fallback (${askDebug.reason || 'guard'})`
+        : askDebug?.provider || askRes?.provider || 'assistant'
+      pushLog(`[turn ${turnNumber}] Reply via ${providerLabel} → ${truncateForLog(reply, 200)}`)
+      if (askDebug?.providerResponseSnippet) {
+        pushLog(
+          `[turn ${turnNumber}] Provider snippet → ${truncateForLog(askDebug.providerResponseSnippet, 200)}`,
+        )
+      }
+      if (askDebug?.usedFallback && askDebug.reason) {
+        pushLog(`[turn ${turnNumber}] Fallback reason → ${truncateForLog(askDebug.reason, 160)}`)
+      }
       if (transcript) {
         conversationRef.current.push({ role: 'user', text: transcript })
       }
@@ -948,6 +1099,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
     manualStopRef.current = false
     setHasStarted(true)
     let introMessage = ''
+    let introSource: 'model' | 'fallback' = 'model'
     try {
       try {
         await ensureSessionRecorder()
@@ -956,18 +1108,77 @@ export function Home({ userHandle }: { userHandle?: string }) {
       }
 
       try {
-        const res = await fetch(`/api/session/${sessionId}/intro`, { method: 'POST' })
-        const json = await res.json().catch(() => null)
+        const res = await fetch(`/api/session/${sessionId}/intro`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ userHandle: normalizedHandle }),
+        })
+        const json = (await res.json().catch(() => null)) as IntroResponse | null
         if (res.ok && typeof json?.message === 'string' && json.message.trim().length) {
           introMessage = json.message.trim()
         }
+        introSource = json?.fallback ? 'fallback' : 'model'
+        if (json?.debug) {
+          const parts: string[] = []
+          if (json.debug.hasPriorSessions) {
+            const sessionCount = typeof json.debug.sessionCount === 'number' ? json.debug.sessionCount : undefined
+            parts.push(`history sessions: ${sessionCount ? String(sessionCount) : 'yes'}`)
+          } else {
+            parts.push('history sessions: none yet')
+          }
+          if (typeof json.debug.hasCurrentConversation === 'boolean') {
+            parts.push(`current turns: ${json.debug.hasCurrentConversation ? 'yes' : 'no'}`)
+          }
+          const rememberedDetails = formatPreviewList(json.debug.rememberedDetails, 3)
+          if (rememberedDetails) {
+            parts.push(`details: ${rememberedDetails}`)
+          }
+          const rememberedTitles = formatPreviewList(json.debug.rememberedTitles, 3)
+          if (rememberedTitles) {
+            parts.push(`titles: ${rememberedTitles}`)
+          }
+          if (json.debug.fallbackQuestion && json.debug.fallbackQuestion.trim().length) {
+            parts.push(`fallback question: ${truncateForLog(json.debug.fallbackQuestion, 120)}`)
+          }
+          if (parts.length) {
+            pushLog(`[init] Memory snapshot → ${parts.join(' · ')}`)
+          }
+          if (json.debug.askedQuestionsPreview && json.debug.askedQuestionsPreview.length) {
+            const avoidList = formatPreviewList(json.debug.askedQuestionsPreview, 4)
+            if (avoidList) {
+              pushLog(`[init] Avoid repeating → ${avoidList}`)
+            }
+          }
+          if (json.debug.primerPreview) {
+            pushLog(`[init] Primer preview → ${truncateForLog(json.debug.primerPreview, 180)}`)
+          }
+          if (json.debug.historyText) {
+            pushLog(`[init] History summary →\n${json.debug.historyText}`)
+          }
+          if (json.debug.questionText) {
+            pushLog(`[init] Avoid repeating list →\n${json.debug.questionText}`)
+          }
+          if (json.debug.memoryLog) {
+            pushLog(`[init] MemoryLog →\n${json.debug.memoryLog}`)
+          }
+        }
+        if (json?.reason) {
+          pushLog(`[init] Intro fallback reason → ${truncateForLog(json.reason, 160)}`)
+        }
+        if (json?.fallback === true && !introMessage) {
+          pushLog('[init] Intro response fell back to default prompt')
+        }
       } catch (err) {
         pushLog('Intro prompt unavailable; using fallback greeting')
+        introSource = 'fallback'
       }
 
       if (!introMessage) {
         introMessage = INTRO_FALLBACK
+        introSource = 'fallback'
       }
+
+      pushLog(`[init] Intro message (${introSource}): ${truncateForLog(introMessage, 220)}`)
 
       conversationRef.current.push({ role: 'assistant', text: introMessage })
 
@@ -1233,14 +1444,14 @@ export function Home({ userHandle }: { userHandle?: string }) {
       <div className="panel-card diagnostics-card">
         <div className="diagnostics-head">
           <span>Diagnostics log</span>
-          <a className="diagnostics-link" href="/diagnostics">
+          <a className="diagnostics-link" href={diagnosticsHref}>
             Open
           </a>
         </div>
-        <textarea value={debugLog.join('\n')} readOnly rows={6} className="diagnostics-log" />
+        <textarea value={debugLog.join('\n')} readOnly rows={16} className="diagnostics-log" />
         <div className="page-subtext">
           Need more detail?{' '}
-          <a className="link" href="/diagnostics">
+          <a className="link" href={diagnosticsHref}>
             Visit Diagnostics
           </a>
           .
