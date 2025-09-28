@@ -1,23 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
-import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
+import { ensureSessionMemoryHydrated, getSessionMemorySnapshot } from '@/lib/data'
+import {
+  buildMemoryLogDocument,
+  buildMemoryPrimerPreview,
+  collectAskedQuestions,
+  findLatestUserDetails,
+  normalizeQuestion,
+  pickFallbackQuestion,
+  sessionHasUserDetail,
+} from '@/lib/question-memory'
+import { normalizeHandle } from '@/lib/user-scope'
 
-const INTRO_SYSTEM_PROMPT = `You are a warm, curious biographer and this is the very first message in a new recording session.
-You are inspired by the book “The Essential Questions”, yet you are not following a rigid script.
-Goals:
-- if there is History stored, Welcome the user back, clearly stating you remember everything they have shared across all past sessions.
-- Refer to one or two concrete details or titles from the provided history when available.
-- Offer an inviting, conversational setup that signals you're happy to follow the user's interests while gently guiding them toward the life-story themes.
-- Ask exactly one new, specific, open-ended question (<= 25 words) that has not been asked before.
-- The question must invite a short spoken response, adapt to the recent context, and avoid repeating previous questions verbatim.
-Return JSON: {"message":"<spoken message including welcome and question>","question":"<just the final question>"}.
-Keep the message under 120 words, warm, and conversational.`
+const INTRO_SYSTEM_PROMPT = `You are the opening voice of Dad's Interview Bot, a warm, curious biographer.
+Mission:
+- Introduce the recording session, state that you're here to help preserve the user's stories, and reassure them you will remember what they share.
+- If the history is empty, deliver a unique welcome that explains the goal and invites them to begin when they feel ready.
+- If history is present, greet them as a returning storyteller, mention that you're remembering their previous sessions (reference one or two provided details when available), and invite them to continue.
+Instructions:
+- Keep the spoken message under 120 words, conversational, and encouraging.
+- Ask exactly one new, specific, open-ended question (<= 22 words) that does not repeat any question from the history section.
+- Summarize or acknowledge relevant remembered details naturally, without repeating the user's exact phrasing.
+- Respond only with JSON shaped as {"message":"<spoken message>","question":"<the follow-up question>"}. No commentary or code fences.`
 
 function formatList(items: string[]): string {
   if (items.length <= 1) return items[0] || ''
   if (items.length === 2) return `${items[0]} and ${items[1]}`
   return `${items[0]}, ${items[1]}, and ${items[2]}`
 }
+
+const FIRST_TIME_INTRO_QUESTION =
+  "Would you start by telling me the first memory you'd like to save together?"
 
 function buildFallbackIntro(options: {
   titles: string[]
@@ -28,13 +40,17 @@ function buildFallbackIntro(options: {
   const { titles, details, question, hasHistory } = options
   const introPrefix = hasHistory
     ? titles.length
-      ? `Welcome back. I remember everything you've shared, especially ${formatList(titles.slice(0, 3))}.`
-      : 'Welcome back. I remember everything you have shared, and I’m glad to continue whenever you are ready.'
-    : 'Welcome. I will remember everything you share with me.'
+      ? `Welcome back—I'm keeping your stories about ${formatList(titles.slice(0, 3))} safe for you.`
+      : "Welcome back—your archive is open and I'm ready whenever you are."
+    : "Hi, I'm Dad's Interview Bot. I'm here to help you capture the memories you want to keep."
   const reminder = details.length
-    ? `The last thing you told me was about ${details[0]}.`
-    : 'Thank you for trusting me with your stories.'
-  return `${introPrefix} ${reminder} I'm happy to follow wherever you'd like to go. ${question}`.trim()
+    ? `The last thing you shared was about ${details[0]}.`
+    : "I'll remember every detail you share from this moment on."
+  const invitation = hasHistory ? 'When you are ready,' : 'When you feel ready,'
+  const closingQuestion = hasHistory
+    ? question || 'Where would you like to pick up the story?'
+    : FIRST_TIME_INTRO_QUESTION
+  return `${introPrefix} ${reminder} ${invitation} ${closingQuestion}`.trim()
 }
 
 function buildHistorySummary(
@@ -74,43 +90,91 @@ function buildHistorySummary(
   return { historyText, questionText: questionLines.join('\n') }
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const sessionId = params.id
   await ensureSessionMemoryHydrated().catch(() => undefined)
-  const { current, sessions } = getSessionMemorySnapshot(sessionId)
+  let requestedHandle: string | undefined
+  try {
+    const raw = await req.text()
+    if (raw && raw.trim().length) {
+      const payload = JSON.parse(raw)
+      if (typeof payload?.userHandle === 'string') {
+        requestedHandle = payload.userHandle
+      } else if (typeof payload?.user_handle === 'string') {
+        requestedHandle = payload.user_handle
+      }
+    }
+  } catch {
+    requestedHandle = undefined
+  }
+  const normalizedHandle = normalizeHandle(requestedHandle ?? undefined)
+  const { current, sessions } = getSessionMemorySnapshot(sessionId, { handle: normalizedHandle })
   if (!current) {
     return NextResponse.json({ ok: false, error: 'session_not_found' }, { status: 404 })
   }
 
   const previousSessions = sessions.filter((session) => session.id !== sessionId)
+  const previousSessionsWithDetails = previousSessions.filter(sessionHasUserDetail)
   const titles = previousSessions
     .map((session) => session.title)
     .filter((title): title is string => Boolean(title && title.trim().length))
     .slice(0, 5)
-  const details = findLatestUserDetails(sessions, { excludeSessionId: sessionId, limit: 3 })
+  const details = findLatestUserDetails(previousSessionsWithDetails, { limit: 3 })
   const askedQuestions = collectAskedQuestions(sessions)
   const fallbackQuestion = pickFallbackQuestion(askedQuestions, details[0])
+  const hasHistory = previousSessionsWithDetails.length > 0
   const fallbackMessage = buildFallbackIntro({
     titles,
     details,
     question: fallbackQuestion,
-    hasHistory: previousSessions.length > 0,
+    hasHistory,
   })
-  const primer = await getMemoryPrimer().catch(() => ({ text: '' }))
-  const primerText = primer && typeof primer === 'object' && 'text' in primer && primer.text ? String(primer.text) : ''
+  const primerText = buildMemoryPrimerPreview(previousSessionsWithDetails, {
+    heading: "Here's what I'm already remembering for you:",
+    limit: 4,
+  })
+  const { historyText, questionText } = buildHistorySummary(titles, details, askedQuestions)
+  const hasCurrentConversation = (current.turns?.length ?? 0) > 0
+  const memoryLog = buildMemoryLogDocument({
+    handle: normalizedHandle ?? current.user_handle ?? null,
+    sessionId,
+    sessions,
+    current,
+    hasPriorSessions: hasHistory,
+    hasCurrentConversation,
+    highlightDetail: details[0] ?? null,
+    historyText,
+    questionText,
+    primerText,
+    askedQuestions,
+  })
+
+  const debug = {
+    hasPriorSessions: previousSessionsWithDetails.length > 0,
+    sessionCount: sessions.length,
+    rememberedTitles: titles,
+    rememberedDetails: details,
+    askedQuestionsPreview: askedQuestions.slice(0, 10),
+    primerPreview: primerText.slice(0, 400),
+    fallbackQuestion,
+    historyText: historyText.slice(0, 1200),
+    questionText: questionText.slice(0, 1200),
+    hasCurrentConversation,
+    memoryLog: memoryLog.slice(0, 2000),
+  }
 
   if (!process.env.GOOGLE_API_KEY) {
-    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true })
+    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
   }
 
   try {
-    const { historyText, questionText } = buildHistorySummary(titles, details, askedQuestions)
     const parts: any[] = [{ text: INTRO_SYSTEM_PROMPT }]
     if (primerText.trim().length) {
       parts.push({ text: `Memory primer:\n${primerText.slice(0, 6000)}` })
     }
     parts.push({ text: historyText })
     parts.push({ text: questionText })
+    parts.push({ text: 'Respond only with JSON in the format {"message":"...","question":"..."}.' })
 
     const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
     const response = await fetch(
@@ -147,13 +211,25 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       message = `${message ? `${message} ` : ''}${fallbackQuestion}`.trim()
     }
 
-    if (!message) {
-      return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true })
+    if (!hasHistory) {
+      const lowercaseMessage = message.toLowerCase()
+      const hasWarmGreeting =
+        lowercaseMessage.includes("i'm dad's interview bot") ||
+        lowercaseMessage.includes('welcome') ||
+        lowercaseMessage.includes('hello') ||
+        lowercaseMessage.includes("i'm here to")
+      if (!hasWarmGreeting) {
+        message = fallbackMessage
+      }
     }
 
-    return NextResponse.json({ ok: true, message, fallback: false })
+    if (!message) {
+      return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
+    }
+
+    return NextResponse.json({ ok: true, message, fallback: false, debug })
   } catch (error: any) {
     const reason = typeof error?.message === 'string' ? error.message : 'intro_failed'
-    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, reason })
+    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, reason, debug })
   }
 }

@@ -23,3 +23,15 @@ export function scopedStorageKey(base: string, handle?: string | null): string {
   const normalized = normalizeHandle(handle)
   return normalized ? `${base}:${normalized}` : base
 }
+
+export function buildScopedPath(target: string, handle?: string | null): string {
+  const normalized = normalizeHandle(handle)
+  const normalizedTarget = target.startsWith('/') ? target : `/${target}`
+  if (!normalized) {
+    return normalizedTarget
+  }
+  if (normalizedTarget === '/' || normalizedTarget === '') {
+    return `/u/${normalized}`
+  }
+  return `/u/${normalized}${normalizedTarget}`
+}
