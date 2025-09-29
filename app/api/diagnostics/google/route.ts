@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
+import { resolveGoogleModel } from '@/lib/google-model'
 
 export const runtime = 'nodejs'
 
-const DEFAULT_MODEL = process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite'
+const MODEL = resolveGoogleModel(process.env.GOOGLE_MODEL)
 
 export async function GET() {
   if (!process.env.GOOGLE_API_KEY) {
@@ -13,13 +14,17 @@ export async function GET() {
     })
   }
 
-  const model = DEFAULT_MODEL
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`
+  const model = MODEL
+  const endpointPath = `v1beta/models/${model}:generateContent`
+  const url = `https://generativelanguage.googleapis.com/${endpointPath}`
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': process.env.GOOGLE_API_KEY || '',
+      },
       body: JSON.stringify({
         contents: [
           {
@@ -51,6 +56,8 @@ export async function GET() {
           status: response.status,
           details: data?.error ?? null,
           endpoint: 'models.generateContent',
+          requestPath: endpointPath,
+          requestUrl: url,
           model,
         },
         { status: response.status || 200 },
@@ -71,6 +78,8 @@ export async function GET() {
       finishReason: candidate?.finishReason || null,
       safety: candidate?.safetyRatings || data?.safetyRatings || null,
       endpoint: 'models.generateContent',
+      requestPath: endpointPath,
+      requestUrl: url,
     })
   } catch (err: any) {
     const message = typeof err?.message === 'string' ? err.message : 'Google AI request failed.'
@@ -81,6 +90,8 @@ export async function GET() {
         message,
         status: null,
         endpoint: 'models.generateContent',
+        requestPath: endpointPath,
+        requestUrl: url,
         model,
       },
       { status: 200 },

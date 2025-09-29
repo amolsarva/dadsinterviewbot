@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
+import { resolveGoogleModel } from '@/lib/google-model'
 
 const INTRO_SYSTEM_PROMPT = `You are the opening voice of Dad's Interview Bot, a warm, curious biographer.
 Mission:
@@ -106,6 +107,8 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const primer = await getMemoryPrimer().catch(() => ({ text: '' }))
   const primerText = primer && typeof primer === 'object' && 'text' in primer && primer.text ? String(primer.text) : ''
 
+  const resolvedModel = resolveGoogleModel(process.env.GOOGLE_MODEL)
+
   const debug = {
     hasPriorSessions: previousSessions.length > 0,
     sessionCount: sessions.length,
@@ -114,6 +117,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     askedQuestionsPreview: askedQuestions.slice(0, 10),
     primerPreview: primerText.slice(0, 400),
     fallbackQuestion,
+    model: resolvedModel,
   }
 
   if (!process.env.GOOGLE_API_KEY) {
@@ -130,15 +134,15 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     parts.push({ text: questionText })
     parts.push({ text: 'Respond only with JSON in the format {"message":"...","question":"..."}.' })
 
-    const model = process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite'
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts }] }),
+    const endpointPath = `v1beta/models/${resolvedModel}:generateContent`
+    const response = await fetch(`https://generativelanguage.googleapis.com/${endpointPath}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': process.env.GOOGLE_API_KEY || '',
       },
-    )
+      body: JSON.stringify({ contents: [{ role: 'user', parts }] }),
+    })
 
     const json = await response.json().catch(() => ({}))
     const txt =
@@ -166,12 +170,23 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     }
 
     if (!message) {
-      return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
+      return NextResponse.json({
+        ok: true,
+        message: fallbackMessage,
+        fallback: true,
+        debug: { ...debug, endpointPath },
+      })
     }
 
-    return NextResponse.json({ ok: true, message, fallback: false, debug })
+    return NextResponse.json({ ok: true, message, fallback: false, debug: { ...debug, endpointPath } })
   } catch (error: any) {
     const reason = typeof error?.message === 'string' ? error.message : 'intro_failed'
-    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, reason, debug })
+    return NextResponse.json({
+      ok: true,
+      message: fallbackMessage,
+      fallback: true,
+      reason,
+      debug: { ...debug, endpointPath: `v1beta/models/${resolvedModel}:generateContent` },
+    })
   }
 }

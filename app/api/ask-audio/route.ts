@@ -8,6 +8,7 @@ import {
   pickFallbackQuestion,
 } from '@/lib/question-memory'
 import { detectCompletionIntent } from '@/lib/intents'
+import { resolveGoogleModel } from '@/lib/google-model'
 
 const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
 Core responsibilities:
@@ -81,6 +82,9 @@ type AskAudioResponse = {
     provider: string
     usedFallback: boolean
     reason?: string
+    model?: string
+    endpoint?: string
+    requestUrl?: string
     providerResponseSnippet?: string
     providerStatus?: number | null
     providerError?: string | null
@@ -215,10 +219,14 @@ export async function POST(req: NextRequest) {
       primerPreview: memory.primerText.slice(0, 400),
       askedQuestionsPreview: memory.askedQuestions.slice(0, 10),
     }
+    const model = resolveGoogleModel(process.env.GOOGLE_MODEL)
+
     const debugBase = {
       sessionId: requestSessionId ?? null,
       turn: requestTurn,
       provider,
+      model,
+      endpoint: `v1beta/models/${model}:generateContent`,
       memory: debugMemory,
     }
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
@@ -261,15 +269,15 @@ export async function POST(req: NextRequest) {
     if (text) parts.push({ text })
     parts.push({ text: 'Respond only with JSON in the format {"reply":"...","transcript":"...","end_intent":false}.' })
 
-    const model = process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite'
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts }] }),
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': process.env.GOOGLE_API_KEY || '',
       },
-    )
+      body: JSON.stringify({ contents: [{ role: 'user', parts }] }),
+    })
     const json = await response.json().catch(() => ({}))
     const txt =
       json?.candidates?.[0]?.content?.parts?.map((part: any) => part?.text || '').filter(Boolean).join('\n') || ''
@@ -285,6 +293,11 @@ export async function POST(req: NextRequest) {
     const providerResponseSnippet = (txt && txt.trim().length
       ? txt
       : JSON.stringify(json?.error || json) || '').slice(0, 400)
+    const fallbackReason = response.ok
+      ? txt.trim().length
+        ? 'fallback_guard'
+        : 'empty_response'
+      : 'provider_error'
 
     const fallback: AskAudioResponse = {
       ok: true,
@@ -295,10 +308,11 @@ export async function POST(req: NextRequest) {
       debug: {
         ...debugBase,
         usedFallback: true,
-        reason: 'fallback_guard',
+        reason: fallbackReason,
         providerStatus,
         providerError: providerErrorMessage,
         providerResponseSnippet,
+        requestUrl: endpoint,
       },
     }
 
@@ -372,6 +386,7 @@ export async function POST(req: NextRequest) {
           providerResponseSnippet,
           providerStatus,
           providerError: providerErrorMessage,
+          requestUrl: endpoint,
         },
       })
     }
@@ -398,9 +413,12 @@ export async function POST(req: NextRequest) {
         providerResponseSnippet,
         providerStatus,
         providerError: providerErrorMessage,
+        requestUrl: endpoint,
       },
     })
   } catch (e) {
+    const normalizedModel = resolveGoogleModel(process.env.GOOGLE_MODEL)
+
     return NextResponse.json<AskAudioResponse>({
       ok: true,
       provider,
@@ -413,6 +431,9 @@ export async function POST(req: NextRequest) {
         provider,
         usedFallback: true,
         reason: 'exception',
+        model: normalizedModel,
+        endpoint: `v1beta/models/${normalizedModel}:generateContent`,
+        requestUrl: `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModel}:generateContent`,
         memory: debugMemory,
       },
     })
