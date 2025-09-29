@@ -293,7 +293,7 @@ export async function POST(req: NextRequest) {
     const providerResponseSnippet = (txt && txt.trim().length
       ? txt
       : JSON.stringify(json?.error || json) || '').slice(0, 400)
-    const fallbackReason = response.ok
+    const initialFallbackReason = response.ok
       ? txt.trim().length
         ? 'fallback_guard'
         : 'empty_response'
@@ -308,7 +308,7 @@ export async function POST(req: NextRequest) {
       debug: {
         ...debugBase,
         usedFallback: true,
-        reason: fallbackReason,
+        reason: initialFallbackReason,
         providerStatus,
         providerError: providerErrorMessage,
         providerResponseSnippet,
