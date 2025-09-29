@@ -49,6 +49,21 @@ const formatPreviewList = (items: string[] | undefined, max: number = 3) => {
     .join(' | ')
 }
 
+const DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
+
+type DiagnosticTranscriptPayload = {
+  text: string
+  turn: number
+  at: string
+  isEmpty: boolean
+  reason?: string
+  meta?: {
+    started: boolean
+    manualStop: boolean
+    stopReason: string
+  }
+}
+
 export default function RootPage() {
   return <Home key="__default__" />
 }
@@ -101,6 +116,8 @@ type AskDebugPayload = {
   usedFallback?: boolean
   reason?: string
   providerResponseSnippet?: string
+  providerStatus?: number | null
+  providerError?: string | null
   memory?: AskDebugMemory
 }
 
@@ -789,6 +806,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
     pushLog('Manual stop requested')
   }, [manualStopRef, pushLog])
 
+  const publishTranscriptSynopsis = useCallback((payload: DiagnosticTranscriptPayload) => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY, JSON.stringify(payload))
+    } catch {}
+  }, [])
+
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
     if (inTurnRef.current) return
@@ -801,10 +825,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
     setManualStopRequested(false)
     updateMachineState('calibrating')
     pushLog('Calibrating microphone baseline')
+    const currentTurnNumber = turn + 1
+    let diagnosticSynopsis: DiagnosticTranscriptPayload | null = null
     try {
       let b64 = ''
       let recDuration = 0
       let baselineToUse = baselineRef.current ?? DEFAULT_BASELINE
+      let recMeta = { started: false, stopReason: 'unknown' as string }
       const calibrateDuration = baselineRef.current ? 0.6 : 0.9
       try {
         const measured = clampBaseline(await calibrateRMS(calibrateDuration))
@@ -850,13 +877,34 @@ export function Home({ userHandle }: { userHandle?: string }) {
         })
         b64 = await blobToBase64(rec.blob)
         recDuration = rec.durationMs || 0
+        recMeta = { started: Boolean(rec.started), stopReason: rec.stopReason || 'unknown' }
       } catch {
         const silent = new Blob([new Uint8Array(1)], { type: 'audio/webm' })
         b64 = await blobToBase64(silent)
         recDuration = 500
+        recMeta = { started: false, stopReason: 'record_error' }
       }
+      const manualStopDuringTurn = manualStopRef.current
       if (recDuration < 100) {
         pushLog(`Warning: captured very short audio (${Math.round(recDuration)}ms).`)
+        const detailParts = [
+          `started=${recMeta.started ? 'yes' : 'no'}`,
+          `manual_stop=${manualStopDuringTurn ? 'yes' : 'no'}`,
+          `stop_reason=${recMeta.stopReason}`,
+        ]
+        pushLog(`turn dropped: silent audio (${detailParts.join(', ')})`)
+        diagnosticSynopsis = {
+          text: '',
+          turn: currentTurnNumber,
+          at: new Date().toISOString(),
+          isEmpty: true,
+          reason: manualStopDuringTurn
+            ? 'manual_stop'
+            : recMeta.started
+            ? 'short_audio'
+            : 'no_voice_detected',
+          meta: { ...recMeta, manualStop: manualStopDuringTurn },
+        }
       }
       manualStopRef.current = false
       setManualStopRequested(false)
@@ -881,7 +929,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
-      const turnNumber = turn + 1
+      const turnNumber = currentTurnNumber
       const askDebug = askRes?.debug
       if (askDebug?.memory) {
         const memoryParts: string[] = []
@@ -918,8 +966,29 @@ export function Home({ userHandle }: { userHandle?: string }) {
       const transcriptLog = transcript.trim().length ? truncateForLog(transcript, 200) : ''
       if (transcriptLog) {
         pushLog(`[turn ${turnNumber}] Heard → ${transcriptLog}`)
+        publishTranscriptSynopsis({
+          text: transcriptLog,
+          turn: turnNumber,
+          at: new Date().toISOString(),
+          isEmpty: false,
+          meta: { ...recMeta, manualStop: manualStopDuringTurn },
+        })
+        diagnosticSynopsis = null
       } else {
         pushLog(`[turn ${turnNumber}] Heard → (no transcript captured)`)
+        if (!diagnosticSynopsis) {
+          diagnosticSynopsis = {
+            text: '',
+            turn: turnNumber,
+            at: new Date().toISOString(),
+            isEmpty: true,
+            reason: 'no_transcript_returned',
+            meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          }
+        }
+        if (diagnosticSynopsis) {
+          publishTranscriptSynopsis(diagnosticSynopsis)
+        }
       }
 
       const providerLabel = askDebug?.usedFallback
@@ -930,6 +999,12 @@ export function Home({ userHandle }: { userHandle?: string }) {
         pushLog(
           `[turn ${turnNumber}] Provider snippet → ${truncateForLog(askDebug.providerResponseSnippet, 200)}`,
         )
+      }
+      if (typeof askDebug?.providerStatus === 'number') {
+        pushLog(`[turn ${turnNumber}] Provider status → ${askDebug.providerStatus}`)
+      }
+      if (askDebug?.providerError) {
+        pushLog(`[turn ${turnNumber}] Provider error → ${truncateForLog(askDebug.providerError, 160)}`)
       }
       if (askDebug?.usedFallback && askDebug.reason) {
         pushLog(`[turn ${turnNumber}] Fallback reason → ${truncateForLog(askDebug.reason, 160)}`)
@@ -1047,6 +1122,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
     } catch (e) {
+      if (diagnosticSynopsis) {
+        publishTranscriptSynopsis({
+          ...diagnosticSynopsis,
+          at: new Date().toISOString(),
+          reason: diagnosticSynopsis.reason || 'turn_error',
+        })
+      }
       pushLog('There was a problem saving or asking. Check /api/health and env keys.')
       inTurnRef.current = false
       manualStopRef.current = false
@@ -1057,6 +1139,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
     MAX_TURNS,
     finalizeNow,
     manualStopRef,
+    publishTranscriptSynopsis,
     playAssistantResponse,
     pushLog,
     sessionId,
