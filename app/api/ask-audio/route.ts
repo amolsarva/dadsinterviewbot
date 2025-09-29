@@ -71,6 +71,8 @@ type AskAudioBody = {
   text?: string
   sessionId?: string
   turn?: number
+  userHandle?: string
+  user_handle?: string
 }
 
 type AskAudioResponse = {
