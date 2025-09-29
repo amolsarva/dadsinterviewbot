@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-type TestKey = 'health' | 'smoke' | 'e2e' | 'email'
+type TestKey = 'health' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
 type FoxRecord = {
   id: string
@@ -43,16 +43,20 @@ const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
+  google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
+  openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
   smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
   e2e: { label: 'End-to-end test', path: '/api/diagnostics/e2e', method: 'POST' },
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'smoke', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = ['health', 'google', 'openai', 'smoke', 'e2e', 'email']
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
     health: { status: 'idle' },
+    google: { status: 'idle' },
+    openai: { status: 'idle' },
     smoke: { status: 'idle' },
     e2e: { status: 'idle' },
     email: { status: 'idle' },
@@ -74,6 +78,30 @@ function formatSummary(key: TestKey, data: any): string {
     if (blob) parts.push(`Blob check: ${blob.ok ? 'ok' : blob.reason || 'error'}`)
     if (db) parts.push(`DB: ${db.ok ? db.mode || 'ok' : db.reason || 'error'}`)
     return parts.join(' · ')
+  }
+
+  if (key === 'google') {
+    if (data.ok) {
+      const model = data.model || {}
+      const replyText = typeof data.reply === 'string' ? data.reply.trim() : ''
+      const replySnippet = replyText.length > 60 ? `${replyText.slice(0, 57)}…` : replyText
+      const reply = replySnippet ? ` · Reply: ${replySnippet}` : ''
+      return `Model: ${model.name || model.id || 'unknown'}${reply}`
+    }
+    if (data.error) return `Error: ${data.error}`
+    if (data.status && data.message) return `HTTP ${data.status}: ${data.message}`
+  }
+
+  if (key === 'openai') {
+    if (data.ok) {
+      const modelId = data.model?.id || data.model || 'unknown model'
+      const replyText = typeof data.reply === 'string' ? data.reply.trim() : ''
+      const replySnippet = replyText.length > 60 ? `${replyText.slice(0, 57)}…` : replyText
+      const reply = replySnippet ? ` · Reply: ${replySnippet}` : ''
+      return `Model: ${modelId}${reply}`
+    }
+    if (data.error) return `Error: ${data.error}`
+    if (data.status && data.message) return `HTTP ${data.status}: ${data.message}`
   }
 
   if (key === 'email') {
@@ -226,8 +254,45 @@ export default function DiagnosticsPage() {
     setResults(initialResults())
     setFoxes([])
 
+    let transcriptSnapshot: TranscriptSynopsis | null = null
     let providerSnapshot: ProviderErrorSynopsis | null = null
     if (typeof window !== 'undefined') {
+      try {
+        const rawTranscript = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY)
+        if (rawTranscript) {
+          const parsedTranscript = JSON.parse(rawTranscript)
+          if (parsedTranscript && typeof parsedTranscript === 'object') {
+            transcriptSnapshot = {
+              text: typeof (parsedTranscript as any).text === 'string' ? (parsedTranscript as any).text : '',
+              turn: typeof (parsedTranscript as any).turn === 'number' ? (parsedTranscript as any).turn : 0,
+              at: typeof (parsedTranscript as any).at === 'string' ? (parsedTranscript as any).at : '',
+              isEmpty: Boolean((parsedTranscript as any).isEmpty),
+              reason:
+                typeof (parsedTranscript as any).reason === 'string'
+                  ? (parsedTranscript as any).reason
+                  : undefined,
+              meta:
+                (parsedTranscript as any).meta && typeof (parsedTranscript as any).meta === 'object'
+                  ? {
+                      started:
+                        typeof (parsedTranscript as any).meta.started === 'boolean'
+                          ? (parsedTranscript as any).meta.started
+                          : undefined,
+                      manualStop:
+                        typeof (parsedTranscript as any).meta.manualStop === 'boolean'
+                          ? (parsedTranscript as any).meta.manualStop
+                          : undefined,
+                      stopReason:
+                        typeof (parsedTranscript as any).meta.stopReason === 'string'
+                          ? (parsedTranscript as any).meta.stopReason
+                          : undefined,
+                    }
+                  : undefined,
+            }
+          }
+        }
+      } catch {}
+
       try {
         const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
         if (rawError) {
@@ -254,6 +319,39 @@ export default function DiagnosticsPage() {
           }
         }
       } catch {}
+    }
+
+    setLatestTranscript(transcriptSnapshot)
+    if (providerSnapshot) {
+      setLatestProviderError(providerSnapshot)
+    } else {
+      setLatestProviderError(null)
+    }
+
+    if (transcriptSnapshot) {
+      const capturedAt =
+        transcriptSnapshot.at && !Number.isNaN(Date.parse(transcriptSnapshot.at))
+          ? new Date(transcriptSnapshot.at).toLocaleString()
+          : 'time unknown'
+      if (transcriptSnapshot.isEmpty) {
+        const reasonLabel = transcriptSnapshot.reason
+          ? ` (${String(transcriptSnapshot.reason).replace(/_/g, ' ')})`
+          : ''
+        append(`[transcript] Turn ${transcriptSnapshot.turn || '–'} at ${capturedAt}: no transcript${reasonLabel}.`)
+      } else {
+        append(
+          `[transcript] Turn ${transcriptSnapshot.turn || '–'} at ${capturedAt}: "${transcriptSnapshot.text}"`,
+        )
+      }
+      if (transcriptSnapshot.meta) {
+        append(
+          `[transcript] Meta → started=${formatFlag(transcriptSnapshot.meta.started)} · manual_stop=${formatFlag(
+            transcriptSnapshot.meta.manualStop,
+          )} · stop_reason=${transcriptSnapshot.meta.stopReason || 'unknown'}`,
+        )
+      }
+    } else {
+      append('[transcript] No transcript data captured yet.')
     }
 
     if (providerSnapshot) {
