@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
 
-const DEFAULT_MODEL = process.env.GOOGLE_MODEL || 'gemini-1.5-flash-latest'
+const DEFAULT_MODEL = process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite'
 
 export async function GET() {
   if (!process.env.GOOGLE_API_KEY) {
