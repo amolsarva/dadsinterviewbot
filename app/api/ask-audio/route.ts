@@ -82,6 +82,8 @@ type AskAudioResponse = {
     usedFallback: boolean
     reason?: string
     providerResponseSnippet?: string
+    providerStatus?: number | null
+    providerError?: string | null
     memory?: {
       hasPriorSessions: boolean
       hasCurrentConversation: boolean
@@ -271,6 +273,18 @@ export async function POST(req: NextRequest) {
     const json = await response.json().catch(() => ({}))
     const txt =
       json?.candidates?.[0]?.content?.parts?.map((part: any) => part?.text || '').filter(Boolean).join('\n') || ''
+    const providerStatus = response.status
+    const providerErrorMessage =
+      typeof json?.error?.message === 'string'
+        ? json.error.message
+        : typeof json?.error === 'string'
+        ? json.error
+        : !response.ok
+        ? response.statusText || 'Provider request failed'
+        : null
+    const providerResponseSnippet = (txt && txt.trim().length
+      ? txt
+      : JSON.stringify(json?.error || json) || '').slice(0, 400)
 
     const fallback: AskAudioResponse = {
       ok: true,
@@ -278,7 +292,14 @@ export async function POST(req: NextRequest) {
       reply: fallbackReply,
       transcript: text || '',
       end_intent: detectCompletionIntent(text || '').shouldStop,
-      debug: { ...debugBase, usedFallback: true, reason: 'fallback_guard' },
+      debug: {
+        ...debugBase,
+        usedFallback: true,
+        reason: 'fallback_guard',
+        providerStatus,
+        providerError: providerErrorMessage,
+        providerResponseSnippet,
+      },
     }
 
     const parsed = parseJsonFromText(txt)
@@ -348,7 +369,9 @@ export async function POST(req: NextRequest) {
         debug: {
           ...debugBase,
           usedFallback: false,
-          providerResponseSnippet: txt.slice(0, 400),
+          providerResponseSnippet,
+          providerStatus,
+          providerError: providerErrorMessage,
         },
       })
     }
@@ -358,6 +381,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(fallback)
     }
     const completion = detectCompletionIntent(txt || text || '')
+    const fallbackReason = !response.ok
+      ? 'provider_error'
+      : txt.trim().length
+      ? 'unstructured_response'
+      : 'empty_response'
     return NextResponse.json({
       ...fallback,
       reply: txt || fallback.reply,
@@ -366,8 +394,10 @@ export async function POST(req: NextRequest) {
       debug: {
         ...debugBase,
         usedFallback: true,
-        reason: 'unstructured_response',
-        providerResponseSnippet: txt.slice(0, 400),
+        reason: fallbackReason,
+        providerResponseSnippet,
+        providerStatus,
+        providerError: providerErrorMessage,
       },
     })
   } catch (e) {

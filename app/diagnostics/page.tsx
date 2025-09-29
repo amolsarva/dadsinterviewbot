@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 type TestKey = 'health' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
@@ -14,6 +14,21 @@ type FoxRecord = {
   firstTriggeredAt: string
   lastTriggeredAt: string
 }
+
+type TranscriptSynopsis = {
+  text: string
+  turn: number
+  at: string
+  isEmpty: boolean
+  reason?: string
+  meta?: {
+    started?: boolean
+    manualStop?: boolean
+    stopReason?: string
+  }
+}
+
+const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
@@ -64,10 +79,83 @@ function formatSummary(key: TestKey, data: any): string {
 }
 
 export default function DiagnosticsPage() {
+  const [latestTranscript, setLatestTranscript] = useState<TranscriptSynopsis | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [isRunning, setIsRunning] = useState(false)
   const [foxes, setFoxes] = useState<FoxRecord[]>([])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const read = () => {
+      try {
+        const raw = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY)
+        if (!raw) {
+          setLatestTranscript(null)
+          return
+        }
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object') {
+          setLatestTranscript(null)
+          return
+        }
+        const payload: TranscriptSynopsis = {
+          text: typeof (parsed as any).text === 'string' ? (parsed as any).text : '',
+          turn: typeof (parsed as any).turn === 'number' ? (parsed as any).turn : 0,
+          at: typeof (parsed as any).at === 'string' ? (parsed as any).at : '',
+          isEmpty: Boolean((parsed as any).isEmpty),
+          reason: typeof (parsed as any).reason === 'string' ? (parsed as any).reason : undefined,
+          meta:
+            (parsed as any).meta && typeof (parsed as any).meta === 'object'
+              ? {
+                  started:
+                    typeof (parsed as any).meta.started === 'boolean'
+                      ? (parsed as any).meta.started
+                      : undefined,
+                  manualStop:
+                    typeof (parsed as any).meta.manualStop === 'boolean'
+                      ? (parsed as any).meta.manualStop
+                      : undefined,
+                  stopReason:
+                    typeof (parsed as any).meta.stopReason === 'string'
+                      ? (parsed as any).meta.stopReason
+                      : undefined,
+                }
+              : undefined,
+        }
+        setLatestTranscript(payload)
+      } catch {
+        setLatestTranscript(null)
+      }
+    }
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === TRANSCRIPT_STORAGE_KEY) {
+        read()
+      }
+    }
+    const handleFocus = () => {
+      if (typeof document !== 'undefined') {
+        if (document.visibilityState && document.visibilityState !== 'visible') return
+      }
+      read()
+    }
+    read()
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('focus', handleFocus)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleFocus)
+    }
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('focus', handleFocus)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleFocus)
+      }
+    }
+  }, [])
+
+  const formatFlag = (value: boolean | undefined) =>
+    value === true ? 'yes' : value === false ? 'no' : 'unknown'
 
   const append = (line: string) =>
     setLog(l => (l && l.length > 0 ? l + '\n' + line : line))
@@ -147,6 +235,20 @@ export default function DiagnosticsPage() {
     setIsRunning(false)
   }
 
+  const transcriptTurnLabel =
+    latestTranscript && typeof latestTranscript.turn === 'number' && latestTranscript.turn > 0
+      ? latestTranscript.turn
+      : '–'
+  const transcriptTimestampLabel =
+    latestTranscript && typeof latestTranscript.at === 'string' && latestTranscript.at.length
+      ? Number.isNaN(Date.parse(latestTranscript.at))
+        ? 'time unknown'
+        : new Date(latestTranscript.at).toLocaleString()
+      : 'time unknown'
+  const transcriptReasonLabel = latestTranscript?.reason
+    ? ` (${String(latestTranscript.reason).replace(/_/g, ' ')})`
+    : ''
+
   return (
     <main>
       <div className="panel-card diagnostics-panel">
@@ -154,6 +256,31 @@ export default function DiagnosticsPage() {
         <button onClick={runDiagnostics} disabled={isRunning} className="btn-secondary btn-large">
           {isRunning ? 'Running…' : 'Run full diagnostics'}
         </button>
+
+        <div className="diagnostics-transcript">
+          <h3>Latest transcript heard</h3>
+          {latestTranscript ? (
+            <div className="diagnostic-card">
+              <div className="diagnostic-card-head">
+                <span className="diagnostic-label">Turn {transcriptTurnLabel} · {transcriptTimestampLabel}</span>
+              </div>
+              <div className="diagnostic-message">
+                {latestTranscript.isEmpty
+                  ? `No transcript captured${transcriptReasonLabel}.`
+                  : `“${latestTranscript.text}”`}
+              </div>
+              {latestTranscript.meta && (
+                <div className="diagnostic-meta">
+                  Started: {formatFlag(latestTranscript.meta.started)} · Manual stop:{' '}
+                  {formatFlag(latestTranscript.meta.manualStop)} · Stop reason:{' '}
+                  {latestTranscript.meta.stopReason || 'unknown'}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="status-note">No recent transcript data captured yet.</p>
+          )}
+        </div>
 
         <div className="diagnostics-tests">
           {TEST_ORDER.map((key) => {
