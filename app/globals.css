@@ -136,6 +136,22 @@ a:hover {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 6px 16px rgba(83, 39, 9, 0.16);
 }
 
+.site-nav a.active,
+.site-nav a[aria-current='page'] {
+  background: rgba(15, 124, 75, 0.1);
+  color: var(--accent-deep);
+  border-color: rgba(15, 124, 75, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 6px 18px rgba(15, 124, 75, 0.18);
+  font-weight: 600;
+}
+
+.site-nav a.active:hover,
+.site-nav a[aria-current='page']:hover {
+  background: rgba(15, 124, 75, 0.18);
+  color: var(--accent-deep);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 8px 22px rgba(15, 124, 75, 0.22);
+}
+
 .site-footer {
   margin-top: 32px;
   font-size: 12px;
