@@ -81,6 +81,18 @@ export function compressDetail(detail: string): string {
   return words.slice(0, 14).join(' ') + '...'
 }
 
+export function extractPrimerHighlights(primerText: string | null | undefined): string[] {
+  if (!primerText) return []
+  return primerText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^-\s*(Remembering|Still holding onto|Also remembering|Highlight)/i.test(line))
+    .map((line) =>
+      line.replace(/^-\s*(Remembering|Still holding onto|Also remembering|Highlight)\s*:?/i, '').trim(),
+    )
+    .filter(Boolean)
+}
+
 export function buildMemoryPrimerPreview(
   sessions: SessionMemorySnapshot[],
   options: { limit?: number; heading?: string } = {},

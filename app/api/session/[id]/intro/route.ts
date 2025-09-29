@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureSessionMemoryHydrated, getSessionMemorySnapshot } from '@/lib/data'
+import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import {
   buildMemoryLogDocument,
   buildMemoryPrimerPreview,
@@ -7,6 +7,7 @@ import {
   findLatestUserDetails,
   normalizeQuestion,
   pickFallbackQuestion,
+  extractPrimerHighlights,
   sessionHasUserDetail,
 } from '@/lib/question-memory'
 import { normalizeHandle } from '@/lib/user-scope'
@@ -57,6 +58,7 @@ function buildHistorySummary(
   titles: string[],
   details: string[],
   askedQuestions: string[],
+  primerHighlights: string[] = [],
 ): { historyText: string; questionText: string } {
   const historyLines: string[] = []
   if (titles.length) {
@@ -69,6 +71,12 @@ function buildHistorySummary(
     historyLines.push('Recent user details:')
     for (const detail of details.slice(0, 5)) {
       historyLines.push(`- ${detail}`)
+    }
+  }
+  if (primerHighlights.length) {
+    historyLines.push('Memory primer highlights:')
+    for (const highlight of primerHighlights.slice(0, 4)) {
+      historyLines.push(`- ${highlight}`)
     }
   }
   const historyText = historyLines.join('\n') || 'No previous transcript details are available yet.'
@@ -120,20 +128,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .filter((title): title is string => Boolean(title && title.trim().length))
     .slice(0, 5)
   const details = findLatestUserDetails(previousSessionsWithDetails, { limit: 3 })
+  const primerResult = await getMemoryPrimer(normalizedHandle ?? current.user_handle ?? null)
+  const primerFromStorage = primerResult.text?.trim() ?? ''
+  const primerHighlights = extractPrimerHighlights(primerFromStorage)
   const askedQuestions = collectAskedQuestions(sessions)
-  const fallbackQuestion = pickFallbackQuestion(askedQuestions, details[0])
-  const hasHistory = previousSessionsWithDetails.length > 0
+  const highlightDetails = primerHighlights.length ? primerHighlights : details
+  const fallbackQuestion = pickFallbackQuestion(askedQuestions, highlightDetails[0])
+  const hasHistory = previousSessionsWithDetails.length > 0 || primerFromStorage.length > 0
   const fallbackMessage = buildFallbackIntro({
     titles,
-    details,
+    details: highlightDetails,
     question: fallbackQuestion,
     hasHistory,
   })
-  const primerText = buildMemoryPrimerPreview(previousSessionsWithDetails, {
+  const fallbackPrimer = buildMemoryPrimerPreview(previousSessionsWithDetails, {
     heading: "Here's what I'm already remembering for you:",
     limit: 4,
   })
-  const { historyText, questionText } = buildHistorySummary(titles, details, askedQuestions)
+  const primerText = primerFromStorage || fallbackPrimer
+  const { historyText, questionText } = buildHistorySummary(titles, details, askedQuestions, primerHighlights)
   const hasCurrentConversation = (current.turns?.length ?? 0) > 0
   const memoryLog = buildMemoryLogDocument({
     handle: normalizedHandle ?? current.user_handle ?? null,
@@ -142,7 +155,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     current,
     hasPriorSessions: hasHistory,
     hasCurrentConversation,
-    highlightDetail: details[0] ?? null,
+    highlightDetail: highlightDetails[0] ?? null,
     historyText,
     questionText,
     primerText,
@@ -150,10 +163,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   })
 
   const debug = {
-    hasPriorSessions: previousSessionsWithDetails.length > 0,
+    hasPriorSessions: hasHistory,
     sessionCount: sessions.length,
     rememberedTitles: titles,
     rememberedDetails: details,
+    primerHighlights: primerHighlights.slice(0, 6),
+    primerSource: primerFromStorage.length ? 'storage' : 'computed',
+    primerUpdatedAt: primerResult.updatedAt || null,
     askedQuestionsPreview: askedQuestions.slice(0, 10),
     primerPreview: primerText.slice(0, 400),
     fallbackQuestion,

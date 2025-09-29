@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { ensureSessionMemoryHydrated, getSessionMemorySnapshot } from '@/lib/data'
+import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import {
   buildMemoryLogDocument,
   buildMemoryPrimerPreview,
@@ -8,6 +8,7 @@ import {
   findLatestUserDetails,
   normalizeQuestion,
   pickFallbackQuestion,
+  extractPrimerHighlights,
   sessionHasUserDetail,
 } from '@/lib/question-memory'
 import { normalizeHandle } from '@/lib/user-scope'
@@ -102,6 +103,7 @@ type AskAudioResponse = {
       primerPreview: string
       primerFull?: string
       askedQuestionsPreview: string[]
+      primerHighlights?: string[]
     }
   }
 }
@@ -115,6 +117,7 @@ type MemoryPrompt = {
   askedQuestions: string[]
   highlightDetail?: string
   primerText: string
+  primerHighlights: string[]
   hasPriorSessions: boolean
   hasCurrentConversation: boolean
   handle?: string | null
@@ -139,11 +142,20 @@ async function buildMemoryPrompt(
   const { current, sessions } = getSessionMemorySnapshot(sessionId, { handle: requestedHandle })
   const priorSessions = sessions.filter((session) => session.id !== sessionId)
   const priorSessionsWithDetails = priorSessions.filter(sessionHasUserDetail)
-  const hasPriorSessions = priorSessionsWithDetails.length > 0
+  const derivedHandle =
+    requestedHandle ??
+    normalizeHandle(current?.user_handle ?? undefined) ??
+    normalizeHandle(sessions[0]?.user_handle ?? undefined)
+  const primerResult = await getMemoryPrimer(derivedHandle ?? null)
+  const primerFromStorage = primerResult.text?.trim() ?? ''
+  const hasPriorSessions = priorSessionsWithDetails.length > 0 || primerFromStorage.length > 0
   const askedQuestionSource = current ? [current, ...priorSessions] : sessions
   const askedQuestions = collectAskedQuestions(askedQuestionSource)
-  const highlightDetail = findLatestUserDetails(priorSessionsWithDetails, { limit: 1 })[0]
-  const primerText = buildMemoryPrimerPreview(priorSessionsWithDetails, { limit: 4 })
+  const primerHighlights = extractPrimerHighlights(primerFromStorage)
+  const highlightDetail =
+    primerHighlights[0] ?? findLatestUserDetails(priorSessionsWithDetails, { limit: 1 })[0]
+  const fallbackPrimer = buildMemoryPrimerPreview(priorSessionsWithDetails, { limit: 4 })
+  const primerText = primerFromStorage || fallbackPrimer
   const sessionCount = sessions.length
 
   const historyLines: string[] = []
@@ -184,8 +196,6 @@ async function buildMemoryPrompt(
   const historyText = historyLines.length ? historyLines.join('\n') : 'No previous transcript details are available yet.'
   const questionText = questionLines.join('\n')
   const recentConversation = conversationLines.join('\n')
-  const derivedHandle =
-    requestedHandle ?? normalizeHandle(current?.user_handle ?? undefined) ?? normalizeHandle(sessions[0]?.user_handle ?? undefined)
   const memoryLog = buildMemoryLogDocument({
     handle: derivedHandle ?? null,
     sessionId: sessionId ?? null,
@@ -207,6 +217,7 @@ async function buildMemoryPrompt(
     askedQuestions,
     highlightDetail,
     primerText,
+    primerHighlights,
     hasPriorSessions,
     hasCurrentConversation,
     handle: derivedHandle ?? null,
@@ -254,6 +265,7 @@ export async function POST(req: NextRequest) {
       primerPreview: memory.primerText.slice(0, 400),
       primerFull: memory.primerText.slice(0, 2000),
       askedQuestionsPreview: memory.askedQuestions.slice(0, 10),
+      primerHighlights: memory.primerHighlights.slice(0, 6),
     }
     const debugBase = {
       sessionId: requestSessionId ?? null,

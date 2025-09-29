@@ -72,6 +72,9 @@ type IntroDebugPayload = {
   rememberedDetails?: string[]
   askedQuestionsPreview?: string[]
   primerPreview?: string
+  primerHighlights?: string[]
+  primerSource?: string
+  primerUpdatedAt?: string | null
   fallbackQuestion?: string
   historyText?: string
   questionText?: string
@@ -100,6 +103,7 @@ type AskDebugMemory = {
   primerPreview?: string
   primerFull?: string
   askedQuestionsPreview?: string[]
+  primerHighlights?: string[]
 }
 
 type AskDebugPayload = {
@@ -922,6 +926,11 @@ export function Home({ userHandle }: { userHandle?: string }) {
         if (askDebug.memory.primerPreview) {
           pushLog(`[turn ${turnNumber}] Primer preview → ${truncateForLog(askDebug.memory.primerPreview, 160)}`)
         }
+        if (askDebug.memory.primerHighlights && askDebug.memory.primerHighlights.length) {
+          pushLog(
+            `[turn ${turnNumber}] Primer highlights → ${formatPreviewList(askDebug.memory.primerHighlights, 3)}`,
+          )
+        }
         if (askDebug.memory.historyFull) {
           pushLog(`[turn ${turnNumber}] History summary →\n${askDebug.memory.historyFull}`)
         }
@@ -1152,6 +1161,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
           }
           if (json.debug.primerPreview) {
             pushLog(`[init] Primer preview → ${truncateForLog(json.debug.primerPreview, 180)}`)
+          }
+          if (json.debug.primerHighlights && json.debug.primerHighlights.length) {
+            pushLog(
+              `[init] Primer highlights → ${formatPreviewList(json.debug.primerHighlights, 3)}`,
+            )
+          }
+          if (json.debug.primerSource) {
+            const updated = json.debug.primerUpdatedAt
+              ? ` (updated ${json.debug.primerUpdatedAt})`
+              : ''
+            pushLog(`[init] Primer source → ${json.debug.primerSource}${updated}`)
           }
           if (json.debug.historyText) {
             pushLog(`[init] History summary →\n${json.debug.historyText}`)

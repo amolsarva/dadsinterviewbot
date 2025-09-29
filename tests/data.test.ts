@@ -136,8 +136,21 @@ describe('finalizeSession', () => {
     await data.finalizeSession(session.id, { clientDurationMs: 500 })
 
     const primer = await data.getMemoryPrimer()
-    expect(primer.text).toContain('User opened with: hello there from the porch')
+    expect(primer.text).toContain('Remembering: hello there from the porch')
     expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/MemoryPrimer.txt')).toBe(true)
+  })
+
+  it('stores memory primers in handle-specific paths', async () => {
+    const data = await import('../lib/data')
+    sendEmailMock.mockResolvedValue({ skipped: true })
+    const session = await data.createSession({ email_to: '', user_handle: 'Amol' })
+    await data.appendTurn(session.id, { role: 'user', text: 'a remembered highlight from Amol' })
+
+    await data.finalizeSession(session.id, { clientDurationMs: 250 })
+
+    expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/users/amol/MemoryPrimer.txt')).toBe(true)
+    const primer = await data.getMemoryPrimer('amol')
+    expect(primer.text).toContain('Remembering: a remembered highlight from Amol')
   })
 })
 
@@ -174,6 +187,7 @@ describe('session deletion helpers', () => {
     expect(result).toEqual({ ok: true, deleted: true })
     expect(deleteByPrefixMock).toHaveBeenCalledWith(`sessions/${session.id}/`)
     expect(deleteByPrefixMock).toHaveBeenCalledWith(`transcripts/${session.id}`)
+    expect(deleteByPrefixMock).toHaveBeenCalledWith('memory/')
     expect(deleteBlobMock).toHaveBeenCalledWith('memory/MemoryPrimer.txt')
 
     const primer = await data.getMemoryPrimer()
@@ -194,7 +208,6 @@ describe('session deletion helpers', () => {
     expect(deleteByPrefixMock).toHaveBeenCalledWith('sessions/')
     expect(deleteByPrefixMock).toHaveBeenCalledWith('transcripts/')
     expect(deleteByPrefixMock).toHaveBeenCalledWith('memory/')
-    expect(deleteBlobMock).toHaveBeenCalledWith('memory/MemoryPrimer.txt')
 
     const sessions = await data.listSessions()
     expect(sessions).toEqual([])

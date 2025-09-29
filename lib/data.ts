@@ -37,7 +37,8 @@ type RememberedSession = Session & { turns?: Turn[] }
 
 const globalKey = '__dads_interview_mem__'
 const bootKey = '__dads_interview_mem_boot__'
-const primerKey = '__dads_interview_memory_primer__'
+const primerKey = '__dads_interview_memory_primer_map__'
+const primerPromiseKey = '__dads_interview_memory_primer_promises__'
 const hydrationKey = '__dads_interview_mem_hydrated__'
 const g: any = globalThis as any
 if (!g[globalKey]) {
@@ -47,27 +48,34 @@ if (!g[bootKey]) {
   g[bootKey] = new Date().toISOString()
 }
 if (!g[primerKey]) {
-  g[primerKey] = { text: '', url: undefined, updatedAt: undefined, loaded: false }
+  g[primerKey] = new Map<string, PrimerState>()
+}
+if (!g[primerPromiseKey]) {
+  g[primerPromiseKey] = new Map<string, Promise<void>>()
 }
 if (!g[hydrationKey]) {
   g[hydrationKey] = { attempted: false, hydrated: false }
 }
 const mem: { sessions: Map<string, RememberedSession> } = g[globalKey]
 const memBootedAt: string = g[bootKey]
-const primerState: { text: string; url?: string; updatedAt?: string; loaded: boolean } = g[primerKey]
+const primerStates: Map<string, PrimerState> = g[primerKey]
+const primerLoadPromises: Map<string, Promise<void>> = g[primerPromiseKey]
 const hydrationState: { attempted: boolean; hydrated: boolean } = g[hydrationKey]
 
 const MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
+const PRIMER_GUEST_SCOPE = 'guest'
 
-function resetPrimerState() {
-  primerState.text = ''
-  primerState.url = undefined
-  primerState.updatedAt = undefined
-  primerState.loaded = false
+type PrimerState = { text: string; url?: string; updatedAt?: string; loaded: boolean }
+
+function resetPrimerState(scope?: string) {
+  if (scope) {
+    primerStates.delete(scope)
+    return
+  }
+  primerStates.clear()
 }
 
 let hydrationPromise: Promise<void> | null = null
-let primerLoadPromise: Promise<void> | null = null
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -108,37 +116,75 @@ function truncateSnippet(text: string, limit = 180) {
   return `${slice}…`
 }
 
+function primerScopeKey(handle?: string | null): string {
+  const normalized = normalizeHandle(handle ?? undefined)
+  return normalized ?? PRIMER_GUEST_SCOPE
+}
+
+function primerPathForScope(scope: string): string {
+  if (scope === PRIMER_GUEST_SCOPE) {
+    return MEMORY_PRIMER_PATH
+  }
+  return `memory/users/${scope}/MemoryPrimer.txt`
+}
+
+function primerDirectoryForScope(scope: string): string {
+  const path = primerPathForScope(scope)
+  const index = path.lastIndexOf('/')
+  return index === -1 ? '' : path.slice(0, index + 1)
+}
+
+function getPrimerState(scope: string): PrimerState {
+  let state = primerStates.get(scope)
+  if (!state) {
+    state = { text: '', url: undefined, updatedAt: undefined, loaded: false }
+    primerStates.set(scope, state)
+  }
+  return state
+}
+
+async function deletePrimerFromStorage(scope: string) {
+  const path = primerPathForScope(scope)
+  try {
+    await deleteBlob(path)
+  } catch (err) {
+    console.warn('Failed to delete memory primer blob', { scope, path, err })
+  } finally {
+    resetPrimerState(scope)
+  }
+}
+
 function collectPrimerHighlights(session: RememberedSession): string[] {
   const highlights: string[] = []
+  const seen = new Set<string>()
   const userTurns = (session.turns || []).filter((turn) => turn.role === 'user' && turn.text && turn.text.trim().length)
   const assistantTurns = (session.turns || []).filter(
     (turn) => turn.role === 'assistant' && turn.text && turn.text.trim().length,
   )
 
-  const snippets: { label: string; text: string }[] = []
+  const addHighlight = (label: string, text: string | undefined) => {
+    if (!text) return
+    const snippet = truncateSnippet(text)
+    if (!snippet || seen.has(snippet)) return
+    seen.add(snippet)
+    highlights.push(`- ${label}: ${snippet}`)
+  }
+
   if (userTurns.length) {
-    snippets.push({ label: 'User opened with', text: userTurns[0].text })
-    if (userTurns.length > 2) {
-      snippets.push({ label: 'User reflected', text: userTurns[Math.floor(userTurns.length / 2)].text })
-    }
+    addHighlight('Remembering', userTurns[0].text)
     if (userTurns.length > 1) {
-      snippets.push({ label: 'User added', text: userTurns[userTurns.length - 1].text })
+      addHighlight('Still holding onto', userTurns[userTurns.length - 1].text)
+    }
+    if (userTurns.length > 2) {
+      addHighlight('Also remembering', userTurns[Math.floor(userTurns.length / 2)].text)
     }
   }
+
   if (assistantTurns.length) {
-    snippets.push({ label: 'Assistant responded', text: assistantTurns[assistantTurns.length - 1].text })
+    addHighlight('You replied', assistantTurns[assistantTurns.length - 1].text)
   }
 
-  const seen = new Set<string>()
-  for (const snippet of snippets) {
-    const trimmed = truncateSnippet(snippet.text)
-    if (!trimmed || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    highlights.push(`- ${snippet.label}: ${trimmed}`)
-    if (highlights.length >= 4) break
-  }
-
-  return highlights
+  return highlights.slice(0, 4)
 }
 
 async function hydrateSessionsFromBlobs() {
@@ -177,24 +223,35 @@ async function hydrateSessionsFromBlobs() {
   }
 }
 
-async function ensurePrimerLoadedFromStorage() {
-  if (primerState.loaded && primerState.text) return
-  if (primerLoadPromise) {
-    await primerLoadPromise
+async function ensurePrimerLoadedFromStorage(handle?: string | null) {
+  const scope = primerScopeKey(handle)
+  const state = getPrimerState(scope)
+  if (state.loaded && state.text) return
+
+  if (primerLoadPromises.has(scope)) {
+    await primerLoadPromises.get(scope)
     return
   }
-  primerLoadPromise = (async () => {
+
+  const promise = (async () => {
+    const directoryPrefix = primerDirectoryForScope(scope) || 'memory/'
     try {
-      const { blobs } = await listBlobs({ prefix: 'memory/', limit: 20 })
-      const primerBlob = blobs.find((blob) => blob.pathname === MEMORY_PRIMER_PATH)
-      if (!primerBlob) return
+      const { blobs } = await listBlobs({ prefix: directoryPrefix, limit: 50 })
+      const path = primerPathForScope(scope)
+      const primerBlob = blobs.find((blob) => blob.pathname === path)
+      if (!primerBlob) {
+        state.text = ''
+        state.url = undefined
+        state.updatedAt = undefined
+        return
+      }
       const url = primerBlob.downloadUrl || primerBlob.url
       const resp = await fetch(url)
       if (!resp.ok) return
       const text = await resp.text()
-      primerState.text = text
-      primerState.url = url
-      primerState.updatedAt = safeDateString(
+      state.text = text
+      state.url = url
+      state.updatedAt = safeDateString(
         primerBlob.uploadedAt instanceof Date
           ? primerBlob.uploadedAt.toISOString()
           : typeof primerBlob.uploadedAt === 'string'
@@ -202,15 +259,17 @@ async function ensurePrimerLoadedFromStorage() {
           : undefined,
       )
     } catch (err) {
-      console.warn('Failed to load memory primer from storage', err)
+      console.warn('Failed to load memory primer from storage', { scope, err })
     } finally {
-      primerState.loaded = true
+      state.loaded = true
     }
   })()
+
+  primerLoadPromises.set(scope, promise)
   try {
-    await primerLoadPromise
+    await promise
   } finally {
-    primerLoadPromise = null
+    primerLoadPromises.delete(scope)
   }
 }
 
@@ -228,30 +287,54 @@ export async function ensureSessionMemoryHydrated() {
   }
 }
 
-export async function getMemoryPrimer(): Promise<{ text: string; url?: string; updatedAt?: string }> {
-  if (!primerState.loaded || !primerState.text) {
-    await ensurePrimerLoadedFromStorage()
+export async function getMemoryPrimer(
+  handle?: string | null,
+): Promise<{ text: string; url?: string; updatedAt?: string }> {
+  const scope = primerScopeKey(handle)
+  const state = getPrimerState(scope)
+  if (!state.loaded || !state.text) {
+    await ensurePrimerLoadedFromStorage(handle)
   }
-  if (!primerState.text) {
-    const sessionsWithContent = Array.from(mem.sessions.values()).filter((session) =>
-      (session.turns || []).some((turn) => typeof turn.text === 'string' && turn.text.trim().length),
-    )
+  if (!state.text) {
+    const sessionsWithContent = Array.from(mem.sessions.values()).filter((session) => {
+      const sessionHandle = primerScopeKey(session.user_handle ?? null)
+      if (sessionHandle !== scope) return false
+      return (session.turns || []).some((turn) => typeof turn.text === 'string' && turn.text.trim().length)
+    })
     if (sessionsWithContent.length) {
-      await rebuildMemoryPrimer()
+      return rebuildMemoryPrimer(handle)
     }
   }
-  return { text: primerState.text, url: primerState.url, updatedAt: primerState.updatedAt }
+  return { text: state.text, url: state.url, updatedAt: state.updatedAt }
 }
 
-function buildMemoryPrimerFromSessions(sessions: RememberedSession[]): string {
+function buildMemoryPrimerFromSessions(sessions: RememberedSession[], scope: string): string {
   const sorted = [...sessions].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
   const lines: string[] = []
-  lines.push('# Memory Primer')
+  const storytellerLabel = scope === PRIMER_GUEST_SCOPE ? 'guest storyteller' : `/u/${scope}`
+  lines.push(`# Memory Primer for ${storytellerLabel}`)
   lines.push(`Updated: ${formatDateTime(new Date().toISOString())}`)
   lines.push('')
   if (!sorted.length) {
     lines.push('No conversations have been recorded yet.')
     return lines.join('\n')
+  }
+
+  const aggregatedHighlights: string[] = []
+  for (const session of sorted) {
+    const highlights = collectPrimerHighlights(session)
+    const remembered = highlights.find((line) => /^-\s*Remembering/i.test(line))
+    if (remembered) {
+      aggregatedHighlights.push(remembered)
+    }
+  }
+
+  if (aggregatedHighlights.length) {
+    lines.push('## Highlight reel')
+    for (const highlight of aggregatedHighlights.slice(0, 6)) {
+      lines.push(highlight)
+    }
+    lines.push('')
   }
 
   for (const session of sorted) {
@@ -264,26 +347,40 @@ function buildMemoryPrimerFromSessions(sessions: RememberedSession[]): string {
     } else {
       lines.push('- No detailed transcript was captured for this session.')
     }
+    lines.push('- Total turns recorded: ' + session.total_turns)
     lines.push('')
   }
 
   return lines.join('\n').trim()
 }
 
-export async function rebuildMemoryPrimer(): Promise<{ text: string; url?: string; updatedAt?: string }> {
-  const sessions = Array.from(mem.sessions.values())
-  const primerText = buildMemoryPrimerFromSessions(sessions)
+export async function rebuildMemoryPrimer(
+  handle?: string | null,
+): Promise<{ text: string; url?: string; updatedAt?: string }> {
+  const scope = primerScopeKey(handle)
+  const sessions = Array.from(mem.sessions.values()).filter((session) => {
+    const sessionScope = primerScopeKey(session.user_handle ?? null)
+    return sessionScope === scope
+  })
+
+  if (!sessions.length) {
+    await deletePrimerFromStorage(scope)
+    return { text: '', url: undefined, updatedAt: undefined }
+  }
+
+  const primerText = buildMemoryPrimerFromSessions(sessions, scope)
   const blob = await putBlobFromBuffer(
-    MEMORY_PRIMER_PATH,
+    primerPathForScope(scope),
     Buffer.from(primerText, 'utf8'),
     'text/plain; charset=utf-8',
     { access: 'public' },
   )
-  primerState.text = primerText
-  primerState.url = blob.downloadUrl || blob.url
-  primerState.updatedAt = new Date().toISOString()
-  primerState.loaded = true
-  return { text: primerText, url: primerState.url, updatedAt: primerState.updatedAt }
+  const state = getPrimerState(scope)
+  state.text = primerText
+  state.url = blob.downloadUrl || blob.url
+  state.updatedAt = new Date().toISOString()
+  state.loaded = true
+  return { text: primerText, url: state.url, updatedAt: state.updatedAt }
 }
 
 export async function dbHealth() {
@@ -298,8 +395,8 @@ export async function createSession({
   user_handle?: string | null
 }): Promise<Session> {
   await ensureSessionMemoryHydrated().catch(() => undefined)
-  await getMemoryPrimer().catch(() => undefined)
   const normalizedHandle = normalizeHandle(user_handle ?? undefined) ?? null
+  await getMemoryPrimer(normalizedHandle).catch(() => undefined)
   const s: RememberedSession = {
     id: uid(),
     created_at: new Date().toISOString(),
@@ -520,7 +617,7 @@ export async function finalizeSession(
 
   mem.sessions.set(id, s)
 
-  await rebuildMemoryPrimer().catch((err) => {
+  await rebuildMemoryPrimer(s.user_handle ?? null).catch((err) => {
     console.warn('Failed to rebuild memory primer', err)
   })
 
@@ -603,12 +700,16 @@ export async function deleteSession(
     mem.sessions.delete(id)
   }
 
-  if (mem.sessions.size > 0) {
-    await rebuildMemoryPrimer().catch((err) => {
+  if (session) {
+    await rebuildMemoryPrimer(session.user_handle ?? null).catch((err) => {
       console.warn('Failed to rebuild memory primer after deletion', err)
     })
-  } else {
-    await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+  }
+
+  if (mem.sessions.size === 0) {
+    await deleteBlobsByPrefix('memory/').catch((err) => {
+      console.warn('Failed to clear memory primer directory', err)
+    })
     resetPrimerState()
   }
 
@@ -634,7 +735,6 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
     }),
   )
 
-  await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
   resetPrimerState()
   hydrationState.attempted = true
   hydrationState.hydrated = true
@@ -762,10 +862,8 @@ export function __dangerousResetMemoryState() {
   mem.sessions.clear()
   hydrationState.attempted = false
   hydrationState.hydrated = false
-  primerState.text = ''
-  primerState.url = undefined
-  primerState.updatedAt = undefined
-  primerState.loaded = false
+  primerStates.clear()
+  primerLoadPromises.clear()
 }
 
 async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup | null> {
