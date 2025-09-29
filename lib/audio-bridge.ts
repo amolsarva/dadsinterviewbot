@@ -1,7 +1,12 @@
 // Thin typed wrapper around the legacy JS audio helpers used on the client
 // This avoids TS build errors while reusing the proven implementation.
 
-export type RecordResult = { blob: Blob; durationMs: number }
+export type RecordResult = {
+  blob: Blob
+  durationMs: number
+  started: boolean
+  stopReason: string
+}
 
 async function getModule(): Promise<any> {
   // Dynamic import so it only loads client-side

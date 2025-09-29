@@ -182,6 +182,48 @@ a:hover {
   text-align: center;
 }
 
+.alert-banner {
+  width: 100%;
+  text-align: left;
+  border-radius: 18px;
+  padding: 16px 18px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: linear-gradient(135deg, rgba(254, 226, 226, 0.92), rgba(254, 202, 202, 0.82));
+  color: #7f1d1d;
+  box-shadow: 0 16px 40px rgba(127, 29, 29, 0.16);
+}
+
+.alert-banner__title {
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.alert-banner__message {
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.alert-banner__meta {
+  font-size: 12px;
+  color: rgba(127, 29, 29, 0.82);
+}
+
+.alert-banner__snippet {
+  margin-top: 10px;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(254, 226, 226, 0.75);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .account-chip {
   font-size: 13px;
   color: var(--muted);
@@ -492,6 +534,12 @@ textarea.diagnostics-log {
   gap: 16px;
 }
 
+.diagnostics-provider-error {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .diagnostic-card {
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(243, 203, 165, 0.7);
@@ -520,6 +568,24 @@ textarea.diagnostics-log {
   font-size: 14px;
   color: var(--muted);
   white-space: pre-wrap;
+}
+
+.diagnostic-meta {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(115, 74, 43, 0.75);
+}
+
+.diagnostic-snippet {
+  margin-top: 10px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(243, 203, 165, 0.6);
+  border-radius: 14px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .diagnostics-foxes {

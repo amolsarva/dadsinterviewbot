@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 type TestKey = 'health' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
@@ -14,6 +14,32 @@ type FoxRecord = {
   firstTriggeredAt: string
   lastTriggeredAt: string
 }
+
+type TranscriptSynopsis = {
+  text: string
+  turn: number
+  at: string
+  isEmpty: boolean
+  reason?: string
+  meta?: {
+    started?: boolean
+    manualStop?: boolean
+    stopReason?: string
+  }
+}
+
+type ProviderErrorSynopsis = {
+  status: number | null
+  message: string
+  reason?: string
+  snippet?: string
+  at: string
+  resolved?: boolean
+  resolvedAt?: string
+}
+
+const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
+const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
@@ -64,13 +90,125 @@ function formatSummary(key: TestKey, data: any): string {
 }
 
 export default function DiagnosticsPage() {
+  const [latestTranscript, setLatestTranscript] = useState<TranscriptSynopsis | null>(null)
+  const [latestProviderError, setLatestProviderError] = useState<ProviderErrorSynopsis | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [isRunning, setIsRunning] = useState(false)
   const [foxes, setFoxes] = useState<FoxRecord[]>([])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const read = () => {
+      try {
+        const raw = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY)
+        if (!raw) {
+          setLatestTranscript(null)
+        } else {
+          const parsed = JSON.parse(raw)
+          if (!parsed || typeof parsed !== 'object') {
+            setLatestTranscript(null)
+          } else {
+            const payload: TranscriptSynopsis = {
+              text: typeof (parsed as any).text === 'string' ? (parsed as any).text : '',
+              turn: typeof (parsed as any).turn === 'number' ? (parsed as any).turn : 0,
+              at: typeof (parsed as any).at === 'string' ? (parsed as any).at : '',
+              isEmpty: Boolean((parsed as any).isEmpty),
+              reason: typeof (parsed as any).reason === 'string' ? (parsed as any).reason : undefined,
+              meta:
+                (parsed as any).meta && typeof (parsed as any).meta === 'object'
+                  ? {
+                      started:
+                        typeof (parsed as any).meta.started === 'boolean'
+                          ? (parsed as any).meta.started
+                          : undefined,
+                      manualStop:
+                        typeof (parsed as any).meta.manualStop === 'boolean'
+                          ? (parsed as any).meta.manualStop
+                          : undefined,
+                      stopReason:
+                        typeof (parsed as any).meta.stopReason === 'string'
+                          ? (parsed as any).meta.stopReason
+                          : undefined,
+                    }
+                  : undefined,
+            }
+            setLatestTranscript(payload)
+          }
+        }
+      } catch {
+        setLatestTranscript(null)
+      }
+
+      try {
+        const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
+        if (!rawError) {
+          setLatestProviderError(null)
+        } else {
+          const parsedError = JSON.parse(rawError)
+          if (!parsedError || typeof parsedError !== 'object') {
+            setLatestProviderError(null)
+          } else {
+            const rawStatus =
+              typeof (parsedError as any).status === 'number'
+                ? (parsedError as any).status
+                : typeof (parsedError as any).status === 'string'
+                ? Number.parseInt((parsedError as any).status, 10)
+                : null
+            const normalizedStatus =
+              typeof rawStatus === 'number' && Number.isFinite(rawStatus) ? rawStatus : null
+            const snapshot: ProviderErrorSynopsis = {
+              status: normalizedStatus,
+              message: typeof (parsedError as any).message === 'string' ? (parsedError as any).message : 'Unknown error',
+              reason: typeof (parsedError as any).reason === 'string' ? (parsedError as any).reason : undefined,
+              snippet: typeof (parsedError as any).snippet === 'string' ? (parsedError as any).snippet : undefined,
+              at: typeof (parsedError as any).at === 'string' ? (parsedError as any).at : '',
+              resolved: (parsedError as any).resolved === true,
+              resolvedAt:
+                typeof (parsedError as any).resolvedAt === 'string' ? (parsedError as any).resolvedAt : undefined,
+            }
+            setLatestProviderError(snapshot)
+          }
+        }
+      } catch {
+        setLatestProviderError(null)
+      }
+    }
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        !event.key ||
+        event.key === TRANSCRIPT_STORAGE_KEY ||
+        event.key === PROVIDER_ERROR_STORAGE_KEY
+      ) {
+        read()
+      }
+    }
+    const handleFocus = () => {
+      if (typeof document !== 'undefined') {
+        if (document.visibilityState && document.visibilityState !== 'visible') return
+      }
+      read()
+    }
+    read()
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('focus', handleFocus)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleFocus)
+    }
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('focus', handleFocus)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleFocus)
+      }
+    }
+  }, [])
+
+  const formatFlag = (value: boolean | undefined) =>
+    value === true ? 'yes' : value === false ? 'no' : 'unknown'
+
   const append = (line: string) =>
-    setLog(l => (l && l.length > 0 ? l + '\n' + line : line))
+    setLog((l) => (l && l.length > 0 ? l + '\n' + line : line))
 
   const statusIcon = useMemo(
     () => ({ idle: '•', pending: '…', ok: '✅', error: '❌' } as const),
@@ -87,6 +225,59 @@ export default function DiagnosticsPage() {
     setLog('Running diagnostics...')
     setResults(initialResults())
     setFoxes([])
+
+    let providerSnapshot: ProviderErrorSynopsis | null = null
+    if (typeof window !== 'undefined') {
+      try {
+        const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
+        if (rawError) {
+          const parsed = JSON.parse(rawError)
+          if (parsed && typeof parsed === 'object') {
+            const rawStatus =
+              typeof (parsed as any).status === 'number'
+                ? (parsed as any).status
+                : typeof (parsed as any).status === 'string'
+                ? Number.parseInt((parsed as any).status, 10)
+                : null
+            const normalizedStatus =
+              typeof rawStatus === 'number' && Number.isFinite(rawStatus) ? rawStatus : null
+            providerSnapshot = {
+              status: normalizedStatus,
+              message: typeof (parsed as any).message === 'string' ? (parsed as any).message : 'Unknown error',
+              reason: typeof (parsed as any).reason === 'string' ? (parsed as any).reason : undefined,
+              snippet: typeof (parsed as any).snippet === 'string' ? (parsed as any).snippet : undefined,
+              at: typeof (parsed as any).at === 'string' ? (parsed as any).at : '',
+              resolved: (parsed as any).resolved === true,
+              resolvedAt:
+                typeof (parsed as any).resolvedAt === 'string' ? (parsed as any).resolvedAt : undefined,
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (providerSnapshot) {
+      const capturedAt = providerSnapshot.at && !Number.isNaN(Date.parse(providerSnapshot.at))
+        ? new Date(providerSnapshot.at).toLocaleString()
+        : 'time unknown'
+      append(
+        `[provider-error] ${
+          providerSnapshot.status ? `HTTP ${providerSnapshot.status}` : 'Request failed'
+        } at ${capturedAt} (${providerSnapshot.reason || 'reason unknown'})`,
+      )
+      if (providerSnapshot.resolved) {
+        const resolvedAt =
+          providerSnapshot.resolvedAt && !Number.isNaN(Date.parse(providerSnapshot.resolvedAt))
+            ? new Date(providerSnapshot.resolvedAt).toLocaleString()
+            : 'time unknown'
+        append(`[provider-error] Resolved at ${resolvedAt}`)
+      }
+      if (providerSnapshot.snippet) {
+        append(`[provider-error] Snippet: ${providerSnapshot.snippet}`)
+      }
+    } else {
+      append('[provider-error] No provider errors recorded yet.')
+    }
 
     for (const key of TEST_ORDER) {
       const { path, method } = TEST_CONFIG[key]
@@ -147,6 +338,20 @@ export default function DiagnosticsPage() {
     setIsRunning(false)
   }
 
+  const transcriptTurnLabel =
+    latestTranscript && typeof latestTranscript.turn === 'number' && latestTranscript.turn > 0
+      ? latestTranscript.turn
+      : '–'
+  const transcriptTimestampLabel =
+    latestTranscript && typeof latestTranscript.at === 'string' && latestTranscript.at.length
+      ? Number.isNaN(Date.parse(latestTranscript.at))
+        ? 'time unknown'
+        : new Date(latestTranscript.at).toLocaleString()
+      : 'time unknown'
+  const transcriptReasonLabel = latestTranscript?.reason
+    ? ` (${String(latestTranscript.reason).replace(/_/g, ' ')})`
+    : ''
+
   return (
     <main>
       <div className="panel-card diagnostics-panel">
@@ -154,6 +359,60 @@ export default function DiagnosticsPage() {
         <button onClick={runDiagnostics} disabled={isRunning} className="btn-secondary btn-large">
           {isRunning ? 'Running…' : 'Run full diagnostics'}
         </button>
+
+        <div className="diagnostics-transcript">
+          <h3>Latest transcript heard</h3>
+          {latestTranscript ? (
+            <div className="diagnostic-card">
+              <div className="diagnostic-card-head">
+                <span className="diagnostic-label">Turn {transcriptTurnLabel} · {transcriptTimestampLabel}</span>
+              </div>
+              <div className="diagnostic-message">
+                {latestTranscript.isEmpty
+                  ? `No transcript captured${transcriptReasonLabel}.`
+                  : `“${latestTranscript.text}”`}
+              </div>
+              {latestTranscript.meta && (
+                <div className="diagnostic-meta">
+                  Started: {formatFlag(latestTranscript.meta.started)} · Manual stop:{' '}
+                  {formatFlag(latestTranscript.meta.manualStop)} · Stop reason:{' '}
+                  {latestTranscript.meta.stopReason || 'unknown'}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="status-note">No recent transcript data captured yet.</p>
+          )}
+        </div>
+
+        <div className="diagnostics-provider-error">
+          <h3>Latest provider error</h3>
+          {latestProviderError ? (
+            <div className="diagnostic-card">
+              <div className="diagnostic-card-head">
+                <span className="diagnostic-label">
+                  {latestProviderError.status ? `HTTP ${latestProviderError.status}` : 'Request failed'} ·{' '}
+                  {Number.isNaN(Date.parse(latestProviderError.at))
+                    ? 'time unknown'
+                    : new Date(latestProviderError.at).toLocaleString()}
+                </span>
+              </div>
+              <div className="diagnostic-message">{latestProviderError.message}</div>
+              <div className="diagnostic-meta">
+                Reason: {latestProviderError.reason || 'unspecified'} · Status:{' '}
+                {latestProviderError.resolved ? 'resolved' : 'active'}
+                {latestProviderError.resolved && latestProviderError.resolvedAt
+                  ? ` at ${new Date(latestProviderError.resolvedAt).toLocaleString()}`
+                  : ''}
+              </div>
+              {latestProviderError.snippet && (
+                <pre className="diagnostic-snippet">{latestProviderError.snippet}</pre>
+              )}
+            </div>
+          ) : (
+            <p className="status-note">No provider errors have been recorded yet.</p>
+          )}
+        </div>
 
         <div className="diagnostics-tests">
           {TEST_ORDER.map((key) => {

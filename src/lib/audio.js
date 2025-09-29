@@ -88,6 +88,7 @@ export async function recordUntilSilence(options) {
   let quietStreak = 0
   let loudStreak = 0
   const data = new Float32Array(an.fftSize)
+  let stopReason = 'unknown'
 
   return await new Promise((resolve) => {
     let done = false
@@ -101,8 +102,8 @@ export async function recordUntilSilence(options) {
     rec.onstop = () => {
       if (done) return
       const blob = new Blob(chunks, { type: mime })
-      const durationMs = Math.max(0, performance.now() - startedAt)
-      finish({ blob, durationMs })
+      const durationMs = started ? Math.max(0, performance.now() - startedAt) : 0
+      finish({ blob, durationMs, started, stopReason })
     }
 
     proc.onaudioprocess = () => {
@@ -113,7 +114,8 @@ export async function recordUntilSilence(options) {
       const now = performance.now()
       if (!started) {
         if (shouldForceStop()) {
-          finish({ blob: new Blob([], { type: mime }), durationMs: 0 })
+          stopReason = 'force_stop_before_start'
+          finish({ blob: new Blob([], { type: mime }), durationMs: 0, started: false, stopReason })
           return
         }
         if (level >= startRatio) {
@@ -121,6 +123,7 @@ export async function recordUntilSilence(options) {
             started = true
             startedAt = now
             rec.start()
+            stopReason = 'pending'
           }
         } else {
           loudStreak = 0
@@ -133,11 +136,15 @@ export async function recordUntilSilence(options) {
         }
         const elapsed = now - startedAt
         const silenceElapsed = now - lastLoud
-        if (elapsed >= maxDurationMs) rec.stop()
-        else if (shouldForceStop()) {
+        if (elapsed >= maxDurationMs) {
+          stopReason = 'max_duration'
+          rec.stop()
+        } else if (shouldForceStop()) {
+          stopReason = 'force_stop_after_start'
           if (rec.state === 'recording') rec.stop()
-          else finish({ blob: new Blob(chunks, { type: mime }), durationMs: elapsed })
+          else finish({ blob: new Blob(chunks, { type: mime }), durationMs: elapsed, started, stopReason })
         } else if (elapsed >= minDurationMs && quietStreak >= 8 && silenceElapsed >= silenceMs + graceMs) {
+          stopReason = 'silence'
           rec.stop()
         }
       }
