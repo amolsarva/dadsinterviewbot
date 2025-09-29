@@ -11,6 +11,9 @@ export function normalizeGoogleModel(raw?: string | null): string {
   value = value.replace(/\?.*$/, '')
 
   const lower = value.toLowerCase()
+  if (lower.startsWith('gemini-1.5')) {
+    return fallback
+  }
   if (lower.startsWith('gemini-2.5-') && lower.endsWith('-latest')) {
     value = value.slice(0, -'-latest'.length)
   }
