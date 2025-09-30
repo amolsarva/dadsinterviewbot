@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { listSessions, clearAllSessions, deleteSessionsByHandle } from '@/lib/data'
 import { fetchStoredSessions } from '@/lib/history'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
+import { formatSessionTitleFallback } from '@/lib/fallback-texts'
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
@@ -13,7 +14,7 @@ export async function GET(request: Request) {
     title:
       s.title ||
       generateSessionTitle(s.turns, {
-        fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+        fallback: formatSessionTitleFallback(s.created_at),
       }) ||
       null,
     status: s.status,
@@ -46,9 +47,7 @@ export async function GET(request: Request) {
       created_at: session.startedAt || session.endedAt || new Date().toISOString(),
       title:
         generateSessionTitle(summarizableTurns, {
-          fallback: `Session on ${
-            new Date(session.startedAt || session.endedAt || new Date().toISOString()).toLocaleDateString()
-          }`,
+          fallback: formatSessionTitleFallback(session.startedAt || session.endedAt || new Date().toISOString()),
         }) ||
         null,
       status: 'completed',
