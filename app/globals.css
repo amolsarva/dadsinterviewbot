@@ -182,6 +182,27 @@ a:hover {
   text-align: center;
 }
 
+.user-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  width: 100%;
+  max-width: 280px;
+}
+
+.user-selector label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(115, 74, 43, 0.85);
+}
+
+.user-selector select {
+  width: 100%;
+}
+
 .account-chip {
   font-size: 13px;
   color: var(--muted);

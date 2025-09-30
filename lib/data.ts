@@ -688,6 +688,18 @@ export async function listSessions(handle?: string | null): Promise<Session[]> {
   return Array.from(seen.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
 }
 
+export async function listUserHandles(): Promise<string[]> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+  const handles = new Set<string>()
+  for (const session of mem.sessions.values()) {
+    const normalized = normalizeHandle(session.user_handle ?? undefined)
+    if (normalized) {
+      handles.add(normalized)
+    }
+  }
+  return Array.from(handles).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+}
+
 export type SessionMemorySnapshot = {
   id: string
   created_at: string
