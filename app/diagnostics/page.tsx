@@ -26,6 +26,7 @@ type TranscriptSynopsis = {
     manualStop?: boolean
     stopReason?: string
   }
+  provider?: string | null
 }
 
 const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
@@ -121,6 +122,12 @@ export default function DiagnosticsPage() {
                       ? (parsed as any).meta.stopReason
                       : undefined,
                 }
+              : undefined,
+          provider:
+            typeof (parsed as any).provider === 'string'
+              ? (parsed as any).provider
+              : (parsed as any).provider === null
+              ? null
               : undefined,
         }
         setLatestTranscript(payload)
@@ -248,6 +255,9 @@ export default function DiagnosticsPage() {
   const transcriptReasonLabel = latestTranscript?.reason
     ? ` (${String(latestTranscript.reason).replace(/_/g, ' ')})`
     : ''
+  const transcriptProviderLabel = latestTranscript?.provider
+    ? latestTranscript.provider
+    : 'provider unknown'
 
   return (
     <main>
@@ -262,7 +272,9 @@ export default function DiagnosticsPage() {
           {latestTranscript ? (
             <div className="diagnostic-card">
               <div className="diagnostic-card-head">
-                <span className="diagnostic-label">Turn {transcriptTurnLabel} · {transcriptTimestampLabel}</span>
+                <span className="diagnostic-label">
+                  Turn {transcriptTurnLabel} · {transcriptTimestampLabel} · {transcriptProviderLabel}
+                </span>
               </div>
               <div className="diagnostic-message">
                 {latestTranscript.isEmpty

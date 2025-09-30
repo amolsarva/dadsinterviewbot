@@ -62,6 +62,7 @@ type DiagnosticTranscriptPayload = {
     manualStop: boolean
     stopReason: string
   }
+  provider?: string | null
 }
 
 export default function RootPage() {
@@ -904,6 +905,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
             ? 'short_audio'
             : 'no_voice_detected',
           meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          provider: null,
         }
       }
       manualStopRef.current = false
@@ -964,6 +966,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
       }
 
       const transcriptLog = transcript.trim().length ? truncateForLog(transcript, 200) : ''
+      const providerLabel = askDebug?.usedFallback
+        ? `fallback (${askDebug.reason || 'guard'})`
+        : askDebug?.provider || askRes?.provider || 'assistant'
+      if (diagnosticSynopsis) {
+        diagnosticSynopsis = { ...diagnosticSynopsis, provider: providerLabel }
+      }
+
       if (transcriptLog) {
         pushLog(`[turn ${turnNumber}] Heard → ${transcriptLog}`)
         publishTranscriptSynopsis({
@@ -972,6 +981,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           at: new Date().toISOString(),
           isEmpty: false,
           meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          provider: providerLabel,
         })
         diagnosticSynopsis = null
       } else {
@@ -984,6 +994,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
             isEmpty: true,
             reason: 'no_transcript_returned',
             meta: { ...recMeta, manualStop: manualStopDuringTurn },
+            provider: providerLabel,
           }
         }
         if (diagnosticSynopsis) {
@@ -991,9 +1002,6 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
 
-      const providerLabel = askDebug?.usedFallback
-        ? `fallback (${askDebug.reason || 'guard'})`
-        : askDebug?.provider || askRes?.provider || 'assistant'
       pushLog(`[turn ${turnNumber}] Reply via ${providerLabel} → ${truncateForLog(reply, 200)}`)
       if (askDebug?.providerResponseSnippet) {
         pushLog(
