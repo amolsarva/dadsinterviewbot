@@ -1,6 +1,7 @@
 "use client"
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
+import { useRouter } from 'next/navigation'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
@@ -12,6 +13,7 @@ import {
   DEMO_HISTORY_BASE_KEY,
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
+  KNOWN_USER_HANDLES_STORAGE_KEY,
   SESSION_STORAGE_BASE_KEY,
   buildScopedPath,
   deriveUserScopeKey,
@@ -24,6 +26,7 @@ const DEFAULT_BASELINE = 0.004
 const MIN_BASELINE = 0.0004
 const MAX_BASELINE = 0.05
 const BASELINE_SPIKE_FACTOR = 2.8
+const INTRO_MIN_PREP_MS = 700
 
 const clampBaseline = (value: number | null | undefined) => {
   if (!Number.isFinite(value ?? NaN) || !value) {
@@ -50,6 +53,7 @@ const formatPreviewList = (items: string[] | undefined, max: number = 3) => {
 }
 
 const DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
+const DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 type DiagnosticTranscriptPayload = {
   text: string
@@ -62,6 +66,17 @@ type DiagnosticTranscriptPayload = {
     manualStop: boolean
     stopReason: string
   }
+  provider?: string | null
+}
+
+type DiagnosticProviderErrorPayload = {
+  status: number | null
+  message: string
+  reason?: string
+  snippet?: string
+  at: string
+  resolved?: boolean
+  resolvedAt?: string
 }
 
 export default function RootPage() {
@@ -358,6 +373,42 @@ type AssistantPlayback = {
 export function Home({ userHandle }: { userHandle?: string }) {
   const normalizedHandle = normalizeHandle(userHandle)
   const displayHandle = userHandle?.trim() || null
+  const router = useRouter()
+  const diagnosticsHref = buildScopedPath('/diagnostics', normalizedHandle)
+  const historyHref = buildScopedPath('/history', normalizedHandle)
+  const settingsHref = buildScopedPath('/settings', normalizedHandle)
+  const [handleInput, setHandleInput] = useState(displayHandle ?? '')
+  const [knownHandles, setKnownHandles] = useState<string[]>([])
+  const rememberHandle = useCallback(
+    (handle?: string | null) => {
+      if (typeof window === 'undefined') return
+      try {
+        const raw = window.localStorage.getItem(KNOWN_USER_HANDLES_STORAGE_KEY)
+        const parsed = raw ? JSON.parse(raw) : null
+        const existing = Array.isArray(parsed)
+          ? parsed
+              .map((entry) => (typeof entry === 'string' ? normalizeHandle(entry) : undefined))
+              .filter((entry): entry is string => Boolean(entry))
+          : []
+        const normalized = normalizeHandle(handle)
+        let next = existing
+        if (normalized) {
+          next = [normalized, ...existing.filter((item) => item !== normalized)]
+        }
+        next = next.slice(0, 8)
+        window.localStorage.setItem(KNOWN_USER_HANDLES_STORAGE_KEY, JSON.stringify(next))
+        setKnownHandles(next)
+      } catch {
+        const normalized = normalizeHandle(handle)
+        if (!normalized) return
+        setKnownHandles((prev) => {
+          const filtered = prev.filter((item) => item !== normalized)
+          return [normalized, ...filtered].slice(0, 8)
+        })
+      }
+    },
+    [],
+  )
   const machineState = useInterviewMachine((state) => state.state)
   const debugLog = useInterviewMachine((state) => state.debugLog)
   const pushLog = useInterviewMachine((state) => state.pushLog)
@@ -367,6 +418,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const [hasStarted, setHasStarted] = useState(false)
   const [finishRequested, setFinishRequested] = useState(false)
   const [manualStopRequested, setManualStopRequested] = useState(false)
+  const [providerError, setProviderError] = useState<DiagnosticProviderErrorPayload | null>(null)
   const inTurnRef = useRef(false)
   const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
@@ -376,10 +428,120 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const finishRequestedRef = useRef(false)
   const sessionInitRef = useRef(false)
   const lastAnnouncedSessionIdRef = useRef<string | null>(null)
-  const diagnosticsHref = buildScopedPath('/diagnostics', normalizedHandle)
   const lastLoggedHandleRef = useRef<string | null>(null)
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
+  const providerErrorRef = useRef<DiagnosticProviderErrorPayload | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      setKnownHandles(normalizedHandle ? [normalizedHandle] : [])
+      return
+    }
+    try {
+      const raw = window.localStorage.getItem(KNOWN_USER_HANDLES_STORAGE_KEY)
+      if (!raw) {
+        setKnownHandles(normalizedHandle ? [normalizedHandle] : [])
+        return
+      }
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        const filtered = parsed
+          .map((entry) => (typeof entry === 'string' ? normalizeHandle(entry) : undefined))
+          .filter((entry): entry is string => Boolean(entry))
+        if (filtered.length) {
+          setKnownHandles(filtered.slice(0, 8))
+        } else if (normalizedHandle) {
+          setKnownHandles([normalizedHandle])
+        } else {
+          setKnownHandles([])
+        }
+      } else if (normalizedHandle) {
+        setKnownHandles([normalizedHandle])
+      } else {
+        setKnownHandles([])
+      }
+    } catch {
+      if (normalizedHandle) {
+        setKnownHandles([normalizedHandle])
+      } else {
+        setKnownHandles([])
+      }
+    }
+  }, [normalizedHandle])
+
+  useEffect(() => {
+    setHandleInput(displayHandle ?? '')
+  }, [displayHandle])
+
+  useEffect(() => {
+    if (!normalizedHandle) return
+    rememberHandle(normalizedHandle)
+  }, [normalizedHandle, rememberHandle])
+
+  const handleSelectorSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      const normalized = normalizeHandle(handleInput)
+      if (!normalized) {
+        setHandleInput('')
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+          } catch {}
+        }
+        router.push('/')
+        return
+      }
+      rememberHandle(normalized)
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalized)
+        } catch {}
+      }
+      setHandleInput(normalized)
+      router.push(buildScopedPath('/', normalized))
+    },
+    [handleInput, rememberHandle, router],
+  )
+
+  const handleKnownSelect = useCallback(
+    (value: string) => {
+      const normalized = normalizeHandle(value)
+      if (!normalized) return
+      rememberHandle(normalized)
+      setHandleInput(normalized)
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalized)
+        } catch {}
+      }
+      router.push(buildScopedPath('/', normalized))
+    },
+    [rememberHandle, router],
+  )
+
+  const handleClearSelection = useCallback(() => {
+    setHandleInput('')
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+      } catch {}
+    }
+    router.push('/')
+  }, [router])
+
+  const easternTimeFormatter = useMemo(
+    () =>
+      typeof Intl !== 'undefined'
+        ? new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          })
+        : null,
+    [],
+  )
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
@@ -429,6 +591,19 @@ export function Home({ userHandle }: { userHandle?: string }) {
     if (typeof window === 'undefined') return
 
     let cancelled = false
+
+    try {
+      const raw = window.localStorage.getItem(DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as DiagnosticProviderErrorPayload
+        if (parsed && typeof parsed === 'object') {
+          providerErrorRef.current = parsed
+          if (parsed.resolved !== true) {
+            setProviderError(parsed)
+          }
+        }
+      }
+    } catch {}
 
     ensureSessionIdOnce(normalizedHandle)
       .then((result) => {
@@ -813,6 +988,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
     } catch {}
   }, [])
 
+  const publishProviderError = useCallback((payload: DiagnosticProviderErrorPayload | null) => {
+    if (typeof window === 'undefined') return
+    try {
+      if (payload) {
+        window.localStorage.setItem(DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY, JSON.stringify(payload))
+      } else {
+        window.localStorage.removeItem(DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY)
+      }
+    } catch {}
+  }, [])
+
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
     if (inTurnRef.current) return
@@ -904,6 +1090,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
             ? 'short_audio'
             : 'no_voice_detected',
           meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          provider: null,
         }
       }
       manualStopRef.current = false
@@ -911,26 +1098,113 @@ export function Home({ userHandle }: { userHandle?: string }) {
       pushLog('Recording stopped → thinking')
       updateMachineState('thinking')
 
-      const askRes = (await fetch('/api/ask-audio', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn + 1 }),
-      })
-        .then((r) => r.json())
-        .catch(
-          () =>
-            ({
-              reply: 'Tell me one small detail you remember from that moment.',
-              transcript: '',
-              end_intent: false,
-            }) as AskResponse,
-        )) as AskResponse
+      let askRes: AskResponse = {
+        reply: 'Tell me one small detail you remember from that moment.',
+        transcript: '',
+        end_intent: false,
+      }
+      let askResStatus: number | null = null
+      let providerErrorForTurn: DiagnosticProviderErrorPayload | null = null
+      try {
+        const res = await fetch('/api/ask-audio', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn + 1 }),
+        })
+        askResStatus = res.status
+        const rawText = await res.text()
+        let parsed: AskResponse | null = null
+        if (rawText && rawText.length) {
+          try {
+            parsed = JSON.parse(rawText) as AskResponse
+          } catch {
+            parsed = null
+          }
+        }
+        if (parsed && typeof parsed === 'object') {
+          askRes = parsed
+        }
+        if (!res.ok) {
+          providerErrorForTurn = {
+            status: askResStatus,
+            message: res.statusText || 'ask-audio request failed',
+            reason: askRes?.debug?.reason || 'ask_audio_http_error',
+            snippet: rawText ? truncateForLog(rawText, 200) : undefined,
+            at: new Date().toISOString(),
+          }
+        }
+      } catch (err) {
+        providerErrorForTurn = {
+          status: null,
+          message: err instanceof Error ? err.message : 'Request failed',
+          reason: 'ask_audio_network_error',
+          at: new Date().toISOString(),
+        }
+      }
 
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
       const turnNumber = currentTurnNumber
       const askDebug = askRes?.debug
+      const providerStatus = typeof askDebug?.providerStatus === 'number' ? askDebug.providerStatus : null
+      const providerErrorMessage =
+        typeof askDebug?.providerError === 'string' && askDebug.providerError.trim().length
+          ? askDebug.providerError.trim()
+          : undefined
+      if (
+        askDebug?.reason === 'provider_error' ||
+        (typeof providerStatus === 'number' && providerStatus >= 400)
+      ) {
+        providerErrorForTurn = {
+          status: providerStatus ?? null,
+          message: providerErrorMessage || 'Provider request failed',
+          reason: askDebug?.reason || 'provider_error',
+          snippet: askDebug?.providerResponseSnippet
+            ? truncateForLog(askDebug.providerResponseSnippet, 200)
+            : undefined,
+          at: new Date().toISOString(),
+        }
+      }
+      if (!providerErrorForTurn && askRes && askRes.ok === false) {
+        providerErrorForTurn = {
+          status: providerStatus ?? askResStatus,
+          message:
+            providerErrorMessage ||
+            (typeof askRes.reply === 'string' && askRes.reply.trim().length
+              ? askRes.reply.trim()
+              : 'ask-audio returned an error'),
+          reason: askDebug?.reason || 'ask_audio_error',
+          snippet: askDebug?.providerResponseSnippet
+            ? truncateForLog(askDebug.providerResponseSnippet, 200)
+            : undefined,
+          at: new Date().toISOString(),
+        }
+      }
+      if (providerErrorForTurn) {
+        providerErrorRef.current = { ...providerErrorForTurn, resolved: false }
+        setProviderError(providerErrorRef.current)
+        publishProviderError(providerErrorRef.current)
+        pushLog(
+          `[turn ${turnNumber}] Provider error flagged → ${
+            providerErrorForTurn.status ? `HTTP ${providerErrorForTurn.status}` : 'request failed'
+          } [${providerErrorForTurn.reason || 'unknown'}] ${truncateForLog(
+            providerErrorForTurn.message,
+            160,
+          )}`,
+        )
+      } else {
+        if (providerErrorRef.current && providerErrorRef.current.resolved !== true) {
+          const resolvedPayload: DiagnosticProviderErrorPayload = {
+            ...providerErrorRef.current,
+            resolved: true,
+            resolvedAt: new Date().toISOString(),
+          }
+          providerErrorRef.current = resolvedPayload
+          publishProviderError(resolvedPayload)
+        }
+        setProviderError(null)
+      }
       if (askDebug?.memory) {
         const memoryParts: string[] = []
         memoryParts.push(`prior sessions: ${askDebug.memory.hasPriorSessions ? 'yes' : 'no'}`)
@@ -964,6 +1238,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
       }
 
       const transcriptLog = transcript.trim().length ? truncateForLog(transcript, 200) : ''
+      const providerLabel = askDebug?.usedFallback
+        ? `fallback (${askDebug.reason || 'guard'})`
+        : askDebug?.provider || askRes?.provider || 'assistant'
+      if (diagnosticSynopsis) {
+        diagnosticSynopsis = { ...diagnosticSynopsis, provider: providerLabel }
+      }
+
       if (transcriptLog) {
         pushLog(`[turn ${turnNumber}] Heard → ${transcriptLog}`)
         publishTranscriptSynopsis({
@@ -972,6 +1253,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           at: new Date().toISOString(),
           isEmpty: false,
           meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          provider: providerLabel,
         })
         diagnosticSynopsis = null
       } else {
@@ -984,6 +1266,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
             isEmpty: true,
             reason: 'no_transcript_returned',
             meta: { ...recMeta, manualStop: manualStopDuringTurn },
+            provider: providerLabel,
           }
         }
         if (diagnosticSynopsis) {
@@ -991,20 +1274,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
 
-      const providerLabel = askDebug?.usedFallback
-        ? `fallback (${askDebug.reason || 'guard'})`
-        : askDebug?.provider || askRes?.provider || 'assistant'
       pushLog(`[turn ${turnNumber}] Reply via ${providerLabel} → ${truncateForLog(reply, 200)}`)
       if (askDebug?.providerResponseSnippet) {
         pushLog(
           `[turn ${turnNumber}] Provider snippet → ${truncateForLog(askDebug.providerResponseSnippet, 200)}`,
         )
       }
-      if (typeof askDebug?.providerStatus === 'number') {
-        pushLog(`[turn ${turnNumber}] Provider status → ${askDebug.providerStatus}`)
+      if (typeof providerStatus === 'number') {
+        pushLog(`[turn ${turnNumber}] Provider status → ${providerStatus}`)
       }
-      if (askDebug?.providerError) {
-        pushLog(`[turn ${turnNumber}] Provider error → ${truncateForLog(askDebug.providerError, 160)}`)
+      if (providerErrorMessage) {
+        pushLog(`[turn ${turnNumber}] Provider error → ${truncateForLog(providerErrorMessage, 160)}`)
       }
       if (askDebug?.usedFallback && askDebug.reason) {
         pushLog(`[turn ${turnNumber}] Fallback reason → ${truncateForLog(askDebug.reason, 160)}`)
@@ -1139,6 +1419,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
     MAX_TURNS,
     finalizeNow,
     manualStopRef,
+    publishProviderError,
     publishTranscriptSynopsis,
     playAssistantResponse,
     pushLog,
@@ -1156,6 +1437,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
     setManualStopRequested(false)
     manualStopRef.current = false
     setHasStarted(true)
+    const introPrepStartedAt = Date.now()
+    const ensureIntroDelay = async () => {
+      const elapsed = Date.now() - introPrepStartedAt
+      const waitMs = INTRO_MIN_PREP_MS - elapsed
+      if (waitMs > 0) {
+        if (waitMs > 50) {
+          pushLog(`Intro ready. Waiting ${waitMs}ms to finish memory sync…`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, waitMs))
+      }
+    }
     let introMessage = ''
     let introSource: 'model' | 'fallback' = 'model'
     try {
@@ -1232,6 +1524,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
         })
       } catch {}
 
+      await ensureIntroDelay()
       pushLog('Intro message ready → playing')
       let introPlaybackStarted = false
       updateMachineState('speakingPrep')
@@ -1257,6 +1550,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
     } catch {
+      await ensureIntroDelay()
       let introFallbackStarted = false
       updateMachineState('speakingPrep')
       try {
@@ -1418,12 +1712,112 @@ export function Home({ userHandle }: { userHandle?: string }) {
     }
   })()
 
+  const providerErrorTimestamp = providerError?.at
+    ? (() => {
+        const parsed = new Date(providerError.at)
+        if (Number.isNaN(parsed.valueOf())) return 'time unknown'
+        if (easternTimeFormatter) {
+          try {
+            return `${easternTimeFormatter.format(parsed)} Eastern Time`
+          } catch {
+            return parsed.toLocaleString()
+          }
+        }
+        return parsed.toLocaleString()
+      })()
+    : null
+  const providerErrorStatusLabel = providerError?.status
+    ? `HTTP ${providerError.status}`
+    : providerError
+    ? 'Request failed'
+    : null
+
   return (
     <main className="home-main">
+      <div className="panel-card account-select-card">
+        <form className="account-selector" onSubmit={handleSelectorSubmit}>
+          <label htmlFor="account-handle" className="account-selector__label">
+            Choose whose conversations to browse
+          </label>
+          <div className="account-selector__controls">
+            <input
+              id="account-handle"
+              list="account-handle-options"
+              value={handleInput}
+              onChange={(event) => setHandleInput(event.target.value)}
+              placeholder="Enter a handle, e.g. amol"
+              autoComplete="off"
+              inputMode="text"
+            />
+            <button type="submit">Open</button>
+            <button
+              type="button"
+              className="btn-outline"
+              onClick={handleClearSelection}
+              disabled={!handleInput.trim() && !normalizedHandle}
+            >
+              Default
+            </button>
+          </div>
+          <datalist id="account-handle-options">
+            {knownHandles.map((handle) => (
+              <option key={handle} value={handle} />
+            ))}
+          </datalist>
+          {knownHandles.length > 0 ? (
+            <div className="account-selector__chips">
+              {knownHandles.map((handle) => (
+                <button
+                  key={handle}
+                  type="button"
+                  className="chip-button"
+                  onClick={() => handleKnownSelect(handle)}
+                >
+                  @{handle}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <p className="account-selector__hint">
+            History, settings, and diagnostics follow whichever account you open. Jump to{' '}
+            <a className="link" href={historyHref}>
+              History
+            </a>{' '}
+            ·{' '}
+            <a className="link" href={settingsHref}>
+              Settings
+            </a>{' '}
+            ·{' '}
+            <a className="link" href={diagnosticsHref}>
+              Diagnostics
+            </a>
+            .
+          </p>
+        </form>
+      </div>
       <div className="panel-card hero-card">
         {displayHandle && (
           <div className="account-chip">
             Account: <span className="highlight">@{displayHandle.toLowerCase()}</span>
+          </div>
+        )}
+        {providerError && (
+          <div className="alert-banner alert-banner--error" role="alert">
+            <div className="alert-banner__title">
+              ⚠️ Trouble reaching Google
+              {providerErrorStatusLabel ? ` · ${providerErrorStatusLabel}` : ''}
+            </div>
+            <div className="alert-banner__message">{providerError.message}</div>
+            <div className="alert-banner__meta">
+              Captured {providerErrorTimestamp || 'time unknown'} · Reason:{' '}
+              {providerError.reason ? providerError.reason.replace(/_/g, ' ') : 'unspecified'} ·{' '}
+              <a className="link" href={diagnosticsHref}>
+                Review diagnostics
+              </a>
+            </div>
+            {providerError.snippet && (
+              <pre className="alert-banner__snippet">{providerError.snippet}</pre>
+            )}
           </div>
         )}
         <button
