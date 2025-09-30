@@ -171,7 +171,9 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 28px;
-  align-items: center;
+  align-items: stretch;
+  width: min(100%, 860px);
+  margin: 0 auto;
 }
 
 .hero-card {
@@ -490,6 +492,7 @@ textarea.diagnostics-log {
   color: var(--muted);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   resize: vertical;
+  width: 100%;
 }
 
 .diagnostics-card {

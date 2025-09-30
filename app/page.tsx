@@ -24,6 +24,7 @@ const DEFAULT_BASELINE = 0.004
 const MIN_BASELINE = 0.0004
 const MAX_BASELINE = 0.05
 const BASELINE_SPIKE_FACTOR = 2.8
+const INTRO_MIN_PREP_MS = 700
 
 const clampBaseline = (value: number | null | undefined) => {
   if (!Number.isFinite(value ?? NaN) || !value) {
@@ -1290,6 +1291,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
     setManualStopRequested(false)
     manualStopRef.current = false
     setHasStarted(true)
+    const introPrepStartedAt = Date.now()
+    const ensureIntroDelay = async () => {
+      const elapsed = Date.now() - introPrepStartedAt
+      const waitMs = INTRO_MIN_PREP_MS - elapsed
+      if (waitMs > 0) {
+        if (waitMs > 50) {
+          pushLog(`Intro ready. Waiting ${waitMs}ms to finish memory sync…`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, waitMs))
+      }
+    }
     let introMessage = ''
     let introSource: 'model' | 'fallback' = 'model'
     try {
@@ -1366,6 +1378,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
         })
       } catch {}
 
+      await ensureIntroDelay()
       pushLog('Intro message ready → playing')
       let introPlaybackStarted = false
       updateMachineState('speakingPrep')
@@ -1391,6 +1404,8 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
     } catch {
+      await ensureIntroDelay()
+      pushLog('Intro fallback ready → playing')
       let introFallbackStarted = false
       updateMachineState('speakingPrep')
       try {
