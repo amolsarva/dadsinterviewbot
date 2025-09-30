@@ -54,6 +54,28 @@ const formatPreviewList = (items: string[] | undefined, max: number = 3) => {
 
 const DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
 const DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
+const KNOWN_HANDLE_LIMIT = 8
+const SERVER_HANDLE_LIMIT = 12
+
+const mergeKnownHandles = (values: Array<string | null | undefined>, limit: number = KNOWN_HANDLE_LIMIT) => {
+  const seen = new Set<string>()
+  const merged: string[] = []
+  for (const value of values) {
+    const normalized = normalizeHandle(value as string | null | undefined)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    merged.push(normalized)
+    if (merged.length >= limit) break
+  }
+  return merged
+}
+
+const extractHandlesFromPayload = (payload: unknown) => {
+  if (!payload || typeof payload !== 'object') return []
+  const handles = (payload as any).handles
+  if (!Array.isArray(handles)) return []
+  return mergeKnownHandles(handles as Array<string | null | undefined>, SERVER_HANDLE_LIMIT)
+}
 
 type DiagnosticTranscriptPayload = {
   text: string
@@ -391,20 +413,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
               .filter((entry): entry is string => Boolean(entry))
           : []
         const normalized = normalizeHandle(handle)
-        let next = existing
-        if (normalized) {
-          next = [normalized, ...existing.filter((item) => item !== normalized)]
-        }
-        next = next.slice(0, 8)
+        const next = mergeKnownHandles([normalized, ...existing])
         window.localStorage.setItem(KNOWN_USER_HANDLES_STORAGE_KEY, JSON.stringify(next))
         setKnownHandles(next)
       } catch {
         const normalized = normalizeHandle(handle)
         if (!normalized) return
-        setKnownHandles((prev) => {
-          const filtered = prev.filter((item) => item !== normalized)
-          return [normalized, ...filtered].slice(0, 8)
-        })
+        setKnownHandles((prev) => mergeKnownHandles([normalized, ...prev]))
       }
     },
     [],
@@ -446,16 +461,11 @@ export function Home({ userHandle }: { userHandle?: string }) {
       }
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed)) {
-        const filtered = parsed
-          .map((entry) => (typeof entry === 'string' ? normalizeHandle(entry) : undefined))
-          .filter((entry): entry is string => Boolean(entry))
-        if (filtered.length) {
-          setKnownHandles(filtered.slice(0, 8))
-        } else if (normalizedHandle) {
-          setKnownHandles([normalizedHandle])
-        } else {
-          setKnownHandles([])
-        }
+        const candidates = (parsed as unknown[]).map((entry) =>
+          typeof entry === 'string' ? entry : undefined,
+        ) as Array<string | undefined>
+        const next = mergeKnownHandles([...candidates, normalizedHandle])
+        setKnownHandles(next)
       } else if (normalizedHandle) {
         setKnownHandles([normalizedHandle])
       } else {
@@ -467,6 +477,43 @@ export function Home({ userHandle }: { userHandle?: string }) {
       } else {
         setKnownHandles([])
       }
+    }
+  }, [normalizedHandle])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const controller = new AbortController()
+    let cancelled = false
+
+    const loadHandles = async () => {
+      try {
+        const res = await fetch(`/api/users?limit=${SERVER_HANDLE_LIMIT}`, {
+          method: 'GET',
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        if (!res.ok) return
+        const data = await res.json().catch(() => null)
+        if (cancelled) return
+        const handles = extractHandlesFromPayload(data)
+        if (!handles.length) return
+        setKnownHandles((prev) => {
+          const merged = mergeKnownHandles([...handles, ...prev, normalizedHandle])
+          try {
+            window.localStorage.setItem(KNOWN_USER_HANDLES_STORAGE_KEY, JSON.stringify(merged))
+          } catch {}
+          return merged
+        })
+      } catch (error: any) {
+        if (error?.name === 'AbortError') return
+      }
+    }
+
+    loadHandles().catch(() => undefined)
+
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [normalizedHandle])
 

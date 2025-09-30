@@ -130,7 +130,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     parts.push({ text: questionText })
     parts.push({ text: 'Respond only with JSON in the format {"message":"...","question":"..."}.' })
 
-    const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
+    const model = process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite'
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
       {
