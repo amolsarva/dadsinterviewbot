@@ -6,7 +6,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const commitSha =
     process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA ?? ''
   const commitMessage =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ?? process.env.VERCEL_GIT_COMMIT_MESSAGE ?? 'local changes'
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ??
+    process.env.VERCEL_GIT_COMMIT_MESSAGE ??
+    'Refresh fallback commit label'
   const commitTimestamp =
     process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_TIMESTAMP ?? process.env.VERCEL_GIT_COMMIT_TIMESTAMP ?? null
   const repoOwner =
