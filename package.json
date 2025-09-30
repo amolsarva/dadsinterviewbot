@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "fallback:sync": "node scripts/extract-fallback-copy.mjs"
   },
   "dependencies": {
     "next": "14.2.5",
