@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
+import { resolveGoogleModel } from '@/lib/google'
 
 export const runtime = 'nodejs'
 
-const DEFAULT_MODEL = process.env.GOOGLE_DIAGNOSTICS_MODEL || process.env.GOOGLE_MODEL || 'gemini-2.5-flash-lite'
+const DEFAULT_MODEL = resolveGoogleModel(
+  process.env.GOOGLE_DIAGNOSTICS_MODEL,
+  process.env.GOOGLE_MODEL,
+)
 
 function extractReplyText(payload: any): string {
   if (!payload) return ''
