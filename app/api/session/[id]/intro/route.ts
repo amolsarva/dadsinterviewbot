@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
+import {
+  formatIntroGreeting,
+  formatIntroReminder,
+  getIntroInvitation,
+  getIntroQuestion,
+} from '@/lib/fallback-texts'
 import { resolveGoogleModel } from '@/lib/google'
 
 const INTRO_SYSTEM_PROMPT = `You are the opening voice of Dad's Interview Bot, a warm, curious biographer.
@@ -14,15 +20,6 @@ Instructions:
 - Summarize or acknowledge relevant remembered details naturally, without repeating the user's exact phrasing.
 - Respond only with JSON shaped as {"message":"<spoken message>","question":"<the follow-up question>"}. No commentary or code fences.`
 
-function formatList(items: string[]): string {
-  if (items.length <= 1) return items[0] || ''
-  if (items.length === 2) return `${items[0]} and ${items[1]}`
-  return `${items[0]}, ${items[1]}, and ${items[2]}`
-}
-
-const FIRST_TIME_INTRO_QUESTION =
-  "Would you start by telling me the first memory you'd like to save together?"
-
 function buildFallbackIntro(options: {
   titles: string[]
   details: string[]
@@ -30,18 +27,10 @@ function buildFallbackIntro(options: {
   hasHistory: boolean
 }): string {
   const { titles, details, question, hasHistory } = options
-  const introPrefix = hasHistory
-    ? titles.length
-      ? `Welcome back—I'm keeping your stories about ${formatList(titles.slice(0, 3))} safe for you.`
-      : "Welcome back—your archive is open and I'm ready whenever you are."
-    : "Hi, I'm Dad's Interview Bot. I'm here to help you capture the memories you want to keep."
-  const reminder = details.length
-    ? `The last thing you shared was about ${details[0]}.`
-    : "I'll remember every detail you share from this moment on."
-  const invitation = hasHistory ? 'When you are ready,' : 'When you feel ready,'
-  const closingQuestion = hasHistory
-    ? question || 'Where would you like to pick up the story?'
-    : FIRST_TIME_INTRO_QUESTION
+  const introPrefix = formatIntroGreeting({ hasHistory, titles })
+  const reminder = formatIntroReminder(details)
+  const invitation = getIntroInvitation(hasHistory)
+  const closingQuestion = getIntroQuestion(hasHistory, question)
   return `${introPrefix} ${reminder} ${invitation} ${closingQuestion}`.trim()
 }
 

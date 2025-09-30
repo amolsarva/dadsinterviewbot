@@ -9,6 +9,12 @@ import {
 } from '@/lib/question-memory'
 import { detectCompletionIntent } from '@/lib/intents'
 import { resolveGoogleModel } from '@/lib/google'
+import {
+  getAskFirstSessionGreeting,
+  formatAskReturningWithHighlight,
+  getAskReturningDefault,
+  getAskProviderExceptionPrompt,
+} from '@/lib/fallback-texts'
 
 const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
 Core responsibilities:
@@ -224,15 +230,12 @@ export async function POST(req: NextRequest) {
     }
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
-    const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
-      ? "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, would you start with a memory you'd like me to remember?"
+    const baseFallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
+      ? getAskFirstSessionGreeting()
       : memory.highlightDetail
-      ? `Welcome back. I'm still holding onto what you told me about ${memory.highlightDetail}. Let's add another chapter to your archive.${
-          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
-        }`
-      : `Welcome back—your story archive is open and I'm keeping track of everything you've trusted me with.${
-          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
-        }`
+      ? formatAskReturningWithHighlight(memory.highlightDetail)
+      : getAskReturningDefault()
+    const fallbackReply = fallbackSuggestion ? `${baseFallbackReply} ${fallbackSuggestion}`.trim() : baseFallbackReply
 
     if (!process.env.GOOGLE_API_KEY) {
       return NextResponse.json<AskAudioResponse>({
@@ -405,7 +408,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<AskAudioResponse>({
       ok: true,
       provider,
-      reply: 'Who else was there? Share a first name and one detail about them.',
+      reply: getAskProviderExceptionPrompt(),
       transcript: '',
       end_intent: false,
       debug: {

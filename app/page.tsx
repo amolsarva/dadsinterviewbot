@@ -20,6 +20,7 @@ import {
   normalizeHandle,
   scopedStorageKey,
 } from '@/lib/user-scope'
+import { getIntroClientFallback, formatSessionTitleFallback } from '@/lib/fallback-texts'
 
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
@@ -284,8 +285,7 @@ const ensureSessionIdOnce = async (handle?: string | null): Promise<SessionInitR
   return result
 }
 
-const INTRO_FALLBACK =
-  'Welcome back. I remember everything you have trusted me with. Tell me one new detail you would like to explore now.'
+const INTRO_FALLBACK = getIntroClientFallback()
 
 const STATE_VISUALS: Record<
   | 'idle'
@@ -401,6 +401,15 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const settingsHref = buildScopedPath('/settings', normalizedHandle)
   const [handleInput, setHandleInput] = useState(displayHandle ?? '')
   const [knownHandles, setKnownHandles] = useState<string[]>([])
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
+  const [isAddingNewUser, setIsAddingNewUser] = useState(false)
+  const [newUserError, setNewUserError] = useState<string | null>(null)
+  const closeAccountMenu = useCallback(() => {
+    setIsAccountMenuOpen(false)
+    setIsAddingNewUser(false)
+    setNewUserError(null)
+  }, [])
+
   const rememberHandle = useCallback(
     (handle?: string | null) => {
       if (typeof window === 'undefined') return
@@ -447,6 +456,8 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
   const providerErrorRef = useRef<DiagnosticProviderErrorPayload | null>(null)
+  const accountSwitcherRef = useRef<HTMLDivElement | null>(null)
+  const newUserInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -521,23 +532,59 @@ export function Home({ userHandle }: { userHandle?: string }) {
     setHandleInput(displayHandle ?? '')
   }, [displayHandle])
 
+  const availableHandles = useMemo(
+    () =>
+      knownHandles.filter((handle) => {
+        const normalized = normalizeHandle(handle)
+        if (!normalized) return false
+        return normalized !== normalizedHandle
+      }),
+    [knownHandles, normalizedHandle],
+  )
+
+  useEffect(() => {
+    if (!isAccountMenuOpen) return
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!accountSwitcherRef.current) return
+      if (!accountSwitcherRef.current.contains(event.target as Node)) {
+        closeAccountMenu()
+        setHandleInput(displayHandle ?? '')
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeAccountMenu()
+        setHandleInput(displayHandle ?? '')
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isAccountMenuOpen, closeAccountMenu, displayHandle])
+
+  useEffect(() => {
+    if (!isAddingNewUser) return
+    if (typeof window === 'undefined') return
+    const frame = window.requestAnimationFrame(() => {
+      newUserInputRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [isAddingNewUser])
+
   useEffect(() => {
     if (!normalizedHandle) return
     rememberHandle(normalizedHandle)
   }, [normalizedHandle, rememberHandle])
 
-  const handleSelectorSubmit = useCallback(
+  const handleNewUserSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault()
       const normalized = normalizeHandle(handleInput)
       if (!normalized) {
-        setHandleInput('')
-        if (typeof window !== 'undefined') {
-          try {
-            window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
-          } catch {}
-        }
-        router.push('/')
+        setNewUserError('Enter a handle to create a new user.')
         return
       }
       rememberHandle(normalized)
@@ -547,9 +594,11 @@ export function Home({ userHandle }: { userHandle?: string }) {
         } catch {}
       }
       setHandleInput(normalized)
+      setNewUserError(null)
       router.push(buildScopedPath('/', normalized))
+      closeAccountMenu()
     },
-    [handleInput, rememberHandle, router],
+    [handleInput, rememberHandle, router, closeAccountMenu],
   )
 
   const handleKnownSelect = useCallback(
@@ -563,9 +612,10 @@ export function Home({ userHandle }: { userHandle?: string }) {
           window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalized)
         } catch {}
       }
+      closeAccountMenu()
       router.push(buildScopedPath('/', normalized))
     },
-    [rememberHandle, router],
+    [rememberHandle, router, closeAccountMenu],
   )
 
   const handleClearSelection = useCallback(() => {
@@ -575,8 +625,9 @@ export function Home({ userHandle }: { userHandle?: string }) {
         window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
       } catch {}
     }
+    closeAccountMenu()
     router.push('/')
-  }, [router])
+  }, [router, closeAccountMenu])
 
   const easternTimeFormatter = useMemo(
     () =>
@@ -1003,7 +1054,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
         const stamp = new Date().toISOString()
         const summaryTitle =
           generateSessionTitle(conversationRef.current, {
-            fallback: `Session on ${new Date(stamp).toLocaleDateString()}`,
+            fallback: formatSessionTitleFallback(stamp),
           }) || null
         demo.unshift({ id: sessionId, created_at: stamp, title: summaryTitle })
         localStorage.setItem(historyKey, JSON.stringify(demo.slice(0, 50)))
@@ -1781,73 +1832,129 @@ export function Home({ userHandle }: { userHandle?: string }) {
 
   return (
     <main className="home-main">
-      <div className="panel-card account-select-card">
-        <form className="account-selector" onSubmit={handleSelectorSubmit}>
-          <label htmlFor="account-handle" className="account-selector__label">
-            Choose whose conversations to browse
-          </label>
-          <div className="account-selector__controls">
-            <input
-              id="account-handle"
-              list="account-handle-options"
-              value={handleInput}
-              onChange={(event) => setHandleInput(event.target.value)}
-              placeholder="Enter a handle, e.g. amol"
-              autoComplete="off"
-              inputMode="text"
+      <div className="panel-card hero-card">
+        <div className="account-switcher" ref={accountSwitcherRef}>
+          <button
+            type="button"
+            className="account-switcher__trigger"
+            aria-haspopup="listbox"
+            aria-expanded={isAccountMenuOpen}
+            onClick={() => {
+              if (isAccountMenuOpen) {
+                closeAccountMenu()
+                setHandleInput(displayHandle ?? '')
+              } else {
+                setIsAccountMenuOpen(true)
+                setIsAddingNewUser(false)
+                setNewUserError(null)
+                setHandleInput(displayHandle ?? '')
+              }
+            }}
+          >
+            <span className="account-switcher__label">Account</span>
+            <span className="account-switcher__value">
+              {normalizedHandle ? `@${normalizedHandle}` : 'Default'}
+            </span>
+            <span
+              className={`account-switcher__chevron${
+                isAccountMenuOpen ? ' account-switcher__chevron--open' : ''
+              }`}
+              aria-hidden="true"
             />
-            <button type="submit">Open</button>
-            <button
-              type="button"
-              className="btn-outline"
-              onClick={handleClearSelection}
-              disabled={!handleInput.trim() && !normalizedHandle}
-            >
-              Default
-            </button>
-          </div>
-          <datalist id="account-handle-options">
-            {knownHandles.map((handle) => (
-              <option key={handle} value={handle} />
-            ))}
-          </datalist>
-          {knownHandles.length > 0 ? (
-            <div className="account-selector__chips">
-              {knownHandles.map((handle) => (
+          </button>
+          {isAccountMenuOpen ? (
+            <div className="account-switcher__menu" role="menu">
+              {normalizedHandle ? (
+                <button
+                  type="button"
+                  className="account-switcher__option"
+                  role="menuitem"
+                  onClick={handleClearSelection}
+                >
+                  Default account
+                </button>
+              ) : null}
+              {availableHandles.map((handle) => (
                 <button
                   key={handle}
                   type="button"
-                  className="chip-button"
+                  className="account-switcher__option"
+                  role="menuitem"
                   onClick={() => handleKnownSelect(handle)}
                 >
                   @{handle}
                 </button>
               ))}
+              <button
+                type="button"
+                className="account-switcher__option"
+                role="menuitem"
+                onClick={() => {
+                  setIsAddingNewUser((prev) => {
+                    const next = !prev
+                    if (next) {
+                      setHandleInput('')
+                    } else {
+                      setHandleInput(displayHandle ?? '')
+                    }
+                    setNewUserError(null)
+                    return next
+                  })
+                }}
+              >
+                New user…
+              </button>
+              {isAddingNewUser ? (
+                <form className="account-switcher__new" onSubmit={handleNewUserSubmit}>
+                  <input
+                    ref={newUserInputRef}
+                    value={handleInput}
+                    onChange={(event) => {
+                      setHandleInput(event.target.value)
+                      if (newUserError) setNewUserError(null)
+                    }}
+                    placeholder="Enter a handle"
+                    aria-label="New user handle"
+                    autoComplete="off"
+                    inputMode="text"
+                  />
+                  {newUserError ? <p className="account-switcher__error">{newUserError}</p> : null}
+                  <div className="account-switcher__actions">
+                    <button
+                      type="button"
+                      className="account-switcher__cancel"
+                      onClick={() => {
+                        setIsAddingNewUser(false)
+                        setHandleInput(displayHandle ?? '')
+                        setNewUserError(null)
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="account-switcher__confirm">
+                      Open
+                    </button>
+                  </div>
+                </form>
+              ) : null}
             </div>
           ) : null}
-          <p className="account-selector__hint">
-            History, settings, and diagnostics follow whichever account you open. Jump to{' '}
-            <a className="link" href={historyHref}>
-              History
-            </a>{' '}
-            ·{' '}
-            <a className="link" href={settingsHref}>
-              Settings
-            </a>{' '}
-            ·{' '}
-            <a className="link" href={diagnosticsHref}>
-              Diagnostics
-            </a>
-            .
-          </p>
-        </form>
-      </div>
-      <div className="panel-card hero-card">
-        {displayHandle && (
-          <div className="account-chip">
-            Account: <span className="highlight">@{displayHandle.toLowerCase()}</span>
-          </div>
-        )}
+        </div>
+        <p className="account-switcher__hint">
+          History, settings, and diagnostics follow whichever account you open. Jump to{' '}
+          <a className="link" href={historyHref}>
+            History
+          </a>{' '}
+          ·{' '}
+          <a className="link" href={settingsHref}>
+            Settings
+          </a>{' '}
+          ·{' '}
+          <a className="link" href={diagnosticsHref}>
+            Diagnostics
+          </a>
+          .
+        </p>
         {providerError && (
           <div className="alert-banner alert-banner--error" role="alert">
             <div className="alert-banner__title">

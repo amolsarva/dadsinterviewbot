@@ -2,6 +2,7 @@ import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from '.
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
+import { formatSessionTitleFallback } from './fallback-texts'
 import { normalizeHandle } from './user-scope'
 
 export type Session = {
@@ -408,7 +409,7 @@ export async function finalizeSession(
   }
 
   const computedTitle = generateSessionTitle(summaryCandidates, {
-    fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+    fallback: formatSessionTitleFallback(s.created_at),
   })
   if (computedTitle) {
     s.title = computedTitle
