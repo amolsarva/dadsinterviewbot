@@ -136,8 +136,9 @@ describe('finalizeSession', () => {
     await data.finalizeSession(session.id, { clientDurationMs: 500 })
 
     const primer = await data.getMemoryPrimer()
-    expect(primer.text).toContain('User opened with: hello there from the porch')
-    expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/MemoryPrimer.txt')).toBe(true)
+    expect(primer.text).toContain('### Additional Notes & Identity')
+    expect(primer.text).toContain('Latest • Hello there from the porch')
+    expect(putBlobMock.mock.calls.some(([path]) => path === 'memory/primers/unassigned.md')).toBe(true)
   })
 })
 
@@ -174,6 +175,7 @@ describe('session deletion helpers', () => {
     expect(result).toEqual({ ok: true, deleted: true })
     expect(deleteByPrefixMock).toHaveBeenCalledWith(`sessions/${session.id}/`)
     expect(deleteByPrefixMock).toHaveBeenCalledWith(`transcripts/${session.id}`)
+    expect(deleteBlobMock).toHaveBeenCalledWith('memory/primers/unassigned.md')
     expect(deleteBlobMock).toHaveBeenCalledWith('memory/MemoryPrimer.txt')
 
     const primer = await data.getMemoryPrimer()
@@ -193,7 +195,7 @@ describe('session deletion helpers', () => {
 
     expect(deleteByPrefixMock).toHaveBeenCalledWith('sessions/')
     expect(deleteByPrefixMock).toHaveBeenCalledWith('transcripts/')
-    expect(deleteByPrefixMock).toHaveBeenCalledWith('memory/')
+    expect(deleteByPrefixMock).toHaveBeenCalledWith('memory/primers/')
     expect(deleteBlobMock).toHaveBeenCalledWith('memory/MemoryPrimer.txt')
 
     const sessions = await data.listSessions()
