@@ -8,6 +8,7 @@ import {
   pickFallbackQuestion,
 } from '@/lib/question-memory'
 import { detectCompletionIntent } from '@/lib/intents'
+import { resolveGoogleModel } from '@/lib/google'
 
 const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
 Core responsibilities:
@@ -261,7 +262,7 @@ export async function POST(req: NextRequest) {
     if (text) parts.push({ text })
     parts.push({ text: 'Respond only with JSON in the format {"reply":"...","transcript":"...","end_intent":false}.' })
 
-    const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash-latest'
+    const model = resolveGoogleModel(process.env.GOOGLE_MODEL)
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
       {

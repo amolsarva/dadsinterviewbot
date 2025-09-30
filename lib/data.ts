@@ -688,6 +688,39 @@ export async function listSessions(handle?: string | null): Promise<Session[]> {
   return Array.from(seen.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
 }
 
+export async function listUserHandles(options: { limit?: number } = {}): Promise<string[]> {
+  await ensureSessionMemoryHydrated().catch(() => undefined)
+  const limitParam = Number.isFinite(options.limit ?? NaN) ? Number(options.limit) : NaN
+  const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 24) : 12
+
+  const latestByHandle = new Map<string, string>()
+  for (const session of mem.sessions.values()) {
+    const normalized = normalizeHandle(session.user_handle ?? undefined)
+    if (!normalized) continue
+    const createdAt = typeof session.created_at === 'string' ? session.created_at : ''
+    const existing = latestByHandle.get(normalized)
+    if (!existing || (createdAt && createdAt > existing)) {
+      latestByHandle.set(normalized, createdAt || existing || '')
+    }
+  }
+
+  if (!latestByHandle.size) {
+    return []
+  }
+
+  const sorted = Array.from(latestByHandle.entries()).sort((a, b) => {
+    const aTime = a[1]
+    const bTime = b[1]
+    if (!aTime && !bTime) return a[0].localeCompare(b[0])
+    if (!aTime) return 1
+    if (!bTime) return -1
+    if (aTime === bTime) return a[0].localeCompare(b[0])
+    return aTime < bTime ? 1 : -1
+  })
+
+  return sorted.slice(0, limit).map(([handle]) => handle)
+}
+
 export type SessionMemorySnapshot = {
   id: string
   created_at: string

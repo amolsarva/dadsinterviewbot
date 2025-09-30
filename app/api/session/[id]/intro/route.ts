@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
+import { resolveGoogleModel } from '@/lib/google'
 
 const INTRO_SYSTEM_PROMPT = `You are the opening voice of Dad's Interview Bot, a warm, curious biographer.
 Mission:
@@ -130,7 +131,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     parts.push({ text: questionText })
     parts.push({ text: 'Respond only with JSON in the format {"message":"...","question":"..."}.' })
 
-    const model = process.env.GOOGLE_MODEL || 'gemini-1.5-flash'
+    const model = resolveGoogleModel(process.env.GOOGLE_MODEL)
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
       {
