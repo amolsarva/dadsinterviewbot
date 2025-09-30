@@ -1,6 +1,7 @@
 "use client"
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ChangeEvent } from 'react'
+import { useRouter } from 'next/navigation'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
@@ -358,6 +359,7 @@ type AssistantPlayback = {
 export function Home({ userHandle }: { userHandle?: string }) {
   const normalizedHandle = normalizeHandle(userHandle)
   const displayHandle = userHandle?.trim() || null
+  const router = useRouter()
   const machineState = useInterviewMachine((state) => state.state)
   const debugLog = useInterviewMachine((state) => state.debugLog)
   const pushLog = useInterviewMachine((state) => state.pushLog)
@@ -367,6 +369,8 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const [hasStarted, setHasStarted] = useState(false)
   const [finishRequested, setFinishRequested] = useState(false)
   const [manualStopRequested, setManualStopRequested] = useState(false)
+  const [availableHandles, setAvailableHandles] = useState<string[]>([])
+  const [selectedHandle, setSelectedHandle] = useState(() => normalizedHandle ?? '')
   const inTurnRef = useRef(false)
   const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
@@ -403,6 +407,58 @@ export function Home({ userHandle }: { userHandle?: string }) {
   useEffect(() => {
     finishRequestedRef.current = finishRequested
   }, [finishRequested])
+
+  useEffect(() => {
+    setSelectedHandle(normalizedHandle ?? '')
+  }, [normalizedHandle])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadHandles() {
+      let serverHandles: string[] = []
+      try {
+        const res = await fetch('/api/users', { cache: 'no-store' })
+        if (res.ok) {
+          const data = await res.json()
+          if (Array.isArray(data?.handles)) {
+            serverHandles = data.handles.filter((value): value is string => typeof value === 'string')
+          }
+        }
+      } catch {}
+
+      let storedHandle: string | undefined
+      if (typeof window !== 'undefined') {
+        try {
+          storedHandle = normalizeHandle(window.localStorage.getItem(ACTIVE_USER_HANDLE_STORAGE_KEY))
+        } catch {}
+      }
+
+      const deduped = new Set<string>()
+      for (const handle of serverHandles) {
+        const normalized = normalizeHandle(handle)
+        if (normalized) {
+          deduped.add(normalized)
+        }
+      }
+      if (normalizedHandle) {
+        deduped.add(normalizedHandle)
+      }
+      if (storedHandle) {
+        deduped.add(storedHandle)
+      }
+
+      if (!cancelled) {
+        setAvailableHandles(Array.from(deduped).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
+      }
+    }
+
+    loadHandles()
+
+    return () => {
+      cancelled = true
+    }
+  }, [normalizedHandle])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -463,6 +519,31 @@ export function Home({ userHandle }: { userHandle?: string }) {
       cancelled = true
     }
   }, [normalizedHandle, pushLog])
+
+  const handleUserSelectChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const next = event.target.value
+      setSelectedHandle(next)
+
+      if (typeof window !== 'undefined') {
+        try {
+          if (next) {
+            window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, next)
+          } else {
+            window.localStorage.removeItem(ACTIVE_USER_HANDLE_STORAGE_KEY)
+          }
+        } catch {}
+      }
+
+      if ((next || '') === (normalizedHandle ?? '')) {
+        return
+      }
+
+      const target = buildScopedPath('/', next || undefined)
+      router.push(target)
+    },
+    [normalizedHandle, router],
+  )
 
   useEffect(() => {
     return () => {
@@ -1421,6 +1502,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
   return (
     <main className="home-main">
       <div className="panel-card hero-card">
+        <div className="user-selector">
+          <label htmlFor="home-user-selector">Choose account</label>
+          <select id="home-user-selector" value={selectedHandle} onChange={handleUserSelectChange}>
+            <option value="">Personal archive</option>
+            {availableHandles.map((handle) => (
+              <option key={handle} value={handle}>
+                @{handle}
+              </option>
+            ))}
+          </select>
+        </div>
         {displayHandle && (
           <div className="account-chip">
             Account: <span className="highlight">@{displayHandle.toLowerCase()}</span>
