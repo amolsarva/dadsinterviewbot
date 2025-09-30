@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-type TestKey = 'health' | 'smoke' | 'e2e' | 'email'
+type TestKey = 'health' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
 type FoxRecord = {
   id: string
@@ -26,22 +26,38 @@ type TranscriptSynopsis = {
     manualStop?: boolean
     stopReason?: string
   }
+  provider?: string | null
+}
+
+type ProviderErrorSynopsis = {
+  status: number | null
+  message: string
+  reason?: string
+  snippet?: string
+  at: string
+  resolved?: boolean
+  resolvedAt?: string
 }
 
 const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
+const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
+  google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
+  openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
   smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
   e2e: { label: 'End-to-end test', path: '/api/diagnostics/e2e', method: 'POST' },
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'smoke', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = ['health', 'google', 'openai', 'smoke', 'e2e', 'email']
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
     health: { status: 'idle' },
+    google: { status: 'idle' },
+    openai: { status: 'idle' },
     smoke: { status: 'idle' },
     e2e: { status: 'idle' },
     email: { status: 'idle' },
@@ -65,6 +81,30 @@ function formatSummary(key: TestKey, data: any): string {
     return parts.join(' · ')
   }
 
+  if (key === 'google') {
+    if (data.ok) {
+      const model = data.model || {}
+      const replyText = typeof data.reply === 'string' ? data.reply.trim() : ''
+      const replySnippet = replyText.length > 60 ? `${replyText.slice(0, 57)}…` : replyText
+      const reply = replySnippet ? ` · Reply: ${replySnippet}` : ''
+      return `Model: ${model.name || model.id || 'unknown'}${reply}`
+    }
+    if (data.error) return `Error: ${data.error}`
+    if (data.status && data.message) return `HTTP ${data.status}: ${data.message}`
+  }
+
+  if (key === 'openai') {
+    if (data.ok) {
+      const modelId = data.model?.id || data.model || 'unknown model'
+      const replyText = typeof data.reply === 'string' ? data.reply.trim() : ''
+      const replySnippet = replyText.length > 60 ? `${replyText.slice(0, 57)}…` : replyText
+      const reply = replySnippet ? ` · Reply: ${replySnippet}` : ''
+      return `Model: ${modelId}${reply}`
+    }
+    if (data.error) return `Error: ${data.error}`
+    if (data.status && data.message) return `HTTP ${data.status}: ${data.message}`
+  }
+
   if (key === 'email') {
     const status = data.status || {}
     if (status.ok) return `Email sent via ${status.provider || 'configured provider'}`
@@ -80,6 +120,7 @@ function formatSummary(key: TestKey, data: any): string {
 
 export default function DiagnosticsPage() {
   const [latestTranscript, setLatestTranscript] = useState<TranscriptSynopsis | null>(null)
+  const [latestProviderError, setLatestProviderError] = useState<ProviderErrorSynopsis | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [isRunning, setIsRunning] = useState(false)
@@ -92,44 +133,88 @@ export default function DiagnosticsPage() {
         const raw = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY)
         if (!raw) {
           setLatestTranscript(null)
-          return
+        } else {
+          const parsed = JSON.parse(raw)
+          if (!parsed || typeof parsed !== 'object') {
+            setLatestTranscript(null)
+          } else {
+            const payload: TranscriptSynopsis = {
+              text: typeof (parsed as any).text === 'string' ? (parsed as any).text : '',
+              turn: typeof (parsed as any).turn === 'number' ? (parsed as any).turn : 0,
+              at: typeof (parsed as any).at === 'string' ? (parsed as any).at : '',
+              isEmpty: Boolean((parsed as any).isEmpty),
+              reason: typeof (parsed as any).reason === 'string' ? (parsed as any).reason : undefined,
+              meta:
+                (parsed as any).meta && typeof (parsed as any).meta === 'object'
+                  ? {
+                      started:
+                        typeof (parsed as any).meta.started === 'boolean'
+                          ? (parsed as any).meta.started
+                          : undefined,
+                      manualStop:
+                        typeof (parsed as any).meta.manualStop === 'boolean'
+                          ? (parsed as any).meta.manualStop
+                          : undefined,
+                      stopReason:
+                        typeof (parsed as any).meta.stopReason === 'string'
+                          ? (parsed as any).meta.stopReason
+                          : undefined,
+                    }
+                  : undefined,
+              provider:
+                typeof (parsed as any).provider === 'string'
+                  ? (parsed as any).provider
+                  : (parsed as any).provider === null
+                  ? null
+                  : undefined,
+            }
+            setLatestTranscript(payload)
+          }
         }
-        const parsed = JSON.parse(raw)
-        if (!parsed || typeof parsed !== 'object') {
-          setLatestTranscript(null)
-          return
-        }
-        const payload: TranscriptSynopsis = {
-          text: typeof (parsed as any).text === 'string' ? (parsed as any).text : '',
-          turn: typeof (parsed as any).turn === 'number' ? (parsed as any).turn : 0,
-          at: typeof (parsed as any).at === 'string' ? (parsed as any).at : '',
-          isEmpty: Boolean((parsed as any).isEmpty),
-          reason: typeof (parsed as any).reason === 'string' ? (parsed as any).reason : undefined,
-          meta:
-            (parsed as any).meta && typeof (parsed as any).meta === 'object'
-              ? {
-                  started:
-                    typeof (parsed as any).meta.started === 'boolean'
-                      ? (parsed as any).meta.started
-                      : undefined,
-                  manualStop:
-                    typeof (parsed as any).meta.manualStop === 'boolean'
-                      ? (parsed as any).meta.manualStop
-                      : undefined,
-                  stopReason:
-                    typeof (parsed as any).meta.stopReason === 'string'
-                      ? (parsed as any).meta.stopReason
-                      : undefined,
-                }
-              : undefined,
-        }
-        setLatestTranscript(payload)
       } catch {
         setLatestTranscript(null)
       }
+
+      try {
+        const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
+        if (!rawError) {
+          setLatestProviderError(null)
+        } else {
+          const parsedError = JSON.parse(rawError)
+          if (!parsedError || typeof parsedError !== 'object') {
+            setLatestProviderError(null)
+          } else {
+            const rawStatus =
+              typeof (parsedError as any).status === 'number'
+                ? (parsedError as any).status
+                : typeof (parsedError as any).status === 'string'
+                ? Number.parseInt((parsedError as any).status, 10)
+                : null
+            const normalizedStatus =
+              typeof rawStatus === 'number' && Number.isFinite(rawStatus) ? rawStatus : null
+            const snapshot: ProviderErrorSynopsis = {
+              status: normalizedStatus,
+              message: typeof (parsedError as any).message === 'string' ? (parsedError as any).message : 'Unknown error',
+              reason: typeof (parsedError as any).reason === 'string' ? (parsedError as any).reason : undefined,
+              snippet: typeof (parsedError as any).snippet === 'string' ? (parsedError as any).snippet : undefined,
+              at: typeof (parsedError as any).at === 'string' ? (parsedError as any).at : '',
+              resolved: (parsedError as any).resolved === true,
+              resolvedAt:
+                typeof (parsedError as any).resolvedAt === 'string' ? (parsedError as any).resolvedAt : undefined,
+            }
+            setLatestProviderError(snapshot)
+          }
+        }
+      } catch {
+        setLatestProviderError(null)
+      }
     }
     const handleStorage = (event: StorageEvent) => {
-      if (!event.key || event.key === TRANSCRIPT_STORAGE_KEY) {
+      if (
+        !event.key ||
+        event.key === TRANSCRIPT_STORAGE_KEY ||
+        event.key === PROVIDER_ERROR_STORAGE_KEY
+      ) {
         read()
       }
     }
@@ -158,7 +243,7 @@ export default function DiagnosticsPage() {
     value === true ? 'yes' : value === false ? 'no' : 'unknown'
 
   const append = (line: string) =>
-    setLog(l => (l && l.length > 0 ? l + '\n' + line : line))
+    setLog((l) => (l && l.length > 0 ? l + '\n' + line : line))
 
   const statusIcon = useMemo(
     () => ({ idle: '•', pending: '…', ok: '✅', error: '❌' } as const),
@@ -175,6 +260,129 @@ export default function DiagnosticsPage() {
     setLog('Running diagnostics...')
     setResults(initialResults())
     setFoxes([])
+
+    let transcriptSnapshot: TranscriptSynopsis | null = null
+    let providerSnapshot: ProviderErrorSynopsis | null = null
+    if (typeof window !== 'undefined') {
+      try {
+        const rawTranscript = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY)
+        if (rawTranscript) {
+          const parsedTranscript = JSON.parse(rawTranscript)
+          if (parsedTranscript && typeof parsedTranscript === 'object') {
+            transcriptSnapshot = {
+              text: typeof (parsedTranscript as any).text === 'string' ? (parsedTranscript as any).text : '',
+              turn: typeof (parsedTranscript as any).turn === 'number' ? (parsedTranscript as any).turn : 0,
+              at: typeof (parsedTranscript as any).at === 'string' ? (parsedTranscript as any).at : '',
+              isEmpty: Boolean((parsedTranscript as any).isEmpty),
+              reason:
+                typeof (parsedTranscript as any).reason === 'string'
+                  ? (parsedTranscript as any).reason
+                  : undefined,
+              meta:
+                (parsedTranscript as any).meta && typeof (parsedTranscript as any).meta === 'object'
+                  ? {
+                      started:
+                        typeof (parsedTranscript as any).meta.started === 'boolean'
+                          ? (parsedTranscript as any).meta.started
+                          : undefined,
+                      manualStop:
+                        typeof (parsedTranscript as any).meta.manualStop === 'boolean'
+                          ? (parsedTranscript as any).meta.manualStop
+                          : undefined,
+                      stopReason:
+                        typeof (parsedTranscript as any).meta.stopReason === 'string'
+                          ? (parsedTranscript as any).meta.stopReason
+                          : undefined,
+                    }
+                  : undefined,
+            }
+          }
+        }
+      } catch {}
+
+      try {
+        const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
+        if (rawError) {
+          const parsed = JSON.parse(rawError)
+          if (parsed && typeof parsed === 'object') {
+            const rawStatus =
+              typeof (parsed as any).status === 'number'
+                ? (parsed as any).status
+                : typeof (parsed as any).status === 'string'
+                ? Number.parseInt((parsed as any).status, 10)
+                : null
+            const normalizedStatus =
+              typeof rawStatus === 'number' && Number.isFinite(rawStatus) ? rawStatus : null
+            providerSnapshot = {
+              status: normalizedStatus,
+              message: typeof (parsed as any).message === 'string' ? (parsed as any).message : 'Unknown error',
+              reason: typeof (parsed as any).reason === 'string' ? (parsed as any).reason : undefined,
+              snippet: typeof (parsed as any).snippet === 'string' ? (parsed as any).snippet : undefined,
+              at: typeof (parsed as any).at === 'string' ? (parsed as any).at : '',
+              resolved: (parsed as any).resolved === true,
+              resolvedAt:
+                typeof (parsed as any).resolvedAt === 'string' ? (parsed as any).resolvedAt : undefined,
+            }
+          }
+        }
+      } catch {}
+    }
+
+    setLatestTranscript(transcriptSnapshot)
+    if (providerSnapshot) {
+      setLatestProviderError(providerSnapshot)
+    } else {
+      setLatestProviderError(null)
+    }
+
+    if (transcriptSnapshot) {
+      const capturedAt =
+        transcriptSnapshot.at && !Number.isNaN(Date.parse(transcriptSnapshot.at))
+          ? new Date(transcriptSnapshot.at).toLocaleString()
+          : 'time unknown'
+      if (transcriptSnapshot.isEmpty) {
+        const reasonLabel = transcriptSnapshot.reason
+          ? ` (${String(transcriptSnapshot.reason).replace(/_/g, ' ')})`
+          : ''
+        append(`[transcript] Turn ${transcriptSnapshot.turn || '–'} at ${capturedAt}: no transcript${reasonLabel}.`)
+      } else {
+        append(
+          `[transcript] Turn ${transcriptSnapshot.turn || '–'} at ${capturedAt}: "${transcriptSnapshot.text}"`,
+        )
+      }
+      if (transcriptSnapshot.meta) {
+        append(
+          `[transcript] Meta → started=${formatFlag(transcriptSnapshot.meta.started)} · manual_stop=${formatFlag(
+            transcriptSnapshot.meta.manualStop,
+          )} · stop_reason=${transcriptSnapshot.meta.stopReason || 'unknown'}`,
+        )
+      }
+    } else {
+      append('[transcript] No transcript data captured yet.')
+    }
+
+    if (providerSnapshot) {
+      const capturedAt = providerSnapshot.at && !Number.isNaN(Date.parse(providerSnapshot.at))
+        ? new Date(providerSnapshot.at).toLocaleString()
+        : 'time unknown'
+      append(
+        `[provider-error] ${
+          providerSnapshot.status ? `HTTP ${providerSnapshot.status}` : 'Request failed'
+        } at ${capturedAt} (${providerSnapshot.reason || 'reason unknown'})`,
+      )
+      if (providerSnapshot.resolved) {
+        const resolvedAt =
+          providerSnapshot.resolvedAt && !Number.isNaN(Date.parse(providerSnapshot.resolvedAt))
+            ? new Date(providerSnapshot.resolvedAt).toLocaleString()
+            : 'time unknown'
+        append(`[provider-error] Resolved at ${resolvedAt}`)
+      }
+      if (providerSnapshot.snippet) {
+        append(`[provider-error] Snippet: ${providerSnapshot.snippet}`)
+      }
+    } else {
+      append('[provider-error] No provider errors recorded yet.')
+    }
 
     for (const key of TEST_ORDER) {
       const { path, method } = TEST_CONFIG[key]
@@ -248,6 +456,9 @@ export default function DiagnosticsPage() {
   const transcriptReasonLabel = latestTranscript?.reason
     ? ` (${String(latestTranscript.reason).replace(/_/g, ' ')})`
     : ''
+  const transcriptProviderLabel = latestTranscript?.provider
+    ? latestTranscript.provider
+    : 'provider unknown'
 
   return (
     <main>
@@ -262,7 +473,9 @@ export default function DiagnosticsPage() {
           {latestTranscript ? (
             <div className="diagnostic-card">
               <div className="diagnostic-card-head">
-                <span className="diagnostic-label">Turn {transcriptTurnLabel} · {transcriptTimestampLabel}</span>
+                <span className="diagnostic-label">
+                  Turn {transcriptTurnLabel} · {transcriptTimestampLabel} · {transcriptProviderLabel}
+                </span>
               </div>
               <div className="diagnostic-message">
                 {latestTranscript.isEmpty
@@ -279,6 +492,35 @@ export default function DiagnosticsPage() {
             </div>
           ) : (
             <p className="status-note">No recent transcript data captured yet.</p>
+          )}
+        </div>
+
+        <div className="diagnostics-provider-error">
+          <h3>Latest provider error</h3>
+          {latestProviderError ? (
+            <div className="diagnostic-card">
+              <div className="diagnostic-card-head">
+                <span className="diagnostic-label">
+                  {latestProviderError.status ? `HTTP ${latestProviderError.status}` : 'Request failed'} ·{' '}
+                  {Number.isNaN(Date.parse(latestProviderError.at))
+                    ? 'time unknown'
+                    : new Date(latestProviderError.at).toLocaleString()}
+                </span>
+              </div>
+              <div className="diagnostic-message">{latestProviderError.message}</div>
+              <div className="diagnostic-meta">
+                Reason: {latestProviderError.reason || 'unspecified'} · Status:{' '}
+                {latestProviderError.resolved ? 'resolved' : 'active'}
+                {latestProviderError.resolved && latestProviderError.resolvedAt
+                  ? ` at ${new Date(latestProviderError.resolvedAt).toLocaleString()}`
+                  : ''}
+              </div>
+              {latestProviderError.snippet && (
+                <pre className="diagnostic-snippet">{latestProviderError.snippet}</pre>
+              )}
+            </div>
+          ) : (
+            <p className="status-note">No provider errors have been recorded yet.</p>
           )}
         </div>
 

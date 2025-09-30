@@ -1,5 +1,5 @@
 "use client"
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
@@ -24,6 +24,7 @@ const DEFAULT_BASELINE = 0.004
 const MIN_BASELINE = 0.0004
 const MAX_BASELINE = 0.05
 const BASELINE_SPIKE_FACTOR = 2.8
+const INTRO_MIN_PREP_MS = 700
 
 const clampBaseline = (value: number | null | undefined) => {
   if (!Number.isFinite(value ?? NaN) || !value) {
@@ -50,6 +51,7 @@ const formatPreviewList = (items: string[] | undefined, max: number = 3) => {
 }
 
 const DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
+const DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 type DiagnosticTranscriptPayload = {
   text: string
@@ -62,6 +64,17 @@ type DiagnosticTranscriptPayload = {
     manualStop: boolean
     stopReason: string
   }
+  provider?: string | null
+}
+
+type DiagnosticProviderErrorPayload = {
+  status: number | null
+  message: string
+  reason?: string
+  snippet?: string
+  at: string
+  resolved?: boolean
+  resolvedAt?: string
 }
 
 export default function RootPage() {
@@ -367,6 +380,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const [hasStarted, setHasStarted] = useState(false)
   const [finishRequested, setFinishRequested] = useState(false)
   const [manualStopRequested, setManualStopRequested] = useState(false)
+  const [providerError, setProviderError] = useState<DiagnosticProviderErrorPayload | null>(null)
   const inTurnRef = useRef(false)
   const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
@@ -380,6 +394,19 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const lastLoggedHandleRef = useRef<string | null>(null)
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
+  const providerErrorRef = useRef<DiagnosticProviderErrorPayload | null>(null)
+
+  const easternTimeFormatter = useMemo(
+    () =>
+      typeof Intl !== 'undefined'
+        ? new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          })
+        : null,
+    [],
+  )
 
   const MAX_TURNS = Number.POSITIVE_INFINITY
 
@@ -429,6 +456,19 @@ export function Home({ userHandle }: { userHandle?: string }) {
     if (typeof window === 'undefined') return
 
     let cancelled = false
+
+    try {
+      const raw = window.localStorage.getItem(DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as DiagnosticProviderErrorPayload
+        if (parsed && typeof parsed === 'object') {
+          providerErrorRef.current = parsed
+          if (parsed.resolved !== true) {
+            setProviderError(parsed)
+          }
+        }
+      }
+    } catch {}
 
     ensureSessionIdOnce(normalizedHandle)
       .then((result) => {
@@ -813,6 +853,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
     } catch {}
   }, [])
 
+  const publishProviderError = useCallback((payload: DiagnosticProviderErrorPayload | null) => {
+    if (typeof window === 'undefined') return
+    try {
+      if (payload) {
+        window.localStorage.setItem(DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY, JSON.stringify(payload))
+      } else {
+        window.localStorage.removeItem(DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY)
+      }
+    } catch {}
+  }, [])
+
   const runTurnLoop = useCallback(async () => {
     if (!sessionId) return
     if (inTurnRef.current) return
@@ -904,6 +955,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
             ? 'short_audio'
             : 'no_voice_detected',
           meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          provider: null,
         }
       }
       manualStopRef.current = false
@@ -911,26 +963,113 @@ export function Home({ userHandle }: { userHandle?: string }) {
       pushLog('Recording stopped → thinking')
       updateMachineState('thinking')
 
-      const askRes = (await fetch('/api/ask-audio', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn + 1 }),
-      })
-        .then((r) => r.json())
-        .catch(
-          () =>
-            ({
-              reply: 'Tell me one small detail you remember from that moment.',
-              transcript: '',
-              end_intent: false,
-            }) as AskResponse,
-        )) as AskResponse
+      let askRes: AskResponse = {
+        reply: 'Tell me one small detail you remember from that moment.',
+        transcript: '',
+        end_intent: false,
+      }
+      let askResStatus: number | null = null
+      let providerErrorForTurn: DiagnosticProviderErrorPayload | null = null
+      try {
+        const res = await fetch('/api/ask-audio', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ audio: b64, format: 'webm', sessionId, turn: turn + 1 }),
+        })
+        askResStatus = res.status
+        const rawText = await res.text()
+        let parsed: AskResponse | null = null
+        if (rawText && rawText.length) {
+          try {
+            parsed = JSON.parse(rawText) as AskResponse
+          } catch {
+            parsed = null
+          }
+        }
+        if (parsed && typeof parsed === 'object') {
+          askRes = parsed
+        }
+        if (!res.ok) {
+          providerErrorForTurn = {
+            status: askResStatus,
+            message: res.statusText || 'ask-audio request failed',
+            reason: askRes?.debug?.reason || 'ask_audio_http_error',
+            snippet: rawText ? truncateForLog(rawText, 200) : undefined,
+            at: new Date().toISOString(),
+          }
+        }
+      } catch (err) {
+        providerErrorForTurn = {
+          status: null,
+          message: err instanceof Error ? err.message : 'Request failed',
+          reason: 'ask_audio_network_error',
+          at: new Date().toISOString(),
+        }
+      }
 
       const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
       const turnNumber = currentTurnNumber
       const askDebug = askRes?.debug
+      const providerStatus = typeof askDebug?.providerStatus === 'number' ? askDebug.providerStatus : null
+      const providerErrorMessage =
+        typeof askDebug?.providerError === 'string' && askDebug.providerError.trim().length
+          ? askDebug.providerError.trim()
+          : undefined
+      if (
+        askDebug?.reason === 'provider_error' ||
+        (typeof providerStatus === 'number' && providerStatus >= 400)
+      ) {
+        providerErrorForTurn = {
+          status: providerStatus ?? null,
+          message: providerErrorMessage || 'Provider request failed',
+          reason: askDebug?.reason || 'provider_error',
+          snippet: askDebug?.providerResponseSnippet
+            ? truncateForLog(askDebug.providerResponseSnippet, 200)
+            : undefined,
+          at: new Date().toISOString(),
+        }
+      }
+      if (!providerErrorForTurn && askRes && askRes.ok === false) {
+        providerErrorForTurn = {
+          status: providerStatus ?? askResStatus,
+          message:
+            providerErrorMessage ||
+            (typeof askRes.reply === 'string' && askRes.reply.trim().length
+              ? askRes.reply.trim()
+              : 'ask-audio returned an error'),
+          reason: askDebug?.reason || 'ask_audio_error',
+          snippet: askDebug?.providerResponseSnippet
+            ? truncateForLog(askDebug.providerResponseSnippet, 200)
+            : undefined,
+          at: new Date().toISOString(),
+        }
+      }
+      if (providerErrorForTurn) {
+        providerErrorRef.current = { ...providerErrorForTurn, resolved: false }
+        setProviderError(providerErrorRef.current)
+        publishProviderError(providerErrorRef.current)
+        pushLog(
+          `[turn ${turnNumber}] Provider error flagged → ${
+            providerErrorForTurn.status ? `HTTP ${providerErrorForTurn.status}` : 'request failed'
+          } [${providerErrorForTurn.reason || 'unknown'}] ${truncateForLog(
+            providerErrorForTurn.message,
+            160,
+          )}`,
+        )
+      } else {
+        if (providerErrorRef.current && providerErrorRef.current.resolved !== true) {
+          const resolvedPayload: DiagnosticProviderErrorPayload = {
+            ...providerErrorRef.current,
+            resolved: true,
+            resolvedAt: new Date().toISOString(),
+          }
+          providerErrorRef.current = resolvedPayload
+          publishProviderError(resolvedPayload)
+        }
+        setProviderError(null)
+      }
       if (askDebug?.memory) {
         const memoryParts: string[] = []
         memoryParts.push(`prior sessions: ${askDebug.memory.hasPriorSessions ? 'yes' : 'no'}`)
@@ -964,6 +1103,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
       }
 
       const transcriptLog = transcript.trim().length ? truncateForLog(transcript, 200) : ''
+      const providerLabel = askDebug?.usedFallback
+        ? `fallback (${askDebug.reason || 'guard'})`
+        : askDebug?.provider || askRes?.provider || 'assistant'
+      if (diagnosticSynopsis) {
+        diagnosticSynopsis = { ...diagnosticSynopsis, provider: providerLabel }
+      }
+
       if (transcriptLog) {
         pushLog(`[turn ${turnNumber}] Heard → ${transcriptLog}`)
         publishTranscriptSynopsis({
@@ -972,6 +1118,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           at: new Date().toISOString(),
           isEmpty: false,
           meta: { ...recMeta, manualStop: manualStopDuringTurn },
+          provider: providerLabel,
         })
         diagnosticSynopsis = null
       } else {
@@ -984,6 +1131,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
             isEmpty: true,
             reason: 'no_transcript_returned',
             meta: { ...recMeta, manualStop: manualStopDuringTurn },
+            provider: providerLabel,
           }
         }
         if (diagnosticSynopsis) {
@@ -991,20 +1139,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
 
-      const providerLabel = askDebug?.usedFallback
-        ? `fallback (${askDebug.reason || 'guard'})`
-        : askDebug?.provider || askRes?.provider || 'assistant'
       pushLog(`[turn ${turnNumber}] Reply via ${providerLabel} → ${truncateForLog(reply, 200)}`)
       if (askDebug?.providerResponseSnippet) {
         pushLog(
           `[turn ${turnNumber}] Provider snippet → ${truncateForLog(askDebug.providerResponseSnippet, 200)}`,
         )
       }
-      if (typeof askDebug?.providerStatus === 'number') {
-        pushLog(`[turn ${turnNumber}] Provider status → ${askDebug.providerStatus}`)
+      if (typeof providerStatus === 'number') {
+        pushLog(`[turn ${turnNumber}] Provider status → ${providerStatus}`)
       }
-      if (askDebug?.providerError) {
-        pushLog(`[turn ${turnNumber}] Provider error → ${truncateForLog(askDebug.providerError, 160)}`)
+      if (providerErrorMessage) {
+        pushLog(`[turn ${turnNumber}] Provider error → ${truncateForLog(providerErrorMessage, 160)}`)
       }
       if (askDebug?.usedFallback && askDebug.reason) {
         pushLog(`[turn ${turnNumber}] Fallback reason → ${truncateForLog(askDebug.reason, 160)}`)
@@ -1139,6 +1284,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
     MAX_TURNS,
     finalizeNow,
     manualStopRef,
+    publishProviderError,
     publishTranscriptSynopsis,
     playAssistantResponse,
     pushLog,
@@ -1156,6 +1302,17 @@ export function Home({ userHandle }: { userHandle?: string }) {
     setManualStopRequested(false)
     manualStopRef.current = false
     setHasStarted(true)
+    const introPrepStartedAt = Date.now()
+    const ensureIntroDelay = async () => {
+      const elapsed = Date.now() - introPrepStartedAt
+      const waitMs = INTRO_MIN_PREP_MS - elapsed
+      if (waitMs > 0) {
+        if (waitMs > 50) {
+          pushLog(`Intro ready. Waiting ${waitMs}ms to finish memory sync…`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, waitMs))
+      }
+    }
     let introMessage = ''
     let introSource: 'model' | 'fallback' = 'model'
     try {
@@ -1232,6 +1389,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
         })
       } catch {}
 
+      await ensureIntroDelay()
       pushLog('Intro message ready → playing')
       let introPlaybackStarted = false
       updateMachineState('speakingPrep')
@@ -1257,6 +1415,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
     } catch {
+      await ensureIntroDelay()
       let introFallbackStarted = false
       updateMachineState('speakingPrep')
       try {
@@ -1418,12 +1577,51 @@ export function Home({ userHandle }: { userHandle?: string }) {
     }
   })()
 
+  const providerErrorTimestamp = providerError?.at
+    ? (() => {
+        const parsed = new Date(providerError.at)
+        if (Number.isNaN(parsed.valueOf())) return 'time unknown'
+        if (easternTimeFormatter) {
+          try {
+            return `${easternTimeFormatter.format(parsed)} Eastern Time`
+          } catch {
+            return parsed.toLocaleString()
+          }
+        }
+        return parsed.toLocaleString()
+      })()
+    : null
+  const providerErrorStatusLabel = providerError?.status
+    ? `HTTP ${providerError.status}`
+    : providerError
+    ? 'Request failed'
+    : null
+
   return (
     <main className="home-main">
       <div className="panel-card hero-card">
         {displayHandle && (
           <div className="account-chip">
             Account: <span className="highlight">@{displayHandle.toLowerCase()}</span>
+          </div>
+        )}
+        {providerError && (
+          <div className="alert-banner alert-banner--error" role="alert">
+            <div className="alert-banner__title">
+              ⚠️ Trouble reaching Google
+              {providerErrorStatusLabel ? ` · ${providerErrorStatusLabel}` : ''}
+            </div>
+            <div className="alert-banner__message">{providerError.message}</div>
+            <div className="alert-banner__meta">
+              Captured {providerErrorTimestamp || 'time unknown'} · Reason:{' '}
+              {providerError.reason ? providerError.reason.replace(/_/g, ' ') : 'unspecified'} ·{' '}
+              <a className="link" href={diagnosticsHref}>
+                Review diagnostics
+              </a>
+            </div>
+            {providerError.snippet && (
+              <pre className="alert-banner__snippet">{providerError.snippet}</pre>
+            )}
           </div>
         )}
         <button
