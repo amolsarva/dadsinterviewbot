@@ -1,20 +1,50 @@
-# Dad’s Interview Bot — Drop-in Build (v1.3.1)
+# Dad’s Interview Bot
 
-This folder is ready to drop into your existing repo and push.
+## Product snapshot
+- **Purpose:** capture long-form oral histories with a warm, biographer tone grounded in the [Interview Guide](docs/interview-guide.md).
+- **Session flow:** one-button capture, automatic speech-to-text, assistant reply synthesis, and optional email summaries.
+- **Continuity tools:** per-user memory primers, session manifests, fallbacks pulled from structured copy, and diagnostics surfaces for operators.
+- **Interface highlights:** compact account selector with active-handle badge, inline status + debug log, and footer commit stamp linking to the deployed build.
 
-## Interview Guide Prompt
-- Use [`docs/interview-guide.md`](docs/interview-guide.md) as the canonical prompt when preparing the bot (or yourself) to run long-form elder interviews. It follows Elizabeth Keating’s *The Essential Questions* structure so you can practice before wiring it into the app.
+## Experience map
+1. **Pick an account** (or create a new handle) from the badge dropdown — history, settings, diagnostics, and primers scope to that handle.
+2. **Start recording** from the hero button. The recorder calibrates noise, captures the user turn, and posts it to `/api/ask-audio`.
+3. **Ask pipeline:**
+   - Session memory (history, asked questions, primer) is fetched via `lib/data.ts`.
+   - Google Gemini is prompted with the interview guide, primer snapshot, and recent turns. If it fails, curated fallbacks from `docs/fallback-texts.md` keep the interview moving.
+   - The assistant reply plays through the recorder when available, otherwise falls back to browser SpeechSynthesis.
+4. **Finalize session:** `/api/finalize-session` renders transcripts, emails the recap when configured, archives manifests, and rewrites the per-user memory primer.
+5. **Review + iterate:** `/history`, `/settings`, and `/diagnostics` expose transcripts, account preferences, recent API errors, and locally cached debug payloads.
 
-## Zero-config
-- No env vars required. App runs in **demo mode**.
-- Artifacts are data URLs (visible in History/Session). Email is skipped gracefully.
-- Later, use `.env.local.example` → `.env.local` for real Blob/Email/AI.
+## Calibration & copy sources
+- **Interview scaffolding:** `docs/interview-guide.md` (full prompt guide) and `lib/interview-guide.ts` (runtime loader).
+- **Fallback copy system:** edit `docs/fallback-texts.md`, then run `pnpm fallback:sync` to refresh `lib/fallback-texts.ts` and `lib/fallback-texts.generated.ts`.
+- **Memory primer engine:** `lib/data.ts` — manages in-memory manifests, blob storage, and the per-handle biography builder that organises facts by guide stage.
+- **UI copy & styling:** `app/page.tsx`, `app/globals.css`, and `app/layout.tsx` (footer commit/time metadata for continuity-first builds).
+- **Automation scripts:** `scripts/extract-fallback-copy.mjs` (sync helper) and `scripts/` utilities for blob inspection.
 
-## Pages
-- `/` Home — one-button flow + **Finish Session**, greeting voice, on-screen log.
-- `/history`, `/session/[id]`, `/settings`
-- `/diagnostics` — Health + Smoke; copyable log for support.
+## Memory primer lifecycle
+- A primer is maintained **per user handle** under `memory/primers/{normalized-handle}.md` (unassigned sessions use `memory/primers/unassigned.md`). Legacy single-primer blobs at `memory/MemoryPrimer.txt` are still cleaned up for backwards compatibility.
+- After each finalize:
+  1. Key sentences from the latest user turns are categorised by Interview Guide stage.
+  2. All sessions for that handle are re-analysed, newest notes flagged as “Latest”, and a biography-style cheat sheet is rewritten.
+  3. The markdown snapshot is uploaded to blob storage and cached in-memory for fast reuse.
+- Inspect or download primers via the Vercel Blob CLI: `vercel blob ls memory/primers/` and `vercel blob get memory/primers/amol.md` (replace handle as needed). Session manifests remain under `sessions/{id}/` alongside transcripts.
 
-## Known secure-by-default choices
-- Blob uploads are public only when a token is present. In demo mode, artifacts are data URLs (private to your browser session).
-- No analytics; minimal PII.
+## Diagnostics & operator tooling
+- **Diagnostics dashboard:** `/diagnostics` shows recent health checks, captured provider failures, and links to localStorage payloads (`DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY`, `DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY`).
+- **Logs:** the home panel card mirrors the most recent state transitions for quick triage. Browser storage keeps the rolling log per handle.
+- **Blob helpers:** `app/api/blob/[...path]` exposes inline blob contents when running in tokenless demo mode.
+- **Commit stamp:** the footer (see `app/layout.tsx`) links to the active commit and renders the timestamp in US Eastern Time for release tracking.
+
+## Deployment & runtime notes
+- **Zero-config demo:** no env vars required; blobs fall back to in-memory data URLs and email delivery is skipped gracefully.
+- **Providers:** Google Gemini is the default; set `GOOGLE_API_KEY` and `GOOGLE_MODEL` for production. TTS falls back to the browser if `/api/tts` cannot return media.
+- **Session storage:** manifests and transcripts stream to Vercel Blob when credentials exist; otherwise they remain in-memory for the session.
+- **Handles:** normalised via `lib/user-scope.ts` to keep blob paths, localStorage keys, and URLs aligned.
+
+## ToDoLater highlights
+Active backlog lives in [ToDoLater.txt](ToDoLater.txt). Key themes still open:
+- **Flow resilience:** restore the richer multi-turn interview cadence, add heartbeat/timeout safeguards, and surface state-change logging for stuck turns.
+- **Realtime polish:** integrate robust blob storage + authenticated email delivery, add audio playback diagnostics, and wire streaming/OpenAI voice providers with interruption handling.
+- **Product extensions:** expand the history UI (per-turn media + playback), resume sessions with recaps, expose provider switches, and build end-to-end tests for the first-turn/finalize pipeline.

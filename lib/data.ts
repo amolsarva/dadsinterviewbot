@@ -2,6 +2,7 @@ import { putBlobFromBuffer, listBlobs, deleteBlobsByPrefix, deleteBlob } from '.
 import { sendSummaryEmail } from './email'
 import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
+import { formatSessionTitleFallback } from './fallback-texts'
 import { normalizeHandle } from './user-scope'
 
 export type Session = {
@@ -37,8 +38,9 @@ type RememberedSession = Session & { turns?: Turn[] }
 
 const globalKey = '__dads_interview_mem__'
 const bootKey = '__dads_interview_mem_boot__'
-const primerKey = '__dads_interview_memory_primer__'
+const primerMapKey = '__dads_interview_memory_primers__'
 const hydrationKey = '__dads_interview_mem_hydrated__'
+type PrimerState = { text: string; url?: string; updatedAt?: string; loaded: boolean }
 const g: any = globalThis as any
 if (!g[globalKey]) {
   g[globalKey] = { sessions: new Map<string, RememberedSession>() }
@@ -46,28 +48,56 @@ if (!g[globalKey]) {
 if (!g[bootKey]) {
   g[bootKey] = new Date().toISOString()
 }
-if (!g[primerKey]) {
-  g[primerKey] = { text: '', url: undefined, updatedAt: undefined, loaded: false }
+if (!g[primerMapKey]) {
+  g[primerMapKey] = new Map<string, PrimerState>()
 }
 if (!g[hydrationKey]) {
   g[hydrationKey] = { attempted: false, hydrated: false }
 }
 const mem: { sessions: Map<string, RememberedSession> } = g[globalKey]
 const memBootedAt: string = g[bootKey]
-const primerState: { text: string; url?: string; updatedAt?: string; loaded: boolean } = g[primerKey]
+
+const primerStates: Map<string, PrimerState> = g[primerMapKey]
 const hydrationState: { attempted: boolean; hydrated: boolean } = g[hydrationKey]
 
-const MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
+const MEMORY_PRIMER_PREFIX = 'memory/primers'
+const LEGACY_MEMORY_PRIMER_PATH = 'memory/MemoryPrimer.txt'
 
-function resetPrimerState() {
-  primerState.text = ''
-  primerState.url = undefined
-  primerState.updatedAt = undefined
-  primerState.loaded = false
+function primerKeyForHandle(handle?: string | null) {
+  const normalized = normalizeHandle(handle ?? undefined)
+  return normalized ?? 'unassigned'
+}
+
+function memoryPrimerPathForKey(key: string) {
+  return `${MEMORY_PRIMER_PREFIX}/${key}.md`
+}
+
+function ensurePrimerState(key: string): PrimerState {
+  let state = primerStates.get(key)
+  if (!state) {
+    state = { text: '', url: undefined, updatedAt: undefined, loaded: false }
+    primerStates.set(key, state)
+  }
+  return state
+}
+
+function resetPrimerState(key?: string) {
+  if (key) {
+    const state = ensurePrimerState(key)
+    state.text = ''
+    state.url = undefined
+    state.updatedAt = undefined
+    state.loaded = false
+    primerLoadPromises.delete(key)
+    return
+  }
+  for (const primerKey of primerStates.keys()) {
+    resetPrimerState(primerKey)
+  }
 }
 
 let hydrationPromise: Promise<void> | null = null
-let primerLoadPromise: Promise<void> | null = null
+const primerLoadPromises = new Map<string, Promise<void>>()
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -96,7 +126,7 @@ function formatDateTime(value: string | undefined) {
   })
 }
 
-function truncateSnippet(text: string, limit = 180) {
+function truncateSnippet(text: string, limit = 200) {
   const cleaned = text.replace(/\s+/g, ' ').trim()
   if (!cleaned) return ''
   if (cleaned.length <= limit) return cleaned
@@ -108,37 +138,197 @@ function truncateSnippet(text: string, limit = 180) {
   return `${slice}…`
 }
 
-function collectPrimerHighlights(session: RememberedSession): string[] {
-  const highlights: string[] = []
-  const userTurns = (session.turns || []).filter((turn) => turn.role === 'user' && turn.text && turn.text.trim().length)
-  const assistantTurns = (session.turns || []).filter(
-    (turn) => turn.role === 'assistant' && turn.text && turn.text.trim().length,
-  )
+type StageDefinition = {
+  id: string
+  title: string
+  keywords: RegExp[]
+  fallback: string
+}
 
-  const snippets: { label: string; text: string }[] = []
-  if (userTurns.length) {
-    snippets.push({ label: 'User opened with', text: userTurns[0].text })
-    if (userTurns.length > 2) {
-      snippets.push({ label: 'User reflected', text: userTurns[Math.floor(userTurns.length / 2)].text })
+type StageBucket = {
+  latest: string[]
+  archive: string[]
+  seen: Set<string>
+}
+
+const INTERVIEW_STAGE_DEFINITIONS: StageDefinition[] = [
+  {
+    id: 'intro',
+    title: 'Intro & Warm Memories',
+    keywords: [/born/i, /birth/i, /child/i, /parent/i, /sibling/i, /neighbou?r/i, /home/i],
+    fallback: 'Capture birthplace, early home life, and the people who raised them.',
+  },
+  {
+    id: 'youth',
+    title: 'Youth & Formative Years',
+    keywords: [/school/i, /class/i, /teacher/i, /friend/i, /teen/i, /dream/i, /mentor/i],
+    fallback: 'Ask about schooling, friendships, and the dreams they held while growing up.',
+  },
+  {
+    id: 'young-adult',
+    title: 'Young Adulthood & Transitions',
+    keywords: [/college/i, /university/i, /moved/i, /travel/i, /married/i, /spouse/i, /partner/i, /job/i, /courtship/i],
+    fallback: 'Explore their first leaps into adulthood—moves, work, relationships, or world events that shaped them.',
+  },
+  {
+    id: 'work-family',
+    title: 'Work, Family & Midlife',
+    keywords: [/career/i, /work/i, /business/i, /child/i, /parent/i, /tradition/i, /family/i, /household/i],
+    fallback: 'Document career turns, family roles, and traditions they kept or changed.',
+  },
+  {
+    id: 'later-years',
+    title: 'Later Years & Reflection',
+    keywords: [/retir/i, /proud/i, /regret/i, /lesson/i, /value/i, /resilience/i, /reflect/i],
+    fallback: 'Invite reflections on what matters most now—pride, regrets, and lessons they want remembered.',
+  },
+  {
+    id: 'memory-place',
+    title: 'Memory, Place & Sense of Self',
+    keywords: [/place/i, /smell/i, /sound/i, /object/i, /photo/i, /scene/i, /moment/i, /remember/i],
+    fallback: 'Gather vivid sensory scenes—places, objects, and moments that keep their story alive.',
+  },
+  {
+    id: 'culture-change',
+    title: 'Culture, Change & The World',
+    keywords: [/culture/i, /tradition/i, /world/i, /technology/i, /community/i, /change/i, /society/i, /language/i],
+    fallback: 'Trace how the world shifted around them and which cultural threads they held onto.',
+  },
+  {
+    id: 'legacy',
+    title: 'Closing & Legacy',
+    keywords: [/legacy/i, /remember/i, /advice/i, /hope/i, /message/i, /future/i],
+    fallback: 'Capture the legacy or advice they want the next generation to hold close.',
+  },
+]
+
+const OTHER_STAGE_DEFINITION: StageDefinition = {
+  id: 'other',
+  title: 'Additional Notes & Identity',
+  keywords: [],
+  fallback: 'Notice any defining details that do not yet fit the guide—values, humour, or standout personality cues.',
+}
+
+const MAX_LATEST_DETAILS_PER_STAGE = 4
+const MAX_ARCHIVE_DETAILS_PER_STAGE = 6
+
+function normalizeDetailSnippet(text: string): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+  const capitalized = trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+  return capitalized
+}
+
+function extractSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 12)
+}
+
+function categorizeDetail(detail: string): StageDefinition {
+  for (const stage of INTERVIEW_STAGE_DEFINITIONS) {
+    if (stage.keywords.some((keyword) => keyword.test(detail))) {
+      return stage
     }
-    if (userTurns.length > 1) {
-      snippets.push({ label: 'User added', text: userTurns[userTurns.length - 1].text })
+  }
+  return OTHER_STAGE_DEFINITION
+}
+
+function ensureStageBucket(map: Map<string, StageBucket>, id: string): StageBucket {
+  let bucket = map.get(id)
+  if (!bucket) {
+    bucket = { latest: [], archive: [], seen: new Set<string>() }
+    map.set(id, bucket)
+  }
+  return bucket
+}
+
+function registerDetail(
+  buckets: Map<string, StageBucket>,
+  stageId: string,
+  detail: string,
+  options: { latest: boolean },
+) {
+  const bucket = ensureStageBucket(buckets, stageId)
+  if (bucket.seen.has(detail)) return
+  bucket.seen.add(detail)
+  if (options.latest) {
+    if (bucket.latest.length >= MAX_LATEST_DETAILS_PER_STAGE) return
+    bucket.latest.push(detail)
+  } else {
+    if (bucket.archive.length >= MAX_ARCHIVE_DETAILS_PER_STAGE) return
+    bucket.archive.push(detail)
+  }
+}
+
+function collectStageInsights(
+  sessions: RememberedSession[],
+  latestSessionId: string | undefined,
+): Map<string, StageBucket> {
+  const buckets = new Map<string, StageBucket>()
+  for (const session of sessions) {
+    const isLatest = session.id === latestSessionId
+    const turns = (session.turns || []).filter((turn) => turn.role === 'user' && turn.text && turn.text.trim().length)
+    for (const turn of turns) {
+      const sentences = extractSentences(turn.text)
+      for (const sentence of sentences) {
+        const snippet = truncateSnippet(sentence)
+        if (!snippet) continue
+        const normalized = normalizeDetailSnippet(snippet)
+        if (!normalized) continue
+        const stage = categorizeDetail(normalized)
+        registerDetail(buckets, stage.id, normalized, { latest: isLatest })
+      }
     }
   }
-  if (assistantTurns.length) {
-    snippets.push({ label: 'Assistant responded', text: assistantTurns[assistantTurns.length - 1].text })
-  }
+  return buckets
+}
 
-  const seen = new Set<string>()
-  for (const snippet of snippets) {
-    const trimmed = truncateSnippet(snippet.text)
-    if (!trimmed || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    highlights.push(`- ${snippet.label}: ${trimmed}`)
-    if (highlights.length >= 4) break
+async function ensurePrimerLoadedFromStorage(handle?: string | null) {
+  const key = primerKeyForHandle(handle)
+  const state = ensurePrimerState(key)
+  if (state.loaded && state.text) return
+  if (primerLoadPromises.has(key)) {
+    await primerLoadPromises.get(key)
+    return
   }
-
-  return highlights
+  const loadPromise = (async () => {
+    try {
+      const primerPath = memoryPrimerPathForKey(key)
+      const { blobs } = await listBlobs({ prefix: primerPath, limit: 1 })
+      let primerBlob = blobs.find((blob) => blob.pathname === primerPath)
+      if (!primerBlob && key === 'unassigned') {
+        const legacy = await listBlobs({ prefix: LEGACY_MEMORY_PRIMER_PATH, limit: 1 })
+        primerBlob = legacy.blobs.find((blob) => blob.pathname === LEGACY_MEMORY_PRIMER_PATH)
+      }
+      if (!primerBlob) return
+      const url = primerBlob.downloadUrl || primerBlob.url
+      const resp = await fetch(url)
+      if (!resp.ok) return
+      const text = await resp.text()
+      state.text = text
+      state.url = url
+      state.updatedAt = safeDateString(
+        primerBlob.uploadedAt instanceof Date
+          ? primerBlob.uploadedAt.toISOString()
+          : typeof primerBlob.uploadedAt === 'string'
+          ? primerBlob.uploadedAt
+          : undefined,
+      )
+    } catch (err) {
+      console.warn('Failed to load memory primer from storage', err)
+    } finally {
+      state.loaded = true
+    }
+  })()
+  primerLoadPromises.set(key, loadPromise)
+  try {
+    await loadPromise
+  } finally {
+    primerLoadPromises.delete(key)
+  }
 }
 
 async function hydrateSessionsFromBlobs() {
@@ -177,43 +367,6 @@ async function hydrateSessionsFromBlobs() {
   }
 }
 
-async function ensurePrimerLoadedFromStorage() {
-  if (primerState.loaded && primerState.text) return
-  if (primerLoadPromise) {
-    await primerLoadPromise
-    return
-  }
-  primerLoadPromise = (async () => {
-    try {
-      const { blobs } = await listBlobs({ prefix: 'memory/', limit: 20 })
-      const primerBlob = blobs.find((blob) => blob.pathname === MEMORY_PRIMER_PATH)
-      if (!primerBlob) return
-      const url = primerBlob.downloadUrl || primerBlob.url
-      const resp = await fetch(url)
-      if (!resp.ok) return
-      const text = await resp.text()
-      primerState.text = text
-      primerState.url = url
-      primerState.updatedAt = safeDateString(
-        primerBlob.uploadedAt instanceof Date
-          ? primerBlob.uploadedAt.toISOString()
-          : typeof primerBlob.uploadedAt === 'string'
-          ? primerBlob.uploadedAt
-          : undefined,
-      )
-    } catch (err) {
-      console.warn('Failed to load memory primer from storage', err)
-    } finally {
-      primerState.loaded = true
-    }
-  })()
-  try {
-    await primerLoadPromise
-  } finally {
-    primerLoadPromise = null
-  }
-}
-
 export async function ensureSessionMemoryHydrated() {
   if (hydrationState.hydrated) return
   if (!hydrationPromise) {
@@ -228,62 +381,151 @@ export async function ensureSessionMemoryHydrated() {
   }
 }
 
-export async function getMemoryPrimer(): Promise<{ text: string; url?: string; updatedAt?: string }> {
-  if (!primerState.loaded || !primerState.text) {
-    await ensurePrimerLoadedFromStorage()
+export async function getMemoryPrimer(
+  handle?: string | null,
+): Promise<{ text: string; url?: string; updatedAt?: string }> {
+  const key = primerKeyForHandle(handle)
+  const state = ensurePrimerState(key)
+  if (!state.loaded || !state.text) {
+    await ensurePrimerLoadedFromStorage(handle)
   }
-  if (!primerState.text) {
-    const sessionsWithContent = Array.from(mem.sessions.values()).filter((session) =>
-      (session.turns || []).some((turn) => typeof turn.text === 'string' && turn.text.trim().length),
-    )
+  if (!state.text) {
+    const sessionsWithContent = Array.from(mem.sessions.values()).filter((session) => {
+      if (primerKeyForHandle(session.user_handle ?? null) !== key) return false
+      return (session.turns || []).some((turn) => typeof turn.text === 'string' && turn.text.trim().length)
+    })
     if (sessionsWithContent.length) {
-      await rebuildMemoryPrimer()
+      await rebuildMemoryPrimer(handle)
+    } else {
+      const fallbackPrimer = buildMemoryPrimerFromSessions(handle ?? null, [])
+      state.text = fallbackPrimer
+      state.loaded = true
     }
   }
-  return { text: primerState.text, url: primerState.url, updatedAt: primerState.updatedAt }
+  return { text: state.text, url: state.url, updatedAt: state.updatedAt }
 }
 
-function buildMemoryPrimerFromSessions(sessions: RememberedSession[]): string {
+function buildMemoryPrimerFromSessions(
+  handle: string | null,
+  sessions: RememberedSession[],
+): string {
+  const normalizedHandle = normalizeHandle(handle ?? undefined)
+  const displayHandle = normalizedHandle ? `@${normalizedHandle}` : 'Unassigned storyteller'
   const sorted = [...sessions].sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
+  const latest = sorted.length ? sorted[sorted.length - 1] : undefined
+  const latestSessionId = latest?.id
+  const stageBuckets = collectStageInsights(sorted, latestSessionId)
+
   const lines: string[] = []
-  lines.push('# Memory Primer')
+  lines.push(`# Memory Primer — ${displayHandle}`)
   lines.push(`Updated: ${formatDateTime(new Date().toISOString())}`)
   lines.push('')
-  if (!sorted.length) {
-    lines.push('No conversations have been recorded yet.')
-    return lines.join('\n')
+  lines.push(
+    'Use this biography snapshot before the next interview session. It follows the Interview Guide stages and keeps the newest details marked.',
+  )
+  lines.push('Reference the guide at docs/interview-guide.md for deeper prompts.')
+  lines.push('')
+  lines.push(`Total recorded sessions: ${sorted.length}`)
+  const latestLabel = latest
+    ? latest.title || `Session from ${formatDateTime(latest.created_at)}`
+    : 'None yet'
+  lines.push(`Latest session captured: ${latestLabel}`)
+  if (latest?.created_at) {
+    lines.push(`Last session timestamp: ${formatDateTime(latest.created_at)}`)
   }
+  lines.push('')
 
-  for (const session of sorted) {
-    const title = session.title || `Session from ${formatDateTime(session.created_at)}`
-    lines.push(`## ${title}`)
-    lines.push(`- Started: ${formatDateTime(session.created_at)}`)
-    const highlights = collectPrimerHighlights(session)
-    if (highlights.length) {
-      lines.push(...highlights)
-    } else {
-      lines.push('- No detailed transcript was captured for this session.')
+  const latestHighlights: string[] = []
+  for (const stage of [...INTERVIEW_STAGE_DEFINITIONS, OTHER_STAGE_DEFINITION]) {
+    const bucket = stageBuckets.get(stage.id)
+    if (!bucket) continue
+    for (const detail of bucket.latest) {
+      latestHighlights.push(`${stage.title}: ${detail}`)
+      if (latestHighlights.length >= 6) break
+    }
+    if (latestHighlights.length >= 6) break
+  }
+  if (latestHighlights.length) {
+    lines.push('## Latest Session Highlights')
+    for (const highlight of latestHighlights) {
+      lines.push(`- ${highlight}`)
     }
     lines.push('')
+  }
+
+  lines.push('## Interview Guide Map')
+  lines.push('')
+
+  const missingStages: string[] = []
+  for (const stage of INTERVIEW_STAGE_DEFINITIONS) {
+    const bucket = stageBuckets.get(stage.id)
+    lines.push(`### ${stage.title}`)
+    if (bucket && (bucket.latest.length || bucket.archive.length)) {
+      for (const detail of bucket.latest) {
+        lines.push(`- Latest • ${detail}`)
+      }
+      for (const detail of bucket.archive) {
+        lines.push(`- ${detail}`)
+      }
+    } else {
+      missingStages.push(stage.title)
+      lines.push(`- ${stage.fallback}`)
+    }
+    lines.push('')
+  }
+
+  const otherBucket = stageBuckets.get(OTHER_STAGE_DEFINITION.id)
+  lines.push(`### ${OTHER_STAGE_DEFINITION.title}`)
+  if (otherBucket && (otherBucket.latest.length || otherBucket.archive.length)) {
+    for (const detail of otherBucket.latest) {
+      lines.push(`- Latest • ${detail}`)
+    }
+    for (const detail of otherBucket.archive) {
+      lines.push(`- ${detail}`)
+    }
+  } else {
+    lines.push(`- ${OTHER_STAGE_DEFINITION.fallback}`)
+  }
+  lines.push('')
+
+  if (missingStages.length) {
+    lines.push('## Suggested Next Angles')
+    for (const stageTitle of missingStages) {
+      lines.push(`- Revisit the ${stageTitle} section of the guide for fresh prompts.`)
+    }
+    lines.push('')
+  }
+
+  if (!sorted.length) {
+    lines.push('No conversations have been recorded yet. Use the guide to plan the first session.')
   }
 
   return lines.join('\n').trim()
 }
 
-export async function rebuildMemoryPrimer(): Promise<{ text: string; url?: string; updatedAt?: string }> {
-  const sessions = Array.from(mem.sessions.values())
-  const primerText = buildMemoryPrimerFromSessions(sessions)
+export async function rebuildMemoryPrimer(
+  handle?: string | null,
+): Promise<{ text: string; url?: string; updatedAt?: string }> {
+  const key = primerKeyForHandle(handle)
+  const state = ensurePrimerState(key)
+  const sessions = Array.from(mem.sessions.values()).filter(
+    (session) => primerKeyForHandle(session.user_handle ?? null) === key,
+  )
+  const primerText = buildMemoryPrimerFromSessions(handle ?? null, sessions)
   const blob = await putBlobFromBuffer(
-    MEMORY_PRIMER_PATH,
+    memoryPrimerPathForKey(key),
     Buffer.from(primerText, 'utf8'),
-    'text/plain; charset=utf-8',
+    'text/markdown; charset=utf-8',
     { access: 'public' },
   )
-  primerState.text = primerText
-  primerState.url = blob.downloadUrl || blob.url
-  primerState.updatedAt = new Date().toISOString()
-  primerState.loaded = true
-  return { text: primerText, url: primerState.url, updatedAt: primerState.updatedAt }
+  state.text = primerText
+  state.url = blob.downloadUrl || blob.url
+  state.updatedAt = new Date().toISOString()
+  state.loaded = true
+  if (key === 'unassigned') {
+    await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+  }
+  return { text: primerText, url: state.url, updatedAt: state.updatedAt }
 }
 
 export async function dbHealth() {
@@ -298,8 +540,8 @@ export async function createSession({
   user_handle?: string | null
 }): Promise<Session> {
   await ensureSessionMemoryHydrated().catch(() => undefined)
-  await getMemoryPrimer().catch(() => undefined)
   const normalizedHandle = normalizeHandle(user_handle ?? undefined) ?? null
+  await getMemoryPrimer(normalizedHandle).catch(() => undefined)
   const s: RememberedSession = {
     id: uid(),
     created_at: new Date().toISOString(),
@@ -408,7 +650,7 @@ export async function finalizeSession(
   }
 
   const computedTitle = generateSessionTitle(summaryCandidates, {
-    fallback: `Session on ${new Date(s.created_at).toLocaleDateString()}`,
+    fallback: formatSessionTitleFallback(s.created_at),
   })
   if (computedTitle) {
     s.title = computedTitle
@@ -520,7 +762,7 @@ export async function finalizeSession(
 
   mem.sessions.set(id, s)
 
-  await rebuildMemoryPrimer().catch((err) => {
+  await rebuildMemoryPrimer(s.user_handle ?? null).catch((err) => {
     console.warn('Failed to rebuild memory primer', err)
   })
 
@@ -597,18 +839,33 @@ export async function deleteSession(
     }
   }
 
+  const deletedHandle = session?.user_handle ?? null
+  const deletedHandleKey = primerKeyForHandle(deletedHandle)
+
   if (session) {
     mem.sessions.delete(session.id)
   } else {
     mem.sessions.delete(id)
   }
 
-  if (mem.sessions.size > 0) {
-    await rebuildMemoryPrimer().catch((err) => {
-      console.warn('Failed to rebuild memory primer after deletion', err)
-    })
-  } else {
-    await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+  if (session) {
+    const hasRemainingForHandle = Array.from(mem.sessions.values()).some(
+      (stored) => primerKeyForHandle(stored.user_handle ?? null) === deletedHandleKey,
+    )
+    if (hasRemainingForHandle) {
+      await rebuildMemoryPrimer(deletedHandle).catch((err) => {
+        console.warn('Failed to rebuild memory primer after deletion', err)
+      })
+    } else {
+      await deleteBlob(memoryPrimerPathForKey(deletedHandleKey)).catch(() => undefined)
+      if (deletedHandleKey === 'unassigned') {
+        await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+      }
+      resetPrimerState(deletedHandleKey)
+    }
+  } else if (mem.sessions.size === 0) {
+    await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
+    await deleteBlob(memoryPrimerPathForKey('unassigned')).catch(() => undefined)
     resetPrimerState()
   }
 
@@ -623,7 +880,7 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
 
   mem.sessions.clear()
 
-  const prefixes = ['sessions/', 'transcripts/', 'memory/']
+  const prefixes = ['sessions/', 'transcripts/', `${MEMORY_PRIMER_PREFIX}/`]
   await Promise.all(
     prefixes.map(async (prefix) => {
       try {
@@ -634,7 +891,7 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
     }),
   )
 
-  await deleteBlob(MEMORY_PRIMER_PATH).catch(() => undefined)
+  await deleteBlob(LEGACY_MEMORY_PRIMER_PATH).catch(() => undefined)
   resetPrimerState()
   hydrationState.attempted = true
   hydrationState.hydrated = true
@@ -795,10 +1052,8 @@ export function __dangerousResetMemoryState() {
   mem.sessions.clear()
   hydrationState.attempted = false
   hydrationState.hydrated = false
-  primerState.text = ''
-  primerState.url = undefined
-  primerState.updatedAt = undefined
-  primerState.loaded = false
+  primerStates.clear()
+  primerLoadPromises.clear()
 }
 
 async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup | null> {
