@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-type TestKey = 'health' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
+type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
 type FoxRecord = {
   id: string
@@ -44,6 +44,7 @@ const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
 const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' | 'POST' }> = {
   health: { label: 'Health check', path: '/api/health', method: 'GET' },
+  storage: { label: 'Storage check', path: '/api/diagnostics/storage', method: 'GET' },
   google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
   openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
   smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
@@ -51,11 +52,12 @@ const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' 
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'google', 'openai', 'smoke', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'smoke', 'e2e', 'email']
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
     health: { status: 'idle' },
+    storage: { status: 'idle' },
     google: { status: 'idle' },
     openai: { status: 'idle' },
     smoke: { status: 'idle' },
@@ -71,14 +73,29 @@ function formatSummary(key: TestKey, data: any): string {
     const env = data.env || {}
     const blob = data.blob || {}
     const db = data.db || {}
+    const storageLabel = env.hasBlobStore
+      ? env.storageStore
+        ? `${env.storageProvider || 'netlify'} (${env.storageStore})`
+        : env.storageProvider || 'configured'
+      : env.storageProvider === 'memory'
+      ? 'memory fallback'
+      : env.storageProvider || 'unconfigured'
     const parts = [
       `OpenAI: ${env.hasOpenAI ? 'yes' : 'no'}`,
-      `Blob token: ${env.hasBlobToken ? 'yes' : 'no'}`,
+      `Storage: ${storageLabel}`,
       `Resend: ${env.hasResend ? 'yes' : 'no'}`,
     ]
-    if (blob) parts.push(`Blob check: ${blob.ok ? 'ok' : blob.reason || 'error'}`)
+    if (blob) parts.push(`Storage health: ${blob.ok ? 'ok' : blob.reason || 'error'}`)
     if (db) parts.push(`DB: ${db.ok ? db.mode || 'ok' : db.reason || 'error'}`)
     return parts.join(' · ')
+  }
+
+  if (key === 'storage') {
+    if (typeof data?.message === 'string') return data.message
+    if (data?.env?.provider === 'netlify' && data?.ok) return 'Netlify blob storage ready.'
+    if (data?.env?.provider === 'memory') return 'Using in-memory storage fallback.'
+    if (data?.health?.reason) return `Error: ${data.health.reason}`
+    return data?.ok ? 'Storage check passed' : 'Storage check failed'
   }
 
   if (key === 'google') {

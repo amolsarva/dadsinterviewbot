@@ -1,44 +1,51 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
-  delete process.env.VERCEL_BLOB_READ_WRITE_TOKEN
-  delete process.env.BLOB_READ_WRITE_TOKEN
+  delete process.env.NETLIFY_BLOBS_SITE_ID
+  delete process.env.NETLIFY_BLOBS_TOKEN
+  delete process.env.NETLIFY_BLOBS_STORE
+  delete process.env.NETLIFY_BLOBS_CONTEXT
   vi.resetModules()
   vi.restoreAllMocks()
 })
 
 describe('putBlobFromBuffer', () => {
-  it('uses public access when uploading with a token', async () => {
-    process.env.BLOB_READ_WRITE_TOKEN = 'test-token'
-    const putSpy = vi.fn(async () => ({
-      url: 'https://blob.test/resource',
-      downloadUrl: 'https://blob.test/resource?download=1',
-    }))
-    vi.doMock('@vercel/blob', () => ({
-      put: putSpy,
-      list: vi.fn(),
-      del: vi.fn(),
-    }))
+  it('uploads via Netlify when credentials are provided', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = 'site-id'
+    process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
+
+    const setSpy = vi.fn(async () => ({}))
+    const storeMock = {
+      set: setSpy,
+      list: vi.fn(async () => ({ blobs: [] })),
+      getMetadata: vi.fn(async () => null),
+      delete: vi.fn(async () => {}),
+      getWithMetadata: vi.fn(async () => null),
+    }
+
+    const getStoreSpy = vi.fn(() => storeMock)
+    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
-    expect(putSpy).toHaveBeenCalledWith(
-      'path/file.txt',
-      expect.any(Buffer),
-      expect.objectContaining({ access: 'public', token: 'test-token', contentType: 'text/plain' })
-    )
-    expect(result).toEqual({
-      url: 'https://blob.test/resource',
-      downloadUrl: 'https://blob.test/resource?download=1',
+    expect(getStoreSpy).toHaveBeenCalledWith({
+      name: 'store-name',
+      siteID: 'site-id',
+      token: 'api-token',
+      apiURL: undefined,
+      edgeURL: undefined,
+      uncachedEdgeURL: undefined,
+      consistency: undefined,
     })
+    expect(setSpy).toHaveBeenCalled()
+    expect(result.url).toBe('/api/blob/path/file.txt')
+    expect(result.downloadUrl).toBe(result.url)
   })
 
-  it('falls back to a data URL when no token is available', async () => {
-    vi.doMock('@vercel/blob', () => ({
-      put: vi.fn(),
-      list: vi.fn(),
-      del: vi.fn(),
-    }))
+  it('falls back to a data URL when storage is not configured', async () => {
+    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
@@ -48,12 +55,8 @@ describe('putBlobFromBuffer', () => {
 })
 
 describe('listBlobs', () => {
-  it('returns fallback entries when no token is present', async () => {
-    vi.doMock('@vercel/blob', () => ({
-      put: vi.fn(),
-      list: vi.fn(),
-      del: vi.fn(),
-    }))
+  it('returns fallback entries when storage is not configured', async () => {
+    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
     clearFallbackBlobs()
 

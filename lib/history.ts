@@ -1,5 +1,4 @@
-import { list } from '@vercel/blob'
-import { getBlobToken } from './blob'
+import { getBlobEnvironment, listBlobs } from './blob'
 import { normalizeHandle } from './user-scope'
 
 type RawTurnBlob = { url: string; downloadUrl?: string; uploadedAt: string; name: string }
@@ -44,10 +43,10 @@ type SessionEntry = StoredSession & {
   artifacts: StoredArtifacts
 }
 
-function ensureToken() {
-  const token = getBlobToken()
-  if (!token) throw new Error('Missing VERCEL_BLOB_READ_WRITE_TOKEN or BLOB_READ_WRITE_TOKEN')
-  return token
+function ensureStorageConfigured() {
+  const env = getBlobEnvironment()
+  if (!env.configured) throw new Error('Netlify blob storage is not configured')
+  return env
 }
 
 function normalizeUploadedAt(uploadedAt: unknown): string {
@@ -68,7 +67,9 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
 
   for (const turn of entry.turnBlobs) {
     try {
-      const resp = await fetch(turn.downloadUrl || turn.url)
+      const targetUrl = turn.downloadUrl || turn.url
+      if (!targetUrl) continue
+      const resp = await fetch(targetUrl)
       const json = await resp.json()
       const turnNumber = Number(json.turn) || turns.length + 1
       const created = json.createdAt || turn.uploadedAt || null
@@ -85,7 +86,7 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
         assistantAudio: typeof json.assistantAudioUrl === 'string' ? json.assistantAudioUrl : null,
         assistantAudioDurationMs: Number(json.assistantAudioDurationMs) || 0,
 
-        manifest: turn.downloadUrl || turn.url,
+        manifest: targetUrl,
         transcript: typeof json.transcript === 'string' ? json.transcript : '',
         assistantReply: typeof json.assistantReply === 'string' ? json.assistantReply : '',
         durationMs: duration,
@@ -163,7 +164,7 @@ async function enrich(entry: SessionEntry): Promise<StoredSession> {
   }
 }
 
-function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
+function buildEntries(blobs: Awaited<ReturnType<typeof listBlobs>>['blobs']) {
   const sessions = new Map<string, SessionEntry>()
 
   for (const blob of blobs) {
@@ -189,40 +190,44 @@ function buildEntries(blobs: Awaited<ReturnType<typeof list>>['blobs']) {
 
     if (/^turn-\d+\.json$/.test(name)) {
       const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
-      existing.turnBlobs.push({ url: blob.url, downloadUrl: blob.downloadUrl, uploadedAt, name })
+      const url = blob.downloadUrl || blob.url
+      if (!url) continue
+      existing.turnBlobs.push({ url, downloadUrl: blob.downloadUrl, uploadedAt, name })
       if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
         existing.latestUploadedAt = uploadedAt
       }
     }
 
     if (/^session-.+\.json$/.test(name)) {
-
       const manifestUrl = blob.downloadUrl || blob.url
       existing.manifestUrl = manifestUrl
-      existing.artifacts.session_manifest = manifestUrl
-
       const uploadedAt = normalizeUploadedAt(blob.uploadedAt)
-      if (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt) {
+      if (uploadedAt && (!existing.latestUploadedAt || uploadedAt > existing.latestUploadedAt)) {
         existing.latestUploadedAt = uploadedAt
       }
     }
 
-    if (/^transcript-.+\.txt$/.test(name)) {
-      existing.artifacts.transcript_txt = blob.downloadUrl || blob.url
-    }
-
-    if (/^transcript-.+\.json$/.test(name)) {
-      existing.artifacts.transcript_json = blob.downloadUrl || blob.url
-    }
-
-
-    if (/^session-audio\./.test(name)) {
-      existing.artifacts.session_audio = blob.downloadUrl || blob.url
-    }
-
-
     sessions.set(id, existing)
   }
+
+  return Array.from(sessions.values())
+}
+
+export async function listSessions(): Promise<StoredSession[]> {
+  ensureStorageConfigured()
+  const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
+  const entries = buildEntries(blobs)
+  const sessions: StoredSession[] = []
+
+  for (const entry of entries) {
+    sessions.push(await enrich(entry))
+  }
+
+  sessions.sort((a, b) => {
+    const aTime = a.endedAt || a.startedAt || '0'
+    const bTime = b.endedAt || b.startedAt || '0'
+    return new Date(bTime).getTime() - new Date(aTime).getTime()
+  })
 
   return sessions
 }
@@ -233,11 +238,10 @@ export async function fetchStoredSessions({
   handle,
 }: { page?: number; limit?: number; handle?: string | null } = {}): Promise<{ items: StoredSession[] }> {
   try {
-    const token = ensureToken()
-    const { blobs } = await list({ prefix: 'sessions/', limit: 2000, token })
-    const sessions = buildEntries(blobs)
-
-    const sorted = Array.from(sessions.values()).sort(
+    ensureStorageConfigured()
+    const { blobs } = await listBlobs({ prefix: 'sessions/', limit: 2000 })
+    const entries = buildEntries(blobs)
+    const sorted = entries.sort(
       (a, b) => new Date(b.latestUploadedAt || '0').getTime() - new Date(a.latestUploadedAt || '0').getTime(),
     )
 
@@ -266,11 +270,11 @@ export async function fetchStoredSessions({
 
 export async function fetchStoredSession(id: string): Promise<StoredSession | undefined> {
   try {
-    const token = ensureToken()
-    const { blobs } = await list({ prefix: `sessions/${id}/`, limit: 2000, token })
+    ensureStorageConfigured()
+    const { blobs } = await listBlobs({ prefix: `sessions/${id}/`, limit: 2000 })
     if (!blobs.length) return undefined
     const entries = buildEntries(blobs)
-    const entry = entries.get(id)
+    const entry = entries.find((session) => session.sessionId === id)
     if (!entry) return undefined
     return await enrich(entry)
   } catch {

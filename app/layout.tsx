@@ -4,18 +4,52 @@ import { SiteNav } from './site-nav'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const commitSha =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA ?? ''
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ??
+    process.env.VERCEL_GIT_COMMIT_SHA ??
+    process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
+    process.env.GIT_COMMIT_SHA ??
+    process.env.COMMIT_REF ??
+    process.env.RENDER_GIT_COMMIT ??
+    ''
   const commitMessage =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ?? process.env.VERCEL_GIT_COMMIT_MESSAGE ?? 'local changes'
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ??
+    process.env.VERCEL_GIT_COMMIT_MESSAGE ??
+    process.env.NEXT_PUBLIC_GIT_COMMIT_MESSAGE ??
+    process.env.GIT_COMMIT_MESSAGE ??
+    process.env.COMMIT_MESSAGE ??
+    process.env.RENDER_GIT_COMMIT_MESSAGE ??
+    'local changes'
   const commitTimestamp =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_TIMESTAMP ?? process.env.VERCEL_GIT_COMMIT_TIMESTAMP ?? null
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_TIMESTAMP ??
+    process.env.VERCEL_GIT_COMMIT_TIMESTAMP ??
+    process.env.NEXT_PUBLIC_GIT_COMMIT_TIMESTAMP ??
+    process.env.GIT_COMMIT_TIMESTAMP ??
+    process.env.DEPLOY_CREATED_AT ??
+    null
   const repoOwner =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_OWNER ?? process.env.VERCEL_GIT_REPO_OWNER ?? ''
+    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_OWNER ??
+    process.env.VERCEL_GIT_REPO_OWNER ??
+    process.env.NEXT_PUBLIC_GIT_REPO_OWNER ??
+    process.env.GIT_REPO_OWNER ??
+    ''
   const repoSlug =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_SLUG ?? process.env.VERCEL_GIT_REPO_SLUG ?? ''
+    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_SLUG ??
+    process.env.VERCEL_GIT_REPO_SLUG ??
+    process.env.NEXT_PUBLIC_GIT_REPO_SLUG ??
+    process.env.GIT_REPO_SLUG ??
+    ''
+
+  const githubRepo = process.env.GITHUB_REPOSITORY ?? process.env.NEXT_PUBLIC_GITHUB_REPOSITORY ?? ''
+  const [githubOwner, githubSlug] = githubRepo.includes('/') ? githubRepo.split('/', 2) : ['', '']
 
   const shortSha = commitSha ? commitSha.slice(0, 7) : 'local'
-  const commitUrl = commitSha && repoOwner && repoSlug ? `https://github.com/${repoOwner}/${repoSlug}/commit/${commitSha}` : null
+  const finalRepoOwner = repoOwner || githubOwner
+  const finalRepoSlug = repoSlug || githubSlug
+
+  const commitUrl =
+    commitSha && finalRepoOwner && finalRepoSlug
+      ? `https://github.com/${finalRepoOwner}/${finalRepoSlug}/commit/${commitSha}`
+      : null
 
   const easternFormatter = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',

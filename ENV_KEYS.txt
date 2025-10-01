@@ -1,7 +1,10 @@
-This app runs *without* any environment variables (demo mode). 
+This app runs *without* any environment variables (demo mode).
 If you want real storage/email/AI later, here are the keys:
 - OPENAI_API_KEY: optional; enables real follow-up generation
-- VERCEL_BLOB_READ_WRITE_TOKEN: optional; writes artifacts to Vercel Blob
+- NETLIFY_BLOBS_SITE_ID and NETLIFY_BLOBS_TOKEN: required for Netlify blob storage access
+- NETLIFY_BLOBS_STORE (optional): overrides the default blob store name
+- NETLIFY_BLOBS_API_URL / NETLIFY_BLOBS_EDGE_URL (optional): advanced overrides for self-managed deployments
+- NETLIFY_BLOBS_PUBLIC_BASE_URL (optional): use a custom absolute/relative URL for blob downloads
 - RESEND_API_KEY: optional; sends the summary email on finalize
 - DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co)
 - NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI

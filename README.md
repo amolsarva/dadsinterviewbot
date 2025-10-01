@@ -10,6 +10,10 @@ This folder is ready to drop into your existing repo and push.
 - Artifacts are data URLs (visible in History/Session). Email is skipped gracefully.
 - Later, use `.env.local.example` → `.env.local` for real Blob/Email/AI.
 
+## Hosting migration resources
+- [Netlify migration checklist](docs/netlify-migration-guide.md) — step-by-step instructions for provisioning Netlify Blobs, wiring secrets, and verifying diagnostics after a deploy.
+- [Hosting options after Vercel](docs/hosting-options.md) — side-by-side comparison of Netlify, Cloudflare, Render, AWS Amplify, and Fly.io for this Next.js build.
+
 ## Pages
 - `/` Home — one-button flow + **Finish Session**, greeting voice, on-screen log.
 - `/history`, `/session/[id]`, `/settings`
