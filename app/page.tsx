@@ -1,6 +1,6 @@
 "use client"
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
+import type { CSSProperties, ChangeEvent, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
@@ -57,6 +57,27 @@ const DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 const KNOWN_HANDLE_LIMIT = 8
 const SERVER_HANDLE_LIMIT = 12
 
+type StorageDiagnosticsStatus = 'pending' | 'ok' | 'error'
+
+type StorageDiagnosticsState = {
+  status: StorageDiagnosticsStatus
+  providerLabel: string
+  message: string
+}
+
+type StorageDiagnosticsPayload = {
+  ok?: boolean
+  message?: string
+  env?: {
+    provider?: string | null
+    bucket?: string | null
+    configured?: boolean | null
+  } | null
+  health?: {
+    reason?: string | null
+  } | null
+}
+
 const mergeKnownHandles = (values: Array<string | null | undefined>, limit: number = KNOWN_HANDLE_LIMIT) => {
   const seen = new Set<string>()
   const merged: string[] = []
@@ -99,6 +120,34 @@ type DiagnosticProviderErrorPayload = {
   at: string
   resolved?: boolean
   resolvedAt?: string
+}
+
+const describeStorageProvider = (env: StorageDiagnosticsPayload['env']): string => {
+  if (!env || typeof env !== 'object') {
+    return 'Storage provider unknown'
+  }
+
+  const provider = typeof env.provider === 'string' ? env.provider.toLowerCase() : ''
+  const bucket = typeof env.bucket === 'string' && env.bucket.trim().length > 0 ? env.bucket.trim() : ''
+  const configured = typeof env.configured === 'boolean' ? env.configured : undefined
+
+  if (provider === 'supabase') {
+    return bucket ? `Supabase storage (${bucket})` : 'Supabase storage'
+  }
+
+  if (provider === 'memory') {
+    return configured === false ? 'Storage not configured (memory fallback)' : 'In-memory storage fallback'
+  }
+
+  if (provider) {
+    return `${provider.charAt(0).toUpperCase()}${provider.slice(1)} storage`
+  }
+
+  if (configured === false) {
+    return 'Storage not configured'
+  }
+
+  return 'Storage provider unknown'
 }
 
 export default function RootPage() {
@@ -401,6 +450,12 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const settingsHref = buildScopedPath('/settings', normalizedHandle)
   const [handleInput, setHandleInput] = useState(displayHandle ?? '')
   const [knownHandles, setKnownHandles] = useState<string[]>([])
+  const [quickSelectValue, setQuickSelectValue] = useState('')
+  const [storageDiagnostics, setStorageDiagnostics] = useState<StorageDiagnosticsState>(() => ({
+    status: 'pending',
+    providerLabel: 'Detecting storage provider…',
+    message: 'Checking storage configuration…',
+  }))
   const rememberHandle = useCallback(
     (handle?: string | null) => {
       if (typeof window === 'undefined') return
@@ -526,6 +581,61 @@ export function Home({ userHandle }: { userHandle?: string }) {
     rememberHandle(normalizedHandle)
   }, [normalizedHandle, rememberHandle])
 
+  useEffect(() => {
+    let cancelled = false
+    const controller = new AbortController()
+
+    const run = async () => {
+      try {
+        const res = await fetch('/api/diagnostics/storage', {
+          method: 'GET',
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        const data = (await res.json().catch(() => null)) as StorageDiagnosticsPayload | null
+        if (cancelled) return
+        const providerLabel = describeStorageProvider(data?.env)
+        const message = (() => {
+          if (typeof data?.message === 'string' && data.message.trim().length > 0) {
+            return data.message
+          }
+          if (!res.ok) {
+            return `Storage check failed (HTTP ${res.status})`
+          }
+          if (data?.ok) {
+            return 'Storage check passed.'
+          }
+          if (data?.health?.reason) {
+            return `Storage check failed: ${data.health.reason}`
+          }
+          return 'Storage check failed.'
+        })()
+        if (res.ok && data?.ok) {
+          setStorageDiagnostics({ status: 'ok', providerLabel, message })
+        } else {
+          setStorageDiagnostics({ status: 'error', providerLabel, message })
+        }
+      } catch (error: any) {
+        if (cancelled || error?.name === 'AbortError') return
+        setStorageDiagnostics({
+          status: 'error',
+          providerLabel: 'Storage provider unavailable',
+          message:
+            typeof error?.message === 'string'
+              ? error.message
+              : 'Unable to contact storage diagnostics.',
+        })
+      }
+    }
+
+    run().catch(() => undefined)
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [])
+
   const handleSelectorSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault()
@@ -558,6 +668,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
       if (!normalized) return
       rememberHandle(normalized)
       setHandleInput(normalized)
+      setQuickSelectValue('')
       if (typeof window !== 'undefined') {
         try {
           window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalized)
@@ -577,6 +688,19 @@ export function Home({ userHandle }: { userHandle?: string }) {
     }
     router.push('/')
   }, [router])
+
+  const handleQuickSelectChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const value = event.target.value
+      if (!value) {
+        setQuickSelectValue('')
+        return
+      }
+      setQuickSelectValue(value)
+      handleKnownSelect(value)
+    },
+    [handleKnownSelect],
+  )
 
   const easternTimeFormatter = useMemo(
     () =>
@@ -1729,6 +1853,12 @@ export function Home({ userHandle }: { userHandle?: string }) {
           : machineState === 'speakingPrep'
             ? 'Preparing to speak'
             : 'Session status indicator'
+  const storageBadgeLabel =
+    storageDiagnostics.status === 'ok'
+      ? 'Healthy'
+      : storageDiagnostics.status === 'pending'
+        ? 'Checking'
+        : 'Needs attention'
   const statusMessage = (() => {
     if (!hasStarted) {
       return 'Let me welcome you first—I’ll begin automatically.'
@@ -1796,6 +1926,21 @@ export function Home({ userHandle }: { userHandle?: string }) {
               autoComplete="off"
               inputMode="text"
             />
+            {knownHandles.length > 0 ? (
+              <select
+                className="account-selector__dropdown"
+                value={quickSelectValue}
+                onChange={handleQuickSelectChange}
+                aria-label="Quick select a recent handle"
+              >
+                <option value="">Quick select…</option>
+                {knownHandles.map((handle) => (
+                  <option key={handle} value={handle}>
+                    @{handle}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <button type="submit">Open</button>
             <button
               type="button"
@@ -1921,6 +2066,22 @@ export function Home({ userHandle }: { userHandle?: string }) {
               I’m finished
             </button>
           )}
+        </div>
+
+        <div className="storage-diagnostics" role="status" aria-live="polite">
+          <div className="storage-diagnostics__header">
+            <span className="storage-diagnostics__title">Storage</span>
+            <span
+              className={`storage-diagnostics__badge storage-diagnostics__badge--${storageDiagnostics.status}`}
+            >
+              {storageBadgeLabel}
+            </span>
+          </div>
+          <div className="storage-diagnostics__provider">{storageDiagnostics.providerLabel}</div>
+          <div className="storage-diagnostics__message">{storageDiagnostics.message}</div>
+          <a className="storage-diagnostics__link link" href={diagnosticsHref}>
+            View diagnostics
+          </a>
         </div>
       </div>
 
