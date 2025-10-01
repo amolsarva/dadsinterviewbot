@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { getStore, type Store } from '@netlify/blobs'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -13,25 +13,25 @@ type MemoryBlobRecord = {
   uploadedAt: Date
   size: number
   dataUrl: string
+  cacheControl?: string
 }
 
-type SupabaseConfig = {
-  url: string
-  key: string
-  bucket: string
+type NetlifyContext = {
+  apiURL?: string
+  edgeURL?: string
+  token?: string
+  siteID?: string
+  uncachedEdgeURL?: string
 }
 
-type SupabaseBucketApi = ReturnType<SupabaseClient['storage']['from']>
-
-type SupabaseListItem = {
-  name: string
-  id?: string
-  updated_at?: string | null
-  created_at?: string | null
-  last_accessed_at?: string | null
-  metadata?: {
-    size?: number
-  } | null
+type NetlifyConfig = {
+  storeName: string
+  siteId: string
+  token: string
+  apiUrl?: string
+  edgeUrl?: string
+  uncachedEdgeUrl?: string
+  consistency?: 'strong' | 'eventual'
 }
 
 export type ListedBlob = {
@@ -54,71 +54,39 @@ export type ListCommandOptions = {
   cursor?: string
 }
 
+type ReadBlobResult = {
+  buffer: Buffer
+  contentType: string
+  etag?: string
+  cacheControl?: string
+  uploadedAt?: string
+  size?: number
+}
+
 const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
+const BLOB_PROXY_PREFIX = '/api/blob/'
 
 const globalAny = globalThis as any
-
 if (!globalAny[GLOBAL_STORE_KEY]) {
   globalAny[GLOBAL_STORE_KEY] = new Map<string, MemoryBlobRecord>()
 }
 
 const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
 
-let supabaseConfig: SupabaseConfig | null | undefined
-let supabaseClient: SupabaseClient | null | undefined
-let supabaseWarningIssued = false
-
-function readSupabaseConfig(): SupabaseConfig | null {
-  const url = (process.env.SUPABASE_URL || '').trim()
-  const key =
-    (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim() ||
-    (process.env.SUPABASE_SECRET_KEY || '').trim() ||
-    (process.env.SUPABASE_ANON_KEY || '').trim()
-  const bucket =
-    (process.env.SUPABASE_STORAGE_BUCKET || '').trim() ||
-    (process.env.SUPABASE_BUCKET || '').trim()
-
-  if (!url || !key || !bucket) {
-    return null
-  }
-
-  return { url, key, bucket }
-}
-
-function getSupabaseConfig(): SupabaseConfig | null {
-  if (typeof supabaseConfig === 'undefined') {
-    supabaseConfig = readSupabaseConfig()
-  }
-
-  if (!supabaseConfig && !supabaseWarningIssued) {
-    supabaseWarningIssued = true
-    flagFox({
-      id: 'theory-2-storage-missing',
-      theory: 2,
-      level: 'warn',
-      message: 'Supabase storage is not configured; falling back to in-memory blob storage.',
-    })
-  }
-
-  return supabaseConfig ?? null
-}
-
-function getSupabaseClient(): SupabaseClient | null {
-  const config = getSupabaseConfig()
-  if (!config) return null
-
-  if (!supabaseClient) {
-    supabaseClient = createClient(config.url, config.key, {
-      auth: { persistSession: false },
-    })
-  }
-
-  return supabaseClient
-}
+let netlifyConfig: NetlifyConfig | null | undefined
+let netlifyStore: Store | null | undefined
+let netlifyWarningIssued = false
 
 function normalizePath(path: string): string {
   if (!path) return ''
   return path.replace(/^\/+/, '')
+}
+
+function encodePathForUrl(path: string): string {
+  return normalizePath(path)
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
 }
 
 function buildInlineDataUrl(contentType: string, buffer: Buffer): string {
@@ -145,99 +113,129 @@ function applyRandomSuffix(path: string): string {
   return `${directory}${filename}${suffix}`
 }
 
-async function convertListItemsToBlobs(items: SupabaseListItem[], storage: SupabaseBucketApi): Promise<ListedBlob[]> {
-  const mapped: ListedBlob[] = []
-
-  for (const item of items) {
-    if (typeof item.name !== 'string' || item.name.length === 0 || item.name.endsWith('/')) continue
-    const pathname = item.name
-    const publicData = storage.getPublicUrl(pathname)
-    let publicUrl = publicData?.data?.publicUrl || ''
-    let downloadUrl = publicUrl
-
-    if (!downloadUrl) {
-      try {
-        const signed = await storage.createSignedUrl(pathname, 60 * 60)
-        if (!signed.error && signed.data?.signedUrl) {
-          downloadUrl = signed.data.signedUrl
-          if (!publicUrl) {
-            publicUrl = signed.data.signedUrl
-          }
-        }
-      } catch {}
+function parseNetlifyContext(): NetlifyContext | null {
+  try {
+    const rawEnv = process.env.NETLIFY_BLOBS_CONTEXT || process.env.BLOBS_CONTEXT
+    if (rawEnv && rawEnv.trim().length) {
+      const decoded = Buffer.from(rawEnv.trim(), 'base64').toString('utf8')
+      const parsed = JSON.parse(decoded)
+      if (parsed && typeof parsed === 'object') {
+        return parsed as NetlifyContext
+      }
     }
+  } catch {
+    // ignore malformed context payloads
+  }
+  const context = (globalThis as any).netlifyBlobsContext
+  if (context && typeof context === 'object') {
+    return context as NetlifyContext
+  }
+  return null
+}
 
-    const timestamp = item.updated_at || item.created_at || item.last_accessed_at || undefined
-    const uploadedAt = timestamp ? new Date(timestamp) : undefined
-    const size = typeof item.metadata?.size === 'number' ? item.metadata.size : undefined
+function readNetlifyConfig(): NetlifyConfig | null {
+  const context = parseNetlifyContext()
 
-    mapped.push({
-      pathname,
-      url: publicUrl,
-      downloadUrl,
-      uploadedAt,
-      size,
+  const storeName =
+    (process.env.NETLIFY_BLOBS_STORE || '').trim() ||
+    (process.env.NETLIFY_BLOBS_STORE_NAME || '').trim() ||
+    'dads-interview-bot'
+
+  let siteId =
+    (process.env.NETLIFY_BLOBS_SITE_ID || '').trim() ||
+    (process.env.BLOBS_SITE_ID || '').trim() ||
+    (process.env.NETLIFY_SITE_ID || '').trim() ||
+    (context?.siteID || '').trim()
+
+  let token =
+    (process.env.NETLIFY_BLOBS_TOKEN || '').trim() ||
+    (process.env.BLOBS_TOKEN || '').trim() ||
+    (process.env.NETLIFY_API_TOKEN || '').trim() ||
+    (context?.token || '').trim()
+
+  const edgeUrl =
+    (process.env.NETLIFY_BLOBS_EDGE_URL || '').trim() ||
+    (context?.edgeURL || '').trim() ||
+    undefined
+
+  const apiUrl =
+    (process.env.NETLIFY_BLOBS_API_URL || '').trim() ||
+    (context?.apiURL || '').trim() ||
+    undefined
+
+  const uncachedEdgeUrl =
+    (process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL || '').trim() ||
+    (context?.uncachedEdgeURL || '').trim() ||
+    undefined
+
+  if (!siteId || !token) {
+    return null
+  }
+
+  const consistency =
+    (process.env.NETLIFY_BLOBS_CONSISTENCY as 'strong' | 'eventual' | undefined) || undefined
+
+  return {
+    storeName,
+    siteId,
+    token,
+    apiUrl,
+    edgeUrl,
+    uncachedEdgeUrl,
+    consistency,
+  }
+}
+
+function getNetlifyConfig(): NetlifyConfig | null {
+  if (typeof netlifyConfig === 'undefined') {
+    netlifyConfig = readNetlifyConfig()
+  }
+
+  if (!netlifyConfig && !netlifyWarningIssued) {
+    netlifyWarningIssued = true
+    flagFox({
+      id: 'theory-2-storage-missing',
+      theory: 2,
+      level: 'warn',
+      message: 'Netlify blob storage is not configured; falling back to in-memory blob storage.',
     })
   }
 
-  return mapped
+  return netlifyConfig ?? null
 }
 
-async function supabaseList(
-  config: SupabaseConfig,
-  {
-    prefix = '',
-    limit = 100,
-    offset = 0,
-  }: {
-    prefix?: string
-    limit?: number
-    offset?: number
-  },
-): Promise<{ items: SupabaseListItem[]; hasMore: boolean }> {
-  const normalizedPrefix = normalizePath(prefix || '')
-  const safeLimit = Math.max(1, Math.min(limit ?? 100, 1000))
-  const safeOffset = Math.max(0, offset ?? 0)
+function getNetlifyStore(): Store | null {
+  const config = getNetlifyConfig()
+  if (!config) return null
 
-  const response = await fetch(`${config.url}/storage/v1/object/list/${config.bucket}`, {
-    method: 'POST',
-    headers: {
-      apikey: config.key,
-      Authorization: `Bearer ${config.key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      prefix: normalizedPrefix,
-      limit: safeLimit,
-      offset: safeOffset,
-      sortBy: { column: 'created_at', order: 'desc' },
-      includeMetadata: true,
-    }),
-  })
-
-  if (!response.ok) {
-    throw new Error(`Supabase list failed: ${response.status} ${response.statusText}`)
+  if (!netlifyStore) {
+    netlifyStore = getStore({
+      name: config.storeName,
+      siteID: config.siteId,
+      token: config.token,
+      apiURL: config.apiUrl,
+      edgeURL: config.edgeUrl,
+      uncachedEdgeURL: config.uncachedEdgeUrl,
+      consistency: config.consistency,
+    })
   }
 
-  const items = (await response.json()) as SupabaseListItem[]
-  const hasMore = Array.isArray(items) && items.length === safeLimit
-  return { items: Array.isArray(items) ? items : [], hasMore }
+  return netlifyStore
 }
 
-export function getBlobToken(): string | undefined {
-  const config = getSupabaseConfig()
-  if (!config) return undefined
-  return 'supabase'
+function buildProxyUrl(path: string): string {
+  const base = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
+  const encoded = encodePathForUrl(path)
+  if (base.length) {
+    return `${base.replace(/\/+$/, '')}/${encoded}`
+  }
+  return `${BLOB_PROXY_PREFIX}${encoded}`
 }
 
-export function getFallbackBlob(path: string): (MemoryBlobRecord & { pathname: string }) | undefined {
-  const record = memoryStore.get(path) ?? memoryStore.get(normalizePath(path))
-  if (!record) return undefined
-  return { ...record, pathname: path }
-}
-
-export function clearFallbackBlobs() {
-  memoryStore.clear()
+function cacheControlFromSeconds(seconds?: number): string | undefined {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return undefined
+  const safeSeconds = Math.max(0, Math.trunc(seconds))
+  return `public, max-age=${safeSeconds}`
 }
 
 function deleteFallbackByPrefix(prefix: string) {
@@ -262,21 +260,77 @@ function deleteFallbackByUrl(url: string) {
   return false
 }
 
+function extractPathFromUrl(input: string): string | null {
+  if (!input) return null
+  if (input.startsWith('data:')) return null
+  if (!/^https?:/i.test(input)) {
+    if (input.startsWith(BLOB_PROXY_PREFIX)) {
+      return decodeURIComponent(input.slice(BLOB_PROXY_PREFIX.length))
+    }
+    return normalizePath(input)
+  }
+
+  try {
+    const url = new URL(input)
+    const base = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
+    if (base) {
+      try {
+        const baseUrl = new URL(base)
+        if (url.origin === baseUrl.origin) {
+          const basePath = baseUrl.pathname.replace(/\/+$/, '')
+          if (url.pathname.startsWith(basePath)) {
+            const relative = url.pathname.slice(basePath.length).replace(/^\/+/, '')
+            return decodeURIComponent(relative)
+          }
+        }
+      } catch {
+        const normalizedBase = base.replace(/\/+$/, '')
+        if (input.startsWith(`${normalizedBase}/`)) {
+          const relative = input.slice(normalizedBase.length + 1)
+          return decodeURIComponent(relative)
+        }
+      }
+    }
+    if (url.pathname.startsWith(BLOB_PROXY_PREFIX)) {
+      return decodeURIComponent(url.pathname.slice(BLOB_PROXY_PREFIX.length))
+    }
+    return normalizePath(url.pathname)
+  } catch {
+    return null
+  }
+}
+
+export function getBlobToken(): string | undefined {
+  const config = getNetlifyConfig()
+  if (!config) return undefined
+  return 'netlify'
+}
+
+export function getFallbackBlob(path: string): (MemoryBlobRecord & { pathname: string }) | undefined {
+  const record = memoryStore.get(path) ?? memoryStore.get(normalizePath(path))
+  if (!record) return undefined
+  return { ...record, pathname: normalizePath(path) }
+}
+
+export function clearFallbackBlobs() {
+  memoryStore.clear()
+}
+
 export async function putBlobFromBuffer(
   path: string,
   buf: Buffer,
   contentType: string,
   options: PutBlobOptions = {},
 ) {
-  const config = getSupabaseConfig()
-  const client = getSupabaseClient()
-
+  const store = getNetlifyStore()
   let targetPath = normalizePath(path)
   if (options.addRandomSuffix) {
     targetPath = applyRandomSuffix(targetPath)
   }
 
-  if (!client || !config) {
+  const cacheControl = cacheControlFromSeconds(options.cacheControlMaxAge)
+
+  if (!store) {
     const bufferCopy = Buffer.from(buf)
     const dataUrl = buildInlineDataUrl(contentType, bufferCopy)
     const record: MemoryBlobRecord = {
@@ -285,6 +339,7 @@ export async function putBlobFromBuffer(
       uploadedAt: new Date(),
       size: bufferCopy.byteLength,
       dataUrl,
+      cacheControl,
     }
     memoryStore.set(targetPath, record)
     return {
@@ -293,139 +348,131 @@ export async function putBlobFromBuffer(
     }
   }
 
-  const storage = client.storage.from(config.bucket)
-  const cacheControl =
-    typeof options.cacheControlMaxAge === 'number' && Number.isFinite(options.cacheControlMaxAge)
-      ? `${Math.max(0, Math.trunc(options.cacheControlMaxAge))}`
-      : undefined
-  const uploadResult = await storage.upload(targetPath, buf, {
-    contentType,
-    cacheControl,
-    upsert: true,
+  const uploadedAt = new Date().toISOString()
+  await store.set(targetPath, buf, {
+    metadata: {
+      contentType,
+      uploadedAt,
+      size: buf.byteLength,
+      cacheControl,
+      cacheControlMaxAge: options.cacheControlMaxAge,
+    },
   })
 
-  if (uploadResult.error) {
-    throw new Error(uploadResult.error.message)
+  const proxyUrl = buildProxyUrl(targetPath)
+  return {
+    url: proxyUrl,
+    downloadUrl: proxyUrl,
   }
-
-  const publicData = storage.getPublicUrl(targetPath)
-  let publicUrl = publicData?.data?.publicUrl || ''
-  let downloadUrl = publicUrl
-
-  if (!downloadUrl) {
-    try {
-      const signed = await storage.createSignedUrl(targetPath, 60 * 60)
-      if (!signed.error && signed.data?.signedUrl) {
-        downloadUrl = signed.data.signedUrl
-        if (!publicUrl) {
-          publicUrl = signed.data.signedUrl
-        }
-      }
-    } catch {}
-  }
-
-  return { url: publicUrl || downloadUrl, downloadUrl: downloadUrl || publicUrl }
 }
 
-export async function listBlobs(options: ListCommandOptions | undefined = {}): Promise<ListBlobResult> {
-  const config = getSupabaseConfig()
-  const client = getSupabaseClient()
+async function listFallbackBlobs({ prefix }: { prefix: string }): Promise<ListedBlob[]> {
+  const normalizedPrefix = normalizePath(prefix)
+  const results: ListedBlob[] = []
+  for (const [pathname, record] of memoryStore.entries()) {
+    if (normalizedPrefix && !pathname.startsWith(normalizedPrefix)) continue
+    results.push({
+      pathname,
+      url: record.dataUrl,
+      downloadUrl: record.dataUrl,
+      uploadedAt: record.uploadedAt,
+      size: record.size,
+    })
+  }
+  results.sort((a, b) => a.pathname.localeCompare(b.pathname))
+  return results
+}
 
-  if (!client || !config) {
-    const prefix = options?.prefix ? normalizePath(options.prefix) : ''
-    const limit = typeof options?.limit === 'number' ? options.limit : undefined
+export async function listBlobs(options: ListCommandOptions = {}): Promise<ListBlobResult> {
+  const prefix = options?.prefix ? normalizePath(options.prefix) : ''
+  const limit = typeof options?.limit === 'number' ? Math.max(1, options.limit) : 100
+  const offset = options?.cursor ? Number.parseInt(options.cursor, 10) || 0 : 0
 
-    const entries = Array.from(memoryStore.entries())
-      .filter(([pathname]) => !prefix || pathname.startsWith(prefix))
-      .sort((a, b) => b[1].uploadedAt.getTime() - a[1].uploadedAt.getTime())
-
-    const sliced = typeof limit === 'number' ? entries.slice(0, Math.max(limit, 0)) : entries
+  const store = getNetlifyStore()
+  if (!store) {
+    const fallback = await listFallbackBlobs({ prefix })
+    const sliced = fallback.slice(offset, offset + limit)
+    const hasMore = offset + limit < fallback.length
     return {
-      blobs: sliced.map(([pathname, record]) => {
-        const url = record.dataUrl
-        return {
-          pathname,
-          url,
-          downloadUrl: url,
-          uploadedAt: record.uploadedAt,
-          size: record.size,
-        }
-      }),
-      hasMore: typeof limit === 'number' ? entries.length > limit : false,
-      cursor: undefined,
+      blobs: sliced,
+      hasMore,
+      cursor: hasMore ? String(offset + limit) : undefined,
     }
   }
 
-  const prefix = options?.prefix ? normalizePath(options.prefix) : ''
-  const limit = typeof options?.limit === 'number' ? options.limit : 100
-  const offset = options?.cursor ? Number.parseInt(options.cursor, 10) || 0 : 0
+  const listResult = await store.list({ prefix, directories: false })
+  const keys = (listResult?.blobs || [])
+    .map((entry) => entry.key)
+    .filter((key): key is string => typeof key === 'string' && key.length > 0)
+    .sort()
 
-  const { items, hasMore } = await supabaseList(config, { prefix, limit, offset })
-  const storage = client.storage.from(config.bucket)
-  const blobs = await convertListItemsToBlobs(items, storage)
-  const nextCursor = hasMore ? String(offset + limit) : undefined
+  const slice = keys.slice(offset, offset + limit)
 
-  return { blobs, hasMore, cursor: nextCursor }
+  const blobs: ListedBlob[] = []
+  await Promise.all(
+    slice.map(async (key) => {
+      try {
+        const metadataResult = await store.getMetadata(key)
+        const metadata = metadataResult?.metadata || {}
+        const uploadedRaw = (metadata as any).uploadedAt
+        const uploadedAt =
+          typeof uploadedRaw === 'string' && uploadedRaw.length
+            ? new Date(uploadedRaw)
+            : undefined
+        const size = Number((metadata as any).size)
+        const proxyUrl = buildProxyUrl(key)
+        blobs.push({
+          pathname: key,
+          url: proxyUrl,
+          downloadUrl: proxyUrl,
+          uploadedAt,
+          size: Number.isFinite(size) ? size : undefined,
+        })
+      } catch {
+        const proxyUrl = buildProxyUrl(key)
+        blobs.push({ pathname: key, url: proxyUrl, downloadUrl: proxyUrl })
+      }
+    }),
+  )
+
+  blobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
+  const hasMore = offset + limit < keys.length
+
+  return {
+    blobs,
+    hasMore,
+    cursor: hasMore ? String(offset + limit) : undefined,
+  }
 }
 
 export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
-  const config = getSupabaseConfig()
-  const client = getSupabaseClient()
+  const store = getNetlifyStore()
+  const sanitizedPrefix = normalizePath(prefix)
 
-  if (!client || !config) {
-    return deleteFallbackByPrefix(normalizePath(prefix))
+  if (!store) {
+    return deleteFallbackByPrefix(sanitizedPrefix)
   }
 
-  const sanitizedPrefix = normalizePath(prefix)
-  const storage = client.storage.from(config.bucket)
-  const pageSize = 100
-  let offset = 0
+  const listResult = await store.list({ prefix: sanitizedPrefix, directories: false })
+  const keys = (listResult?.blobs || [])
+    .map((entry) => entry.key)
+    .filter((key): key is string => typeof key === 'string' && key.length > 0)
+
   let removed = 0
-
-  while (true) {
-    const { items, hasMore } = await supabaseList(config, { prefix: sanitizedPrefix, limit: pageSize, offset })
-    const paths = items
-      .map((item) => item.name)
-      .filter((name): name is string => typeof name === 'string' && name.length > 0 && !name.endsWith('/'))
-
-    if (paths.length) {
-      const { error } = await storage.remove(paths)
-      if (error) {
-        throw new Error(error.message)
-      }
-      removed += paths.length
-    }
-
-    if (!hasMore) {
-      break
-    }
-
-    offset += pageSize
+  for (const key of keys) {
+    await store.delete(key)
+    removed += 1
   }
 
   return removed
 }
 
-function extractSupabasePathFromUrl(url: string, bucket: string): string | null {
-  try {
-    const parsed = new URL(url)
-    const parts = parsed.pathname.split('/').filter(Boolean)
-    const bucketIndex = parts.findIndex((part) => part === bucket)
-    if (bucketIndex >= 0 && bucketIndex < parts.length - 1) {
-      const pathParts = parts.slice(bucketIndex + 1)
-      return decodeURIComponent(pathParts.join('/'))
-    }
-  } catch {
-    return null
-  }
-  return null
-}
-
 export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
-  const config = getSupabaseConfig()
-  const client = getSupabaseClient()
+  if (!pathOrUrl) return false
 
-  if (!client || !config) {
+  const store = getNetlifyStore()
+
+  if (!store) {
     if (memoryStore.delete(pathOrUrl) || memoryStore.delete(normalizePath(pathOrUrl))) {
       return true
     }
@@ -435,48 +482,110 @@ export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
     return false
   }
 
-  if (!pathOrUrl) return false
-
-  const storage = client.storage.from(config.bucket)
-
-  if (/^https?:/i.test(pathOrUrl)) {
-    const extracted = extractSupabasePathFromUrl(pathOrUrl, config.bucket)
-    if (!extracted) {
-      return false
-    }
-    const { error } = await storage.remove([extracted])
-    if (error) throw new Error(error.message)
-    return true
-  }
-
   if (pathOrUrl.startsWith('data:')) {
     return deleteFallbackByUrl(pathOrUrl)
   }
 
-  const normalized = normalizePath(pathOrUrl)
-  const { error } = await storage.remove([normalized])
-  if (error) throw new Error(error.message)
+  const targetPath = extractPathFromUrl(pathOrUrl) || normalizePath(pathOrUrl)
+  if (!targetPath) return false
+
+  await store.delete(targetPath)
   return true
 }
 
+export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null> {
+  if (!pathOrUrl) return null
+
+  if (pathOrUrl.startsWith('data:')) {
+    for (const [pathname, record] of memoryStore.entries()) {
+      if (record.dataUrl === pathOrUrl) {
+        return {
+          buffer: Buffer.from(record.buffer),
+          contentType: record.contentType,
+          cacheControl: record.cacheControl,
+          uploadedAt: record.uploadedAt.toISOString(),
+          size: record.size,
+        }
+      }
+    }
+    return null
+  }
+
+  const store = getNetlifyStore()
+  if (!store) {
+    const record = memoryStore.get(pathOrUrl) || memoryStore.get(normalizePath(pathOrUrl))
+    if (!record) return null
+    return {
+      buffer: Buffer.from(record.buffer),
+      contentType: record.contentType,
+      cacheControl: record.cacheControl,
+      uploadedAt: record.uploadedAt.toISOString(),
+      size: record.size,
+    }
+  }
+
+  const targetPath = extractPathFromUrl(pathOrUrl) || normalizePath(pathOrUrl)
+  if (!targetPath) return null
+
+  const result = await store.getWithMetadata(targetPath, { type: 'arrayBuffer' })
+  if (!result) return null
+
+  const metadata = result.metadata || {}
+  const contentType =
+    typeof (metadata as any).contentType === 'string' && (metadata as any).contentType.length
+      ? ((metadata as any).contentType as string)
+      : 'application/octet-stream'
+  const cacheControl =
+    typeof (metadata as any).cacheControl === 'string'
+      ? ((metadata as any).cacheControl as string)
+      : typeof (metadata as any).cacheControlMaxAge === 'number'
+      ? cacheControlFromSeconds(Number((metadata as any).cacheControlMaxAge))
+      : typeof (metadata as any).cacheControlMaxAge === 'string'
+      ? cacheControlFromSeconds(Number((metadata as any).cacheControlMaxAge))
+      : undefined
+  const uploadedAt =
+    typeof (metadata as any).uploadedAt === 'string' ? ((metadata as any).uploadedAt as string) : undefined
+  const size = Number((metadata as any).size)
+
+  return {
+    buffer: Buffer.from(result.data as ArrayBuffer),
+    contentType,
+    etag: result.etag,
+    cacheControl,
+    uploadedAt,
+    size: Number.isFinite(size) ? size : undefined,
+  }
+}
+
 export async function blobHealth() {
-  const config = getSupabaseConfig()
+  const config = getNetlifyConfig()
   if (!config) {
-    return { ok: true, mode: 'memory', reason: 'no supabase config' }
+    return { ok: true, mode: 'memory', reason: 'no netlify blob config' }
   }
 
   try {
-    await supabaseList(config, { prefix: '', limit: 1, offset: 0 })
-    return { ok: true, mode: 'supabase', bucket: config.bucket }
-  } catch (e: any) {
-    return { ok: false, mode: 'supabase', reason: e?.message || 'error' }
+    const store = getNetlifyStore()
+    if (!store) {
+      return { ok: false, mode: 'netlify', reason: 'failed to initialize store' }
+    }
+    await store.list({ prefix: '', directories: false })
+    return { ok: true, mode: 'netlify', store: config.storeName }
+  } catch (error: any) {
+    return { ok: false, mode: 'netlify', reason: error?.message || 'error' }
   }
 }
 
 export function getBlobEnvironment() {
-  const config = getSupabaseConfig()
+  const config = getNetlifyConfig()
   if (!config) {
     return { provider: 'memory', configured: false as const }
   }
-  return { provider: 'supabase', configured: true as const, bucket: config.bucket }
+  return {
+    provider: 'netlify',
+    configured: true as const,
+    store: config.storeName,
+    siteId: config.siteId,
+  }
 }
+
+export { BLOB_PROXY_PREFIX }

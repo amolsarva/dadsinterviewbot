@@ -9,9 +9,10 @@ export async function GET() {
   const storageEnv = getBlobEnvironment()
   const env = {
     hasOpenAI: Boolean(process.env.OPENAI_API_KEY),
-    hasSupabase: storageEnv.configured,
+    hasBlobStore: storageEnv.configured,
     storageProvider: storageEnv.provider,
-    storageBucket: storageEnv.bucket ?? null,
+    storageStore: (storageEnv as any).store ?? null,
+    storageSiteId: (storageEnv as any).siteId ?? null,
     hasResend: Boolean(process.env.RESEND_API_KEY),
     emailsEnabled: areSummaryEmailsEnabled(),
     defaultEmail: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co',

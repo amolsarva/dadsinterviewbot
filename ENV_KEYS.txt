@@ -1,9 +1,10 @@
 This app runs *without* any environment variables (demo mode).
 If you want real storage/email/AI later, here are the keys:
 - OPENAI_API_KEY: optional; enables real follow-up generation
-- SUPABASE_URL: required for Supabase-backed storage
-- SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY/SUPABASE_ANON_KEY): required for storage access
-- SUPABASE_STORAGE_BUCKET (or SUPABASE_BUCKET): required; bucket that holds session artifacts
+- NETLIFY_BLOBS_SITE_ID and NETLIFY_BLOBS_TOKEN: required for Netlify blob storage access
+- NETLIFY_BLOBS_STORE (optional): overrides the default blob store name
+- NETLIFY_BLOBS_API_URL / NETLIFY_BLOBS_EDGE_URL (optional): advanced overrides for self-managed deployments
+- NETLIFY_BLOBS_PUBLIC_BASE_URL (optional): use a custom absolute/relative URL for blob downloads
 - RESEND_API_KEY: optional; sends the summary email on finalize
 - DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co)
 - NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI

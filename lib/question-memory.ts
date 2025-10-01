@@ -1,17 +1,7 @@
 import type { SessionMemorySnapshot } from './data'
+import { formatDetailGuard, getFinalGuardQuestion, getQuestionPool } from './fallback-texts'
 
-const FALLBACK_QUESTION_POOL = [
-  'Could you set the scene for me—where were you when this memory took place?',
-  'Who else shared that moment with you, and what were they doing?',
-  'What was the very first thing you noticed as it unfolded?',
-  'What feeling rushed in right away?',
-  'Is there a small sound or scent that still brings it back to you?',
-  'Was there an object in the room that now holds extra meaning for you?',
-  'What was happening just a few moments before everything began?',
-  'How did the light or weather color that scene for you?',
-  'What voices or music drifted through the background?',
-  'Was there a taste or texture that anchors the memory for you?',
-]
+const FALLBACK_QUESTION_POOL = getQuestionPool()
 
 export function normalizeQuestion(question: string): string {
   return question
@@ -73,7 +63,7 @@ export function pickFallbackQuestion(asked: Iterable<string>, detail?: string): 
   }
 
   if (detail) {
-    const detailQuestion = `When you think about ${compressDetail(detail)}, what else stands out now?`
+    const detailQuestion = formatDetailGuard(compressDetail(detail))
     if (!normalized.has(normalizeQuestion(detailQuestion))) {
       return detailQuestion
     }
@@ -85,5 +75,5 @@ export function pickFallbackQuestion(asked: Iterable<string>, detail?: string): 
     }
   }
 
-  return 'Tell me one detail you have not shared with me yet.'
+  return getFinalGuardQuestion()
 }
