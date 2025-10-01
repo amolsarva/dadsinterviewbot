@@ -73,10 +73,10 @@ function formatSummary(key: TestKey, data: any): string {
     const env = data.env || {}
     const blob = data.blob || {}
     const db = data.db || {}
-    const storageLabel = env.hasSupabase
-      ? env.storageBucket
-        ? `supabase (${env.storageBucket})`
-        : env.storageProvider || 'supabase'
+    const storageLabel = env.hasBlobStore
+      ? env.storageStore
+        ? `${env.storageProvider || 'netlify'} (${env.storageStore})`
+        : env.storageProvider || 'configured'
       : env.storageProvider === 'memory'
       ? 'memory fallback'
       : env.storageProvider || 'unconfigured'
@@ -92,7 +92,7 @@ function formatSummary(key: TestKey, data: any): string {
 
   if (key === 'storage') {
     if (typeof data?.message === 'string') return data.message
-    if (data?.env?.provider === 'supabase' && data?.ok) return 'Supabase storage ready.'
+    if (data?.env?.provider === 'netlify' && data?.ok) return 'Netlify blob storage ready.'
     if (data?.env?.provider === 'memory') return 'Using in-memory storage fallback.'
     if (data?.health?.reason) return `Error: ${data.health.reason}`
     return data?.ok ? 'Storage check passed' : 'Storage check failed'

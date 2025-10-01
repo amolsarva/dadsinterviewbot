@@ -8,11 +8,12 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "fallback:sync": "node scripts/extract-fallback-copy.mjs"
   },
   "dependencies": {
     "@sendgrid/mail": "^7.7.0",
-    "@supabase/supabase-js": "^2.58.0",
+    "@netlify/blobs": "^10.0.11",
     "autoprefixer": "10.4.20",
     "lucide-react": "0.460.0",
     "next": "14.2.5",

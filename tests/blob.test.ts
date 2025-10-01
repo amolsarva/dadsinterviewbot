@@ -1,57 +1,51 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
-  delete process.env.SUPABASE_URL
-  delete process.env.SUPABASE_SERVICE_ROLE_KEY
-  delete process.env.SUPABASE_SECRET_KEY
-  delete process.env.SUPABASE_ANON_KEY
-  delete process.env.SUPABASE_STORAGE_BUCKET
-  delete process.env.SUPABASE_BUCKET
+  delete process.env.NETLIFY_BLOBS_SITE_ID
+  delete process.env.NETLIFY_BLOBS_TOKEN
+  delete process.env.NETLIFY_BLOBS_STORE
+  delete process.env.NETLIFY_BLOBS_CONTEXT
   vi.resetModules()
   vi.restoreAllMocks()
 })
 
 describe('putBlobFromBuffer', () => {
-  it('uploads via Supabase when credentials are provided', async () => {
-    process.env.SUPABASE_URL = 'https://example.supabase.co'
-    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
-    process.env.SUPABASE_STORAGE_BUCKET = 'test-bucket'
+  it('uploads via Netlify when credentials are provided', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = 'site-id'
+    process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
 
-    const uploadSpy = vi.fn(async () => ({ data: { path: 'path/file.txt' }, error: null }))
-    const getPublicUrlSpy = vi.fn(() => ({
-      data: {
-        publicUrl: 'https://example.supabase.co/storage/v1/object/public/test-bucket/path/file.txt',
-      },
-    }))
-    const createSignedUrlSpy = vi.fn(async () => ({ data: { signedUrl: '' }, error: null }))
-    const fromSpy = vi.fn(() => ({
-      upload: uploadSpy,
-      getPublicUrl: getPublicUrlSpy,
-      createSignedUrl: createSignedUrlSpy,
-      remove: vi.fn(),
-    }))
-    const createClientSpy = vi.fn(() => ({ storage: { from: fromSpy } }))
+    const setSpy = vi.fn(async () => ({}))
+    const storeMock = {
+      set: setSpy,
+      list: vi.fn(async () => ({ blobs: [] })),
+      getMetadata: vi.fn(async () => null),
+      delete: vi.fn(async () => {}),
+      getWithMetadata: vi.fn(async () => null),
+    }
 
-    vi.doMock('@supabase/supabase-js', () => ({
-      createClient: createClientSpy,
-    }))
+    const getStoreSpy = vi.fn(() => storeMock)
+    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
-    expect(createClientSpy).toHaveBeenCalled()
-    expect(fromSpy).toHaveBeenCalledWith('test-bucket')
-    expect(uploadSpy).toHaveBeenCalledWith(
-      'path/file.txt',
-      expect.any(Buffer),
-      expect.objectContaining({ contentType: 'text/plain', upsert: true })
-    )
-    expect(result.url).toContain('path/file.txt')
+    expect(getStoreSpy).toHaveBeenCalledWith({
+      name: 'store-name',
+      siteID: 'site-id',
+      token: 'api-token',
+      apiURL: undefined,
+      edgeURL: undefined,
+      uncachedEdgeURL: undefined,
+      consistency: undefined,
+    })
+    expect(setSpy).toHaveBeenCalled()
+    expect(result.url).toBe('/api/blob/path/file.txt')
     expect(result.downloadUrl).toBe(result.url)
   })
 
   it('falls back to a data URL when storage is not configured', async () => {
-    vi.doMock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
+    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
@@ -62,7 +56,7 @@ describe('putBlobFromBuffer', () => {
 
 describe('listBlobs', () => {
   it('returns fallback entries when storage is not configured', async () => {
-    vi.doMock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
+    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
     clearFallbackBlobs()
 
