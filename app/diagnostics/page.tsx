@@ -73,10 +73,12 @@ function formatSummary(key: TestKey, data: any): string {
     const env = data.env || {}
     const blob = data.blob || {}
     const db = data.db || {}
-    const storageLabel = env.hasSupabase
-      ? env.storageBucket
-        ? `supabase (${env.storageBucket})`
-        : env.storageProvider || 'supabase'
+    const storageName = env.storageBucket || env.storageStore
+    const storageProviderLabel = env.storageProvider || (env.hasBlobStore ? 'configured' : 'unconfigured')
+    const storageLabel = env.hasBlobStore
+      ? storageName
+        ? `${storageProviderLabel} (${storageName})`
+        : storageProviderLabel
       : env.storageProvider === 'memory'
       ? 'memory fallback'
       : env.storageProvider || 'unconfigured'
@@ -92,7 +94,10 @@ function formatSummary(key: TestKey, data: any): string {
 
   if (key === 'storage') {
     if (typeof data?.message === 'string') return data.message
-    if (data?.env?.provider === 'supabase' && data?.ok) return 'Supabase storage ready.'
+    if (data?.env?.provider === 'supabase' && data?.ok) {
+      const bucket = data?.env?.bucket || data?.env?.store
+      return bucket ? `Supabase bucket "${bucket}" is ready.` : 'Supabase storage ready.'
+    }
     if (data?.env?.provider === 'memory') return 'Using in-memory storage fallback.'
     if (data?.health?.reason) return `Error: ${data.health.reason}`
     return data?.ok ? 'Storage check passed' : 'Storage check failed'
