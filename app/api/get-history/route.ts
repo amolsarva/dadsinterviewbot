@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { list } from '@vercel/blob'
+import { getBlobEnvironment, listBlobs } from '@/lib/blob'
 
 type HistoryEntry = {
   sessionId: string
@@ -13,12 +13,17 @@ type HistoryEntry = {
 
 export async function GET(req: NextRequest) {
   try {
+    const storageEnv = getBlobEnvironment()
+    if (!storageEnv.configured) {
+      return NextResponse.json({ items: [] })
+    }
+
     const url = new URL(req.url)
     const page = Number(url.searchParams.get('page') || '1')
     const limit = Number(url.searchParams.get('limit') || '10')
 
     const prefix = 'sessions/'
-    const { blobs } = await list({ prefix, limit: 2000 })
+    const { blobs } = await listBlobs({ prefix, limit: 2000 })
     const sessions = new Map<string, HistoryEntry>()
 
     for (const blob of blobs) {
@@ -41,19 +46,21 @@ export async function GET(req: NextRequest) {
           blob.uploadedAt instanceof Date
             ? blob.uploadedAt.toISOString()
             : typeof blob.uploadedAt === 'string'
-              ? blob.uploadedAt
-              : new Date().toISOString()
-        entry.turns.push({ url: blob.url, uploadedAt: uploadedAtValue, name })
+            ? blob.uploadedAt
+            : new Date().toISOString()
+        const urlToUse = blob.downloadUrl || blob.url
+        if (!urlToUse) continue
+        entry.turns.push({ url: urlToUse, uploadedAt: uploadedAtValue, name })
       }
       if (/^session-.+\.json$/.test(name)) {
-        entry.manifestUrl = blob.url
+        entry.manifestUrl = blob.downloadUrl || blob.url || null
       }
       sessions.set(id, entry)
     }
 
     const sorted = Array.from(sessions.values()).sort((a, b) => {
-      const aTime = a.turns.length ? a.turns[a.turns.length - 1].uploadedAt : 0
-      const bTime = b.turns.length ? b.turns[b.turns.length - 1].uploadedAt : 0
+      const aTime = a.turns.length ? a.turns[a.turns.length - 1].uploadedAt : '0'
+      const bTime = b.turns.length ? b.turns[b.turns.length - 1].uploadedAt : '0'
       return new Date(bTime).getTime() - new Date(aTime).getTime()
     })
 

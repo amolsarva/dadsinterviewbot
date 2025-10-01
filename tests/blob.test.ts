@@ -1,44 +1,57 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
-  delete process.env.VERCEL_BLOB_READ_WRITE_TOKEN
-  delete process.env.BLOB_READ_WRITE_TOKEN
+  delete process.env.SUPABASE_URL
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY
+  delete process.env.SUPABASE_SECRET_KEY
+  delete process.env.SUPABASE_ANON_KEY
+  delete process.env.SUPABASE_STORAGE_BUCKET
+  delete process.env.SUPABASE_BUCKET
   vi.resetModules()
   vi.restoreAllMocks()
 })
 
 describe('putBlobFromBuffer', () => {
-  it('uses public access when uploading with a token', async () => {
-    process.env.BLOB_READ_WRITE_TOKEN = 'test-token'
-    const putSpy = vi.fn(async () => ({
-      url: 'https://blob.test/resource',
-      downloadUrl: 'https://blob.test/resource?download=1',
+  it('uploads via Supabase when credentials are provided', async () => {
+    process.env.SUPABASE_URL = 'https://example.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
+    process.env.SUPABASE_STORAGE_BUCKET = 'test-bucket'
+
+    const uploadSpy = vi.fn(async () => ({ data: { path: 'path/file.txt' }, error: null }))
+    const getPublicUrlSpy = vi.fn(() => ({
+      data: {
+        publicUrl: 'https://example.supabase.co/storage/v1/object/public/test-bucket/path/file.txt',
+      },
     }))
-    vi.doMock('@vercel/blob', () => ({
-      put: putSpy,
-      list: vi.fn(),
-      del: vi.fn(),
+    const createSignedUrlSpy = vi.fn(async () => ({ data: { signedUrl: '' }, error: null }))
+    const fromSpy = vi.fn(() => ({
+      upload: uploadSpy,
+      getPublicUrl: getPublicUrlSpy,
+      createSignedUrl: createSignedUrlSpy,
+      remove: vi.fn(),
     }))
+    const createClientSpy = vi.fn(() => ({ storage: { from: fromSpy } }))
+
+    vi.doMock('@supabase/supabase-js', () => ({
+      createClient: createClientSpy,
+    }))
+
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
-    expect(putSpy).toHaveBeenCalledWith(
+    expect(createClientSpy).toHaveBeenCalled()
+    expect(fromSpy).toHaveBeenCalledWith('test-bucket')
+    expect(uploadSpy).toHaveBeenCalledWith(
       'path/file.txt',
       expect.any(Buffer),
-      expect.objectContaining({ access: 'public', token: 'test-token', contentType: 'text/plain' })
+      expect.objectContaining({ contentType: 'text/plain', upsert: true })
     )
-    expect(result).toEqual({
-      url: 'https://blob.test/resource',
-      downloadUrl: 'https://blob.test/resource?download=1',
-    })
+    expect(result.url).toContain('path/file.txt')
+    expect(result.downloadUrl).toBe(result.url)
   })
 
-  it('falls back to a data URL when no token is available', async () => {
-    vi.doMock('@vercel/blob', () => ({
-      put: vi.fn(),
-      list: vi.fn(),
-      del: vi.fn(),
-    }))
+  it('falls back to a data URL when storage is not configured', async () => {
+    vi.doMock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
@@ -48,12 +61,8 @@ describe('putBlobFromBuffer', () => {
 })
 
 describe('listBlobs', () => {
-  it('returns fallback entries when no token is present', async () => {
-    vi.doMock('@vercel/blob', () => ({
-      put: vi.fn(),
-      list: vi.fn(),
-      del: vi.fn(),
-    }))
+  it('returns fallback entries when storage is not configured', async () => {
+    vi.doMock('@supabase/supabase-js', () => ({ createClient: vi.fn() }))
     const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
     clearFallbackBlobs()
 
