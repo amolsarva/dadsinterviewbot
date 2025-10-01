@@ -642,6 +642,159 @@ textarea.diagnostics-log {
   color: #0a5f38;
 }
 
+.diagnostics-home-checks {
+  margin: 18px 0 16px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(243, 203, 165, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.diagnostics-home-checks__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.diagnostics-home-checks__title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.diagnostics-home-checks__timestamp {
+  font-size: 12px;
+  color: rgba(115, 74, 43, 0.75);
+  letter-spacing: 0.02em;
+}
+
+.diagnostics-home-checks__refresh {
+  background: none;
+  color: var(--accent-deep);
+  box-shadow: none;
+  padding: 0;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.diagnostics-home-checks__refresh:hover {
+  color: #0a5f38;
+  transform: none;
+}
+
+.diagnostics-home-checks__refresh:disabled {
+  color: rgba(115, 74, 43, 0.55);
+}
+
+.diagnostics-home-checks__error {
+  margin: 0;
+  font-size: 13px;
+  color: #b91c1c;
+}
+
+.diagnostics-home-checks__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.diagnostics-home-checks__item {
+  display: flex;
+  gap: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.diagnostics-home-checks__item--ok {
+  border-color: rgba(34, 197, 94, 0.38);
+}
+
+.diagnostics-home-checks__item--warning {
+  border-color: rgba(234, 179, 8, 0.48);
+}
+
+.diagnostics-home-checks__item--error {
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.diagnostics-home-checks__status {
+  font-size: 20px;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.diagnostics-home-checks__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostics-home-checks__label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.diagnostics-home-checks__detail {
+  font-size: 13px;
+  color: #475569;
+  white-space: pre-wrap;
+}
+
+.diagnostics-home-checks__meta {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.diagnostics-home-checks__meta li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  background: rgba(226, 232, 240, 0.6);
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.diagnostics-home-checks__meta span {
+  font-weight: 600;
+}
+
+.diagnostics-home-checks__meta code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  background: rgba(15, 23, 42, 0.08);
+  padding: 2px 4px;
+  border-radius: 6px;
+  color: #1e293b;
+  word-break: break-word;
+}
+
+.diagnostics-home-checks__empty {
+  margin: 0;
+  font-size: 13px;
+  color: #475569;
+}
+
 .diagnostics-panel {
   width: 100%;
   max-width: 860px;

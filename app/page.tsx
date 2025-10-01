@@ -78,6 +78,83 @@ const extractHandlesFromPayload = (payload: unknown) => {
   return mergeKnownHandles(handles as Array<string | null | undefined>, SERVER_HANDLE_LIMIT)
 }
 
+type StorageDiagnosticStatus = 'ok' | 'warning' | 'error' | 'info'
+
+type StorageDiagnosticMeta = {
+  label: string
+  value: string
+}
+
+type StorageDiagnosticItem = {
+  id: string
+  label: string
+  status: StorageDiagnosticStatus
+  detail: string
+  meta?: StorageDiagnosticMeta[]
+}
+
+const EASTERN_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
+const STORAGE_STATUS_ICON: Record<StorageDiagnosticStatus, string> = {
+  ok: '✅',
+  warning: '⚠️',
+  error: '❌',
+  info: 'ℹ️',
+}
+
+const STORAGE_DIAGNOSTIC_ENDPOINT = '/api/diagnostics/storage'
+
+const formatEasternTimestamp = (value: string | number | Date | null | undefined): string | null => {
+  if (value === null || typeof value === 'undefined') return null
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.valueOf())) return null
+  return `${EASTERN_TIME_FORMATTER.format(date)} Eastern Time`
+}
+
+const normalizeStorageStatus = (input: unknown): StorageDiagnosticStatus => {
+  if (typeof input === 'string') {
+    const normalized = input.toLowerCase()
+    if (normalized === 'ok' || normalized === 'success' || normalized === 'pass') return 'ok'
+    if (normalized === 'warning' || normalized === 'warn' || normalized === 'caution') return 'warning'
+    if (normalized === 'error' || normalized === 'fail' || normalized === 'failure') return 'error'
+  }
+  return 'info'
+}
+
+const formatMetaValue = (value: unknown): string => {
+  if (value === null || typeof value === 'undefined') return '—'
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed.length) return '—'
+    return trimmed.length > 220 ? `${trimmed.slice(0, 220)}…` : trimmed
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (value instanceof Date) {
+    return formatEasternTimestamp(value) ?? value.toISOString()
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+const convertMetaToList = (meta: Record<string, unknown> | null | undefined): StorageDiagnosticMeta[] => {
+  if (!meta) return []
+  const entries: StorageDiagnosticMeta[] = []
+  for (const [label, value] of Object.entries(meta)) {
+    if (typeof value === 'undefined') continue
+    entries.push({ label, value: formatMetaValue(value) })
+  }
+  return entries
+}
+
 type DiagnosticTranscriptPayload = {
   text: string
   turn: number
@@ -443,6 +520,10 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const [finishRequested, setFinishRequested] = useState(false)
   const [manualStopRequested, setManualStopRequested] = useState(false)
   const [providerError, setProviderError] = useState<DiagnosticProviderErrorPayload | null>(null)
+  const [storageDiagnostics, setStorageDiagnostics] = useState<StorageDiagnosticItem[]>([])
+  const [storageDiagnosticsError, setStorageDiagnosticsError] = useState<string | null>(null)
+  const [storageDiagnosticsFetchedAt, setStorageDiagnosticsFetchedAt] = useState<string | null>(null)
+  const [isStorageDiagnosticsLoading, setIsStorageDiagnosticsLoading] = useState(false)
   const inTurnRef = useRef(false)
   const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
@@ -458,7 +539,201 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const providerErrorRef = useRef<DiagnosticProviderErrorPayload | null>(null)
   const accountSwitcherRef = useRef<HTMLDivElement | null>(null)
   const newUserInputRef = useRef<HTMLInputElement | null>(null)
+  const mountedRef = useRef(true)
+  const storageDiagnosticsTimestampLabel = useMemo(
+    () => formatEasternTimestamp(storageDiagnosticsFetchedAt),
+    [storageDiagnosticsFetchedAt],
+  )
 
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const runStorageDiagnostics = useCallback(async () => {
+    if (!mountedRef.current) return
+    setIsStorageDiagnosticsLoading(true)
+    setStorageDiagnosticsError(null)
+    const startedAt = new Date()
+    pushLog(`[storage] Running diagnostics at ${startedAt.toLocaleString()}`)
+
+    try {
+      const response = await fetch(`${STORAGE_DIAGNOSTIC_ENDPOINT}?home=1`, {
+        cache: 'no-store',
+      })
+      const rawText = await response.text()
+      let parsed: any = null
+      try {
+        parsed = JSON.parse(rawText)
+      } catch {
+        parsed = null
+      }
+
+      if (!response.ok) {
+        const message = `HTTP ${response.status} from storage diagnostics.`
+        if (mountedRef.current) {
+          setStorageDiagnosticsError(message)
+          setStorageDiagnosticsFetchedAt(new Date().toISOString())
+        }
+        pushLog(`[storage:error] ${message}`)
+        if (rawText) {
+          pushLog(`[storage:body] ${truncateForLog(rawText, 200)}`)
+        }
+        return
+      }
+
+      if (!parsed || typeof parsed !== 'object') {
+        const message = 'Storage diagnostics returned an unexpected payload.'
+        if (mountedRef.current) {
+          setStorageDiagnosticsError(message)
+          setStorageDiagnosticsFetchedAt(new Date().toISOString())
+        }
+        pushLog('[storage:error] Unexpected diagnostics payload.')
+        if (rawText) {
+          pushLog(`[storage:body] ${truncateForLog(rawText, 200)}`)
+        }
+        return
+      }
+
+      const nextItems: StorageDiagnosticItem[] = []
+      const timestampValue = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString()
+
+      nextItems.push({
+        id: 'storage:endpoint',
+        label: 'Diagnostics endpoint',
+        status: 'ok',
+        detail: `HTTP ${response.status} · Response received.`,
+        meta:
+          typeof parsed.timestamp === 'string'
+            ? [{ label: 'server_timestamp', value: parsed.timestamp }]
+            : undefined,
+      })
+
+      if (typeof parsed.message === 'string' && parsed.message.trim().length) {
+        nextItems.push({
+          id: 'storage:summary',
+          label: 'Summary',
+          status: parsed.ok === false ? 'warning' : 'ok',
+          detail: parsed.message,
+        })
+      }
+
+      if (Array.isArray(parsed.checks)) {
+        ;(parsed.checks as any[]).forEach((rawCheck: any, index: number) => {
+          if (!rawCheck || typeof rawCheck !== 'object') return
+          const label = typeof rawCheck.label === 'string' ? rawCheck.label : 'Storage check'
+          const detail =
+            typeof rawCheck.detail === 'string' && rawCheck.detail.trim().length
+              ? rawCheck.detail
+              : 'No detail provided.'
+          const status = normalizeStorageStatus(rawCheck.status)
+          const metaList = convertMetaToList(rawCheck.meta as Record<string, unknown> | null | undefined)
+          nextItems.push({
+            id:
+              typeof rawCheck.id === 'string'
+                ? rawCheck.id
+                : `storage:check:${index}`,
+            label,
+            status,
+            detail,
+            meta: metaList.length ? metaList : undefined,
+          })
+        })
+      }
+
+      if (parsed.supabase && typeof parsed.supabase === 'object') {
+        const supabase = parsed.supabase as any
+        const overviewMeta: Record<string, unknown> = {}
+        if (typeof supabase.urlHost === 'string' && supabase.urlHost.length) {
+          overviewMeta.host = supabase.urlHost
+        }
+        if (typeof supabase.bucket === 'string' && supabase.bucket.length) {
+          overviewMeta.bucket = supabase.bucket
+        }
+        if (typeof supabase.keyType === 'string' && supabase.keyType.length) {
+          overviewMeta.keyType = supabase.keyType
+        }
+
+        if (typeof supabase.configured === 'boolean') {
+          const metaList = convertMetaToList(overviewMeta)
+          nextItems.push({
+            id: 'supabase:overview',
+            label: 'Supabase configuration',
+            status: supabase.configured ? 'ok' : 'warning',
+            detail: supabase.configured
+              ? 'Supabase URL and key detected.'
+              : 'Supabase credentials incomplete or missing.',
+            meta: metaList.length ? metaList : undefined,
+          })
+        } else if (Object.keys(overviewMeta).length) {
+          const metaList = convertMetaToList(overviewMeta)
+          if (metaList.length) {
+            nextItems.push({
+              id: 'supabase:details',
+              label: 'Supabase details',
+              status: 'info',
+              detail: 'Supabase environment details captured.',
+              meta: metaList,
+            })
+          }
+        }
+
+        const supabaseChecks = Array.isArray(supabase.checks) ? supabase.checks : []
+        supabaseChecks.forEach((rawCheck: any, index: number) => {
+          if (!rawCheck || typeof rawCheck !== 'object') return
+          const label = typeof rawCheck.label === 'string' ? rawCheck.label : 'Supabase check'
+          const detail = typeof rawCheck.detail === 'string' && rawCheck.detail.trim().length
+            ? rawCheck.detail
+            : 'No detail provided.'
+          const status = normalizeStorageStatus(rawCheck.status)
+          const metaList = convertMetaToList(rawCheck.meta as Record<string, unknown> | null | undefined)
+          nextItems.push({
+            id:
+              typeof rawCheck.id === 'string'
+                ? rawCheck.id
+                : `supabase:check:${index}`,
+            label,
+            status,
+            detail,
+            meta: metaList.length ? metaList : undefined,
+          })
+        })
+      }
+
+      if (mountedRef.current) {
+        setStorageDiagnostics(nextItems)
+        setStorageDiagnosticsFetchedAt(timestampValue)
+        setStorageDiagnosticsError(null)
+      }
+
+      nextItems.forEach((item) => {
+        const prefix =
+          item.status === 'ok'
+            ? '[storage:ok]'
+            : item.status === 'warning'
+            ? '[storage:warn]'
+            : item.status === 'error'
+            ? '[storage:error]'
+            : '[storage:info]'
+        pushLog(`${prefix} ${item.label} → ${item.detail}`)
+      })
+    } catch (error: any) {
+      const message = error?.message || 'Storage diagnostics request failed.'
+      if (mountedRef.current) {
+        setStorageDiagnosticsError(message)
+        setStorageDiagnosticsFetchedAt(new Date().toISOString())
+      }
+      pushLog(`[storage:error] ${message}`)
+    } finally {
+      if (mountedRef.current) {
+        setIsStorageDiagnosticsLoading(false)
+      }
+    }
+  }, [mountedRef, pushLog])
+  const handleRefreshStorageDiagnostics = useCallback(() => {
+    runStorageDiagnostics().catch(() => undefined)
+  }, [runStorageDiagnostics])
   useEffect(() => {
     if (typeof window === 'undefined') {
       setKnownHandles(normalizedHandle ? [normalizedHandle] : [])
@@ -531,6 +806,10 @@ export function Home({ userHandle }: { userHandle?: string }) {
   useEffect(() => {
     setHandleInput(displayHandle ?? '')
   }, [displayHandle])
+
+  useEffect(() => {
+    runStorageDiagnostics().catch(() => undefined)
+  }, [runStorageDiagnostics])
 
   const availableHandles = useMemo(
     () =>
@@ -2022,6 +2301,59 @@ export function Home({ userHandle }: { userHandle?: string }) {
           <a className="diagnostics-link" href={diagnosticsHref}>
             Open
           </a>
+        </div>
+        <div className="diagnostics-home-checks">
+          <div className="diagnostics-home-checks__head">
+            <div className="diagnostics-home-checks__title">
+              <span>Storage checks</span>
+              {storageDiagnosticsTimestampLabel ? (
+                <span className="diagnostics-home-checks__timestamp">
+                  {isStorageDiagnosticsLoading ? 'Updating…' : `Captured ${storageDiagnosticsTimestampLabel}`}
+                </span>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="link-button diagnostics-home-checks__refresh"
+              onClick={handleRefreshStorageDiagnostics}
+              disabled={isStorageDiagnosticsLoading}
+            >
+              {isStorageDiagnosticsLoading ? 'Checking…' : 'Refresh'}
+            </button>
+          </div>
+          {storageDiagnosticsError ? (
+            <p className="diagnostics-home-checks__error">{storageDiagnosticsError}</p>
+          ) : null}
+          {storageDiagnostics.length ? (
+            <ul className="diagnostics-home-checks__list">
+              {storageDiagnostics.map((item) => (
+                <li
+                  key={item.id}
+                  className={`diagnostics-home-checks__item diagnostics-home-checks__item--${item.status}`}
+                >
+                  <span className="diagnostics-home-checks__status" aria-hidden="true">
+                    {STORAGE_STATUS_ICON[item.status]}
+                  </span>
+                  <div className="diagnostics-home-checks__body">
+                    <div className="diagnostics-home-checks__label">{item.label}</div>
+                    <div className="diagnostics-home-checks__detail">{item.detail}</div>
+                    {item.meta && item.meta.length ? (
+                      <ul className="diagnostics-home-checks__meta">
+                        {item.meta.map((meta) => (
+                          <li key={`${item.id}:${meta.label}`}>
+                            <span>{meta.label}</span>
+                            <code>{meta.value}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="diagnostics-home-checks__empty">No storage diagnostics captured yet.</p>
+          )}
         </div>
         <textarea value={debugLog.join('\n')} readOnly rows={6} className="diagnostics-log" />
         <div className="page-subtext">
