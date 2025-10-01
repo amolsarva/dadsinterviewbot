@@ -10,6 +10,11 @@ This folder is ready to drop into your existing repo and push.
 - Artifacts are data URLs (visible in History/Session). Email is skipped gracefully.
 - Later, use `.env.local.example` → `.env.local` for real Blob/Email/AI.
 
+### Supabase storage
+- When you are ready to persist session artifacts outside the browser, follow
+  [`docs/supabase.md`](docs/supabase.md) for the bucket setup, environment
+  variables, and the health checks that confirm everything is wired correctly.
+
 ## Pages
 - `/` Home — one-button flow + **Finish Session**, greeting voice, on-screen log.
 - `/history`, `/session/[id]`, `/settings`
