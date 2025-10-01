@@ -18,17 +18,14 @@ describe('putBlobFromBuffer', () => {
     process.env.SUPABASE_STORAGE_BUCKET = 'test-bucket'
 
     const uploadSpy = vi.fn(async () => ({ data: { path: 'path/file.txt' }, error: null }))
-    const getPublicUrlSpy = vi.fn(() => ({
-      data: {
-        publicUrl: 'https://example.supabase.co/storage/v1/object/public/test-bucket/path/file.txt',
-      },
-    }))
+    const getPublicUrlSpy = vi.fn(() => ({ data: { publicUrl: '' } }))
     const createSignedUrlSpy = vi.fn(async () => ({ data: { signedUrl: '' }, error: null }))
+    const removeSpy = vi.fn(async () => ({ error: null }))
     const fromSpy = vi.fn(() => ({
       upload: uploadSpy,
       getPublicUrl: getPublicUrlSpy,
       createSignedUrl: createSignedUrlSpy,
-      remove: vi.fn(),
+      remove: removeSpy,
     }))
     const createClientSpy = vi.fn(() => ({ storage: { from: fromSpy } }))
 
@@ -44,10 +41,10 @@ describe('putBlobFromBuffer', () => {
     expect(uploadSpy).toHaveBeenCalledWith(
       'path/file.txt',
       expect.any(Buffer),
-      expect.objectContaining({ contentType: 'text/plain', upsert: true })
+      expect.objectContaining({ contentType: 'text/plain', upsert: true }),
     )
-    expect(result.url).toContain('path/file.txt')
-    expect(result.downloadUrl).toBe(result.url)
+    expect(result.url).toBe('/api/blob/path/file.txt')
+    expect(result.downloadUrl).toBe('/api/blob/path/file.txt')
   })
 
   it('falls back to a data URL when storage is not configured', async () => {

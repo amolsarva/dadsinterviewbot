@@ -9,6 +9,12 @@ import {
 } from '@/lib/question-memory'
 import { detectCompletionIntent } from '@/lib/intents'
 import { resolveGoogleModel } from '@/lib/google'
+import {
+  getAskFirstSessionGreeting,
+  formatAskReturningWithHighlight,
+  getAskReturningDefault,
+  getAskProviderExceptionPrompt,
+} from '@/lib/fallback-texts'
 
 const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
 Core responsibilities:
@@ -93,6 +99,7 @@ type AskAudioResponse = {
       historyPreview: string
       questionPreview: string
       primerPreview: string
+      primerHandle: string | null
       askedQuestionsPreview: string[]
     }
   }
@@ -107,6 +114,7 @@ type MemoryPrompt = {
   askedQuestions: string[]
   highlightDetail?: string
   primerText: string
+  primerHandle: string | null
   hasPriorSessions: boolean
   hasCurrentConversation: boolean
 }
@@ -128,6 +136,7 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
       recentConversation: '',
       askedQuestions: [],
       primerText: '',
+      primerHandle: null,
       highlightDetail: undefined,
       hasPriorSessions: false,
       hasCurrentConversation: false,
@@ -137,7 +146,8 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
   const askedQuestions = collectAskedQuestions(sessions)
   const highlightDetail = findLatestUserDetails(sessions, { limit: 1 })[0]
-  const primer = await getMemoryPrimer()
+  const primerHandle = current?.user_handle ?? null
+  const primer = await getMemoryPrimer(primerHandle)
   const primerText = primer.text ? primer.text.trim() : ''
 
   const historyLines: string[] = []
@@ -184,6 +194,7 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
     askedQuestions,
     highlightDetail,
     primerText,
+    primerHandle,
     hasPriorSessions,
     hasCurrentConversation,
   }
@@ -214,6 +225,7 @@ export async function POST(req: NextRequest) {
       historyPreview: memory.historyText.slice(0, 400),
       questionPreview: memory.questionText.slice(0, 400),
       primerPreview: memory.primerText.slice(0, 400),
+      primerHandle: memory.primerHandle,
       askedQuestionsPreview: memory.askedQuestions.slice(0, 10),
     }
     const debugBase = {
@@ -224,15 +236,12 @@ export async function POST(req: NextRequest) {
     }
     const fallbackQuestion = pickFallbackQuestion(memory.askedQuestions, memory.highlightDetail)
     const fallbackSuggestion = softenQuestion(fallbackQuestion)
-    const fallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
-      ? "Hi, I'm Dad's Interview Bot. I'm here to help you save the stories and small details your family will want to revisit. When it feels right, would you start with a memory you'd like me to remember?"
+    const baseFallbackReply = !memory.hasPriorSessions && !memory.hasCurrentConversation
+      ? getAskFirstSessionGreeting()
       : memory.highlightDetail
-      ? `Welcome back. I'm still holding onto what you told me about ${memory.highlightDetail}. Let's add another chapter to your archive.${
-          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
-        }`
-      : `Welcome back—your story archive is open and I'm keeping track of everything you've trusted me with.${
-          fallbackSuggestion ? ` ${fallbackSuggestion}` : ''
-        }`
+      ? formatAskReturningWithHighlight(memory.highlightDetail)
+      : getAskReturningDefault()
+    const fallbackReply = fallbackSuggestion ? `${baseFallbackReply} ${fallbackSuggestion}`.trim() : baseFallbackReply
 
     if (!process.env.GOOGLE_API_KEY) {
       return NextResponse.json<AskAudioResponse>({
@@ -405,7 +414,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<AskAudioResponse>({
       ok: true,
       provider,
-      reply: 'Who else was there? Share a first name and one detail about them.',
+      reply: getAskProviderExceptionPrompt(),
       transcript: '',
       end_intent: false,
       debug: {
