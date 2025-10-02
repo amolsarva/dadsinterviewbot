@@ -43,14 +43,14 @@
 ## Diagnostics & operator tooling
 - **Diagnostics dashboard:** `/diagnostics` shows recent health checks, captured provider failures, and links to localStorage payloads (`DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY`, `DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY`).
 - **Logs:** the home panel card mirrors the most recent state transitions for quick triage. Browser storage keeps the rolling log per handle.
-- **Blob helpers:** `app/api/blob/[...path]` exposes inline blob contents when running in tokenless demo mode.
+- **Blob helpers:** `app/api/blob/[...path]` proxies Netlify blob contents when credentials are present; diagnostics now halt if storage secrets are missing.
 - **Commit stamp:** the footer (see `app/layout.tsx`) links to the active commit and renders the timestamp in US Eastern Time for release tracking.
 - **Memory Log review:** use the Vercel Blob CLI to inspect per-session manifests (`vercel blob ls sessions/`) and fetch specific logs (`vercel blob get sessions/<SESSION_ID>/session.json`). Primers live beside them at `memory/primers/<HANDLE>.md`.
 
 ## Deployment & runtime notes
-- **Zero-config demo:** no env vars required; blobs fall back to in-memory data URLs and email delivery is skipped gracefully.
+- **Storage configuration:** Netlify Blobs credentials are required; without them the runtime blocks persistence and surfaces an error banner in diagnostics.
 - **Providers:** Google Gemini is the default; set `GOOGLE_API_KEY` and `GOOGLE_MODEL` for production. TTS falls back to the browser if `/api/tts` cannot return media.
-- **Session storage:** manifests and transcripts stream to Vercel Blob when credentials exist; otherwise they remain in-memory for the session.
+- **Session storage:** manifests and transcripts stream to Netlify Blobs once credentials are supplied—there is no longer an in-memory fallback.
 - **Handles:** normalised via `lib/user-scope.ts` to keep blob paths, localStorage keys, and URLs aligned.
 
 ## ToDoLater highlights

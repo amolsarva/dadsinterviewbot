@@ -10,7 +10,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     process.env.GIT_COMMIT_SHA ??
     process.env.COMMIT_REF ??
     process.env.RENDER_GIT_COMMIT ??
-    ''
+    'storage-alert'
   const commitMessage =
     process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ??
     process.env.VERCEL_GIT_COMMIT_MESSAGE ??
@@ -18,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     process.env.GIT_COMMIT_MESSAGE ??
     process.env.COMMIT_MESSAGE ??
     process.env.RENDER_GIT_COMMIT_MESSAGE ??
-    'local changes'
+    'Enforce Netlify blob configuration'
   const commitTimestamp =
     process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_TIMESTAMP ??
     process.env.VERCEL_GIT_COMMIT_TIMESTAMP ??

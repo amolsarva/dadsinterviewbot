@@ -77,8 +77,8 @@ function formatSummary(key: TestKey, data: any): string {
       ? env.storageStore
         ? `${env.storageProvider || 'netlify'} (${env.storageStore})`
         : env.storageProvider || 'configured'
-      : env.storageProvider === 'memory'
-      ? 'memory fallback'
+      : env.storageProvider === 'missing'
+      ? 'not configured'
       : env.storageProvider || 'unconfigured'
     const parts = [
       `OpenAI: ${env.hasOpenAI ? 'yes' : 'no'}`,
@@ -87,13 +87,78 @@ function formatSummary(key: TestKey, data: any): string {
     ]
     if (blob) parts.push(`Storage health: ${blob.ok ? 'ok' : blob.reason || 'error'}`)
     if (db) parts.push(`DB: ${db.ok ? db.mode || 'ok' : db.reason || 'error'}`)
+    if (env?.blobDiagnostics) {
+      const missing = Array.isArray(env.blobDiagnostics.missing)
+        ? env.blobDiagnostics.missing.filter((item: string) => typeof item === 'string')
+        : []
+      const contextLabel = env.blobDiagnostics.usingContext ? 'context detected' : 'no context payload'
+      parts.push(`Blob env: ${missing.length ? `missing ${missing.join(', ')}` : 'complete'} · ${contextLabel}`)
+    }
     return parts.join(' · ')
   }
 
   if (key === 'storage') {
-    if (typeof data?.message === 'string') return data.message
-    if (data?.env?.provider === 'netlify' && data?.ok) return 'Netlify blob storage ready.'
-    if (data?.env?.provider === 'memory') return 'Using in-memory storage fallback.'
+    const diagnostics = data?.env?.diagnostics
+    const detailParts: string[] = []
+    if (diagnostics) {
+      const tokenSource = diagnostics.token?.selected?.key
+      const tokenStatus = diagnostics.token?.present
+        ? `token present (${tokenSource || 'source unknown'})`
+        : 'token missing'
+      detailParts.push(tokenStatus)
+      const siteSource = diagnostics.siteId?.selected?.key
+      const siteStatus = diagnostics.siteId?.present
+        ? `site ID present (${siteSource || 'source unknown'})`
+        : 'site ID missing'
+      detailParts.push(siteStatus)
+      const storeStatus = diagnostics.store?.selected?.valuePreview
+        ? `store ${diagnostics.store.selected.valuePreview}${diagnostics.store.defaulted ? ' (defaulted)' : ''}`
+        : 'store unresolved'
+      detailParts.push(storeStatus)
+      if (
+        diagnostics.optional?.edgeUrl?.present ||
+        diagnostics.optional?.apiUrl?.present ||
+        diagnostics.optional?.uncachedEdgeUrl?.present
+      ) {
+        const edge = diagnostics.optional?.edgeUrl?.selected?.valuePreview
+        const api = diagnostics.optional?.apiUrl?.selected?.valuePreview
+        const uncached = diagnostics.optional?.uncachedEdgeUrl?.selected?.valuePreview
+        if (edge) detailParts.push(`edge URL set (${edge})`)
+        if (api) detailParts.push(`API URL set (${api})`)
+        if (uncached) detailParts.push(`uncached edge URL set (${uncached})`)
+      }
+      if (Array.isArray(diagnostics.missing) && diagnostics.missing.length) {
+        detailParts.push(`missing: ${diagnostics.missing.join(', ')}`)
+      }
+    }
+    const healthDetails = data?.health?.details
+    if (healthDetails) {
+      if (typeof healthDetails.status === 'number') {
+        detailParts.push(`health status ${healthDetails.status}`)
+      }
+      if (healthDetails.code) {
+        detailParts.push(`health code ${healthDetails.code}`)
+      }
+      if (healthDetails.requestId) {
+        detailParts.push(`health request ${healthDetails.requestId}`)
+      }
+      if (healthDetails.responseBodySnippet) {
+        detailParts.push(`health body: ${healthDetails.responseBodySnippet}`)
+      }
+    }
+    if (typeof data?.message === 'string') {
+      return detailParts.length ? `${data.message} · ${detailParts.join(' · ')}` : data.message
+    }
+    if (data?.env?.provider === 'netlify' && data?.ok) {
+      return detailParts.length
+        ? `Netlify blob storage ready · ${detailParts.join(' · ')}`
+        : 'Netlify blob storage ready.'
+    }
+    if (data?.env?.provider === 'missing') {
+      return detailParts.length
+        ? `Persistent storage not configured · ${detailParts.join(' · ')}`
+        : 'Persistent storage not configured.'
+    }
     if (data?.health?.reason) return `Error: ${data.health.reason}`
     return data?.ok ? 'Storage check passed' : 'Storage check failed'
   }
@@ -128,8 +193,40 @@ function formatSummary(key: TestKey, data: any): string {
     if (status.skipped) return 'Email skipped (no provider configured)'
   }
 
-  if (key === 'smoke' && data.ok) return 'Session created and finalized'
-  if (key === 'e2e' && data.ok) return 'Session completed end-to-end'
+  if (key === 'smoke') {
+    if (data.ok) return 'Session created and finalized'
+    const detailParts: string[] = []
+    if (data.stage) detailParts.push(`stage ${data.stage}`)
+    if (data.cause) detailParts.push(`cause: ${data.cause}`)
+    const blobDetails = data.details || data.blobDetails
+    if (blobDetails) {
+      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
+      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
+      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
+      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
+      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+    }
+    return detailParts.length
+      ? `${data.error || 'Smoke test failed'} · ${detailParts.join(' · ')}`
+      : data.error || 'Smoke test failed'
+  }
+  if (key === 'e2e') {
+    if (data.ok) return 'Session completed end-to-end'
+    const detailParts: string[] = []
+    if (data.stage) detailParts.push(`stage ${data.stage}`)
+    if (data.cause) detailParts.push(`cause: ${data.cause}`)
+    const blobDetails = data.details || data.blobDetails
+    if (blobDetails) {
+      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
+      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
+      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
+      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
+      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+    }
+    return detailParts.length
+      ? `${data.error || 'E2E test failed'} · ${detailParts.join(' · ')}`
+      : data.error || 'E2E test failed'
+  }
 
   if (data.error) return `Error: ${data.error}`
   return data.ok ? 'Passed' : 'Failed'
@@ -142,6 +239,15 @@ export default function DiagnosticsPage() {
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [isRunning, setIsRunning] = useState(false)
   const [foxes, setFoxes] = useState<FoxRecord[]>([])
+  const [storageAlert, setStorageAlert] = useState<
+    | {
+        message: string
+        missing?: string[]
+        healthReason?: string
+        source: 'health' | 'storage' | 'request'
+      }
+    | null
+  >(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -277,6 +383,7 @@ export default function DiagnosticsPage() {
     setLog('Running diagnostics...')
     setResults(initialResults())
     setFoxes([])
+    setStorageAlert(null)
 
     let transcriptSnapshot: TranscriptSynopsis | null = null
     let providerSnapshot: ProviderErrorSynopsis | null = null
@@ -424,6 +531,47 @@ export default function DiagnosticsPage() {
           const ok = typeof parsed.ok === 'boolean' ? parsed.ok : res.ok
           const message = formatSummary(key, parsed)
           updateResult(key, { status: ok ? 'ok' : 'error', message })
+          if (key === 'health') {
+            const blobMode = parsed?.blob?.mode
+            if (blobMode === 'missing') {
+              const missing = Array.isArray(parsed?.env?.blobDiagnostics?.missing)
+                ? parsed.env.blobDiagnostics.missing.filter(
+                    (item: unknown): item is string => typeof item === 'string',
+                  )
+                : undefined
+              const reason =
+                typeof parsed?.blob?.reason === 'string' && parsed.blob.reason.length
+                  ? parsed.blob.reason
+                  : 'Netlify blob storage is not configured.'
+              setStorageAlert(prev => {
+                if (prev && prev.source === 'storage') return prev
+                return { message: reason, missing, healthReason: reason, source: 'health' }
+              })
+            }
+          }
+          if (key === 'storage') {
+            if (!ok) {
+              const missing = Array.isArray(parsed?.env?.diagnostics?.missing)
+                ? parsed.env.diagnostics.missing.filter(
+                    (item: unknown): item is string => typeof item === 'string',
+                  )
+                : undefined
+              const reason =
+                typeof parsed?.health?.reason === 'string' && parsed.health.reason.length
+                  ? parsed.health.reason
+                  : undefined
+              const messageText =
+                typeof parsed?.message === 'string' && parsed.message.length
+                  ? parsed.message
+                  : 'Persistent storage not configured.'
+              setStorageAlert({
+                message: messageText,
+                missing,
+                healthReason: reason,
+                source: 'storage',
+              })
+            }
+          }
         } else {
           append(rawText || '(no response body)')
           updateResult(key, {
@@ -435,6 +583,9 @@ export default function DiagnosticsPage() {
         const errorMessage = e?.message || 'Request failed'
         append(`Request failed: ${errorMessage}`)
         updateResult(key, { status: 'error', message: errorMessage })
+        if (key === 'storage') {
+          setStorageAlert({ message: `Storage diagnostics failed: ${errorMessage}`, source: 'request' })
+        }
       }
     }
 
@@ -477,6 +628,16 @@ export default function DiagnosticsPage() {
     ? latestTranscript.provider
     : 'provider unknown'
 
+  const storageSourceLabel = storageAlert
+    ? storageAlert.source === 'health'
+      ? 'health check'
+      : storageAlert.source === 'storage'
+      ? 'storage diagnostics'
+      : storageAlert.source === 'request'
+      ? 'network request'
+      : storageAlert.source
+    : undefined
+
   return (
     <main>
       <div className="panel-card diagnostics-panel">
@@ -484,6 +645,29 @@ export default function DiagnosticsPage() {
         <button onClick={runDiagnostics} disabled={isRunning} className="btn-secondary btn-large">
           {isRunning ? 'Running…' : 'Run full diagnostics'}
         </button>
+
+        {storageAlert && (
+          <div className="diagnostic-card diagnostic-card-critical">
+            <div className="diagnostic-card-head">
+              <span className="diagnostic-icon" aria-hidden="true">
+                🚨
+              </span>
+              <span className="diagnostic-label">Persistent storage unavailable</span>
+            </div>
+            <div className="diagnostic-message">{storageAlert.message}</div>
+            {storageAlert.missing && storageAlert.missing.length > 0 && (
+              <ul className="diagnostic-alert-list">
+                {storageAlert.missing.map((item) => (
+                  <li key={item}>Missing: {item}</li>
+                ))}
+              </ul>
+            )}
+            {storageAlert.healthReason && storageAlert.healthReason !== storageAlert.message && (
+              <div className="diagnostic-meta">Health check: {storageAlert.healthReason}</div>
+            )}
+            <div className="diagnostic-meta">Source: {storageSourceLabel || storageAlert.source}</div>
+          </div>
+        )}
 
         <div className="diagnostics-transcript">
           <h3>Latest transcript heard</h3>

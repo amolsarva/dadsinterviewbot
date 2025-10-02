@@ -44,27 +44,23 @@ describe('putBlobFromBuffer', () => {
     expect(result.downloadUrl).toBe(result.url)
   })
 
-  it('falls back to a data URL when storage is not configured', async () => {
+  it('throws when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer } = await import('../lib/blob')
-    const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
-    expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
-    expect(result.downloadUrl).toBe(result.url)
+    await expect(
+      putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain'),
+    ).rejects.toThrowError(/Netlify blob storage is not configured/i)
   })
 })
 
 describe('listBlobs', () => {
-  it('returns fallback entries when storage is not configured', async () => {
+  it('throws when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
-    const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
-    clearFallbackBlobs()
+    const { listBlobs } = await import('../lib/blob')
 
-    await putBlobFromBuffer('sessions/test/item.json', Buffer.from('{}'), 'application/json')
-    const result = await listBlobs({ prefix: 'sessions/test/' })
-
-    expect(result.blobs).toHaveLength(1)
-    expect(result.blobs[0].pathname).toBe('sessions/test/item.json')
-    expect(result.blobs[0].downloadUrl).toEqual(result.blobs[0].url)
+    await expect(listBlobs({ prefix: 'sessions/test/' })).rejects.toThrowError(
+      /Netlify blob storage is not configured/i,
+    )
   })
 })

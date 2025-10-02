@@ -29,7 +29,7 @@ Add these values under **Site settings → Environment variables**:
 - `NETLIFY_BLOBS_STORE` (optional override; omit to use the default)
 - Optional overrides if you host the store elsewhere: `NETLIFY_BLOBS_API_URL`, `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_PUBLIC_BASE_URL`.
 
-> Without the token or site ID the runtime falls back to the in-memory store. Diagnostics will warn with `mode: "memory"` until you add the secrets and redeploy.
+> Without the token or site ID the runtime blocks storage operations. Diagnostics will warn with `mode: "missing"` until you add the secrets and redeploy.
 
 ## 4. Wire the AI + email providers
 Add any production credentials you use today:
@@ -52,8 +52,8 @@ Add any production credentials you use today:
 - Track rotation cadence in `ToDoLater.txt` (see the existing reminder) so the credentials never stale out.
 
 ## 7. Troubleshooting quick hits
-- **Storage still in memory** → double-check that `NETLIFY_BLOBS_TOKEN` and `NETLIFY_BLOBS_SITE_ID` are defined for the *production* context and that the latest deploy pulled them in (`Deploy settings → Environment`).
+- **Storage flagged as missing** → double-check that `NETLIFY_BLOBS_TOKEN` and `NETLIFY_BLOBS_SITE_ID` are defined for the *production* context and that the latest deploy pulled them in (`Deploy settings → Environment`).
 - **Blob downloads 404** → ensure the store name matches the one you configured; wrong store names silently create a new empty store.
 - **Diagnostics missing OpenAI/Google** → Netlify hides secrets from build logs; verify they exist via the dashboard and re-run the deploy. The `/api/health` endpoint echoes which providers are active.
 
-Following this checklist keeps feature parity with the old Vercel deployment while preserving the in-memory fallback for local demos.
+Following this checklist keeps feature parity with the old Vercel deployment and ensures persistent storage stays online.

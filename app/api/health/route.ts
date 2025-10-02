@@ -16,6 +16,7 @@ export async function GET() {
     hasResend: Boolean(process.env.RESEND_API_KEY),
     emailsEnabled: areSummaryEmailsEnabled(),
     defaultEmail: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co',
+    blobDiagnostics: storageEnv.diagnostics,
   }
   return NextResponse.json({ ok: true, env, blob, db })
 }

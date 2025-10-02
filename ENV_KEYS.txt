@@ -1,4 +1,4 @@
-This app runs *without* any environment variables (demo mode).
+This app now requires Netlify blob credentials for persistent storage.
 If you want real storage/email/AI later, here are the keys:
 - OPENAI_API_KEY: optional; enables real follow-up generation
 - NETLIFY_BLOBS_SITE_ID and NETLIFY_BLOBS_TOKEN: required for Netlify blob storage access
@@ -9,7 +9,7 @@ If you want real storage/email/AI later, here are the keys:
 - DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co)
 - NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI
 
-Demo mode behavior without keys:
+Behavior without storage keys:
 - AI follow-ups are mocked.
-- Artifacts are generated as data: URLs (still visible in History/Session).
+- Storage operations fail with a critical diagnostics alert until Netlify credentials are provided.
 - Email is skipped with a log note; no error thrown.
