@@ -34,6 +34,45 @@ type NetlifyConfig = {
   consistency?: 'strong' | 'eventual'
 }
 
+type CandidateSource = 'env' | 'context' | 'default'
+
+type CandidateSummary = {
+  key: string
+  source: CandidateSource
+  present: boolean
+  valuePreview?: string
+  note?: string
+}
+
+type FieldDiagnostics = {
+  present: boolean
+  selected?: CandidateSummary
+  candidates: CandidateSummary[]
+}
+
+type StoreDiagnostics = FieldDiagnostics & {
+  defaulted: boolean
+}
+
+type TokenDiagnostics = FieldDiagnostics & {
+  length?: number
+}
+
+type BlobEnvDiagnostics = {
+  usingContext: boolean
+  contextKeys: string[]
+  missing: string[]
+  store: StoreDiagnostics
+  siteId: FieldDiagnostics
+  token: TokenDiagnostics
+  optional: {
+    apiUrl: FieldDiagnostics
+    edgeUrl: FieldDiagnostics
+    uncachedEdgeUrl: FieldDiagnostics
+    consistency?: string
+  }
+}
+
 export type ListedBlob = {
   pathname: string
   url: string
@@ -76,6 +115,96 @@ const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
 let netlifyConfig: NetlifyConfig | null | undefined
 let netlifyStore: Store | null | undefined
 let netlifyWarningIssued = false
+let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
+
+function defaultDiagnostics(): BlobEnvDiagnostics {
+  return {
+    usingContext: false,
+    contextKeys: [],
+    missing: ['siteId', 'token'],
+    store: {
+      present: false,
+      defaulted: true,
+      selected: undefined,
+      candidates: [],
+    },
+    siteId: {
+      present: false,
+      selected: undefined,
+      candidates: [],
+    },
+    token: {
+      present: false,
+      selected: undefined,
+      candidates: [],
+      length: undefined,
+    },
+    optional: {
+      apiUrl: { present: false, selected: undefined, candidates: [] },
+      edgeUrl: { present: false, selected: undefined, candidates: [] },
+      uncachedEdgeUrl: { present: false, selected: undefined, candidates: [] },
+      consistency: undefined,
+    },
+  }
+}
+
+function maskValue(value: string): string {
+  if (!value) return ''
+  if (value.length <= 8) return value
+  return `${value.slice(0, 4)}…${value.slice(-4)}`
+}
+
+type CandidateInternal = {
+  key: string
+  source: CandidateSource
+  value: string
+  note?: string
+}
+
+function makeCandidate(
+  key: string,
+  raw: unknown,
+  source: CandidateSource,
+  note?: string,
+): CandidateInternal {
+  return {
+    key,
+    source,
+    value: typeof raw === 'string' ? raw.trim() : '',
+    note,
+  }
+}
+
+function summarizeCandidate(
+  candidate: CandidateInternal,
+  previewMode: 'store' | 'site' | 'token' | 'url',
+): CandidateSummary {
+  let valuePreview: string | undefined
+  if (candidate.value.length) {
+    switch (previewMode) {
+      case 'token':
+        valuePreview = `${candidate.value.length} chars`
+        break
+      case 'site':
+        valuePreview = maskValue(candidate.value)
+        break
+      default:
+        valuePreview = candidate.value
+        break
+    }
+  }
+  return {
+    key: candidate.key,
+    source: candidate.source,
+    present: candidate.value.length > 0,
+    valuePreview,
+    note: candidate.note,
+  }
+}
+
+function pickFirstPresent(candidates: CandidateInternal[]): CandidateInternal | undefined {
+  return candidates.find((candidate) => candidate.value.length > 0)
+}
 
 function normalizePath(path: string): string {
   if (!path) return ''
@@ -133,7 +262,7 @@ function parseNetlifyContext(): NetlifyContext | null {
   return null
 }
 
-function readNetlifyConfig(): NetlifyConfig | null {
+function readNetlifyConfig(): { config: NetlifyConfig | null; diagnostics: BlobEnvDiagnostics } {
   const context = parseNetlifyContext()
 
   const storeName =
@@ -141,54 +270,124 @@ function readNetlifyConfig(): NetlifyConfig | null {
     (process.env.NETLIFY_BLOBS_STORE_NAME || '').trim() ||
     'dads-interview-bot'
 
-  let siteId =
-    (process.env.NETLIFY_BLOBS_SITE_ID || '').trim() ||
-    (process.env.BLOBS_SITE_ID || '').trim() ||
-    (process.env.NETLIFY_SITE_ID || '').trim() ||
-    (context?.siteID || '').trim()
+  const storeCandidates: CandidateInternal[] = [
+    makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
+    makeCandidate('NETLIFY_BLOBS_STORE_NAME', process.env.NETLIFY_BLOBS_STORE_NAME, 'env'),
+    makeCandidate('default', storeName, 'default', 'fallback store name'),
+  ]
 
-  let token =
-    (process.env.NETLIFY_BLOBS_TOKEN || '').trim() ||
-    (process.env.BLOBS_TOKEN || '').trim() ||
-    (process.env.NETLIFY_API_TOKEN || '').trim() ||
-    (context?.token || '').trim()
+  const siteIdCandidates: CandidateInternal[] = [
+    makeCandidate('NETLIFY_BLOBS_SITE_ID', process.env.NETLIFY_BLOBS_SITE_ID, 'env'),
+    makeCandidate('BLOBS_SITE_ID', process.env.BLOBS_SITE_ID, 'env'),
+    makeCandidate('NETLIFY_SITE_ID', process.env.NETLIFY_SITE_ID, 'env'),
+    makeCandidate('context.siteID', context?.siteID, 'context'),
+  ]
 
-  const edgeUrl =
-    (process.env.NETLIFY_BLOBS_EDGE_URL || '').trim() ||
-    (context?.edgeURL || '').trim() ||
-    undefined
+  const tokenCandidates: CandidateInternal[] = [
+    makeCandidate('NETLIFY_BLOBS_TOKEN', process.env.NETLIFY_BLOBS_TOKEN, 'env'),
+    makeCandidate('BLOBS_TOKEN', process.env.BLOBS_TOKEN, 'env'),
+    makeCandidate('NETLIFY_API_TOKEN', process.env.NETLIFY_API_TOKEN, 'env'),
+    makeCandidate('context.token', context?.token, 'context'),
+  ]
 
-  const apiUrl =
-    (process.env.NETLIFY_BLOBS_API_URL || '').trim() ||
-    (context?.apiURL || '').trim() ||
-    undefined
+  const edgeUrlCandidates: CandidateInternal[] = [
+    makeCandidate('NETLIFY_BLOBS_EDGE_URL', process.env.NETLIFY_BLOBS_EDGE_URL, 'env'),
+    makeCandidate('context.edgeURL', context?.edgeURL, 'context'),
+  ]
 
-  const uncachedEdgeUrl =
-    (process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL || '').trim() ||
-    (context?.uncachedEdgeURL || '').trim() ||
-    undefined
+  const apiUrlCandidates: CandidateInternal[] = [
+    makeCandidate('NETLIFY_BLOBS_API_URL', process.env.NETLIFY_BLOBS_API_URL, 'env'),
+    makeCandidate('context.apiURL', context?.apiURL, 'context'),
+  ]
 
-  if (!siteId || !token) {
-    return null
-  }
+  const uncachedEdgeCandidates: CandidateInternal[] = [
+    makeCandidate(
+      'NETLIFY_BLOBS_UNCACHED_EDGE_URL',
+      process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL,
+      'env',
+    ),
+    makeCandidate('context.uncachedEdgeURL', context?.uncachedEdgeURL, 'context'),
+  ]
+
+  const storePick = pickFirstPresent(storeCandidates) || storeCandidates[storeCandidates.length - 1]
+  const siteIdPick = pickFirstPresent(siteIdCandidates)
+  const tokenPick = pickFirstPresent(tokenCandidates)
+  const edgePick = pickFirstPresent(edgeUrlCandidates)
+  const apiPick = pickFirstPresent(apiUrlCandidates)
+  const uncachedPick = pickFirstPresent(uncachedEdgeCandidates)
 
   const consistency =
     (process.env.NETLIFY_BLOBS_CONSISTENCY as 'strong' | 'eventual' | undefined) || undefined
 
-  return {
-    storeName,
-    siteId,
-    token,
-    apiUrl,
-    edgeUrl,
-    uncachedEdgeUrl,
-    consistency,
+  const diagnostics: BlobEnvDiagnostics = {
+    usingContext: Boolean(context),
+    contextKeys: context
+      ? Object.entries(context)
+          .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+          .map(([key]) => key)
+      : [],
+    missing: [],
+    store: {
+      present: Boolean(storePick?.value.length),
+      defaulted: storePick?.source === 'default',
+      selected: storePick ? summarizeCandidate(storePick, 'store') : undefined,
+      candidates: storeCandidates.map((candidate) => summarizeCandidate(candidate, 'store')),
+    },
+    siteId: {
+      present: Boolean(siteIdPick?.value.length),
+      selected: siteIdPick ? summarizeCandidate(siteIdPick, 'site') : undefined,
+      candidates: siteIdCandidates.map((candidate) => summarizeCandidate(candidate, 'site')),
+    },
+    token: {
+      present: Boolean(tokenPick?.value.length),
+      selected: tokenPick ? summarizeCandidate(tokenPick, 'token') : undefined,
+      candidates: tokenCandidates.map((candidate) => summarizeCandidate(candidate, 'token')),
+      length: tokenPick?.value.length || undefined,
+    },
+    optional: {
+      apiUrl: {
+        present: Boolean(apiPick?.value.length),
+        selected: apiPick ? summarizeCandidate(apiPick, 'url') : undefined,
+        candidates: apiUrlCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
+      },
+      edgeUrl: {
+        present: Boolean(edgePick?.value.length),
+        selected: edgePick ? summarizeCandidate(edgePick, 'url') : undefined,
+        candidates: edgeUrlCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
+      },
+      uncachedEdgeUrl: {
+        present: Boolean(uncachedPick?.value.length),
+        selected: uncachedPick ? summarizeCandidate(uncachedPick, 'url') : undefined,
+        candidates: uncachedEdgeCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
+      },
+      consistency,
+    },
   }
+
+  if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
+  if (!diagnostics.token.present) diagnostics.missing.push('token')
+
+  const config: NetlifyConfig | null =
+    diagnostics.siteId.present && diagnostics.token.present
+      ? {
+          storeName: storePick?.value || storeName,
+          siteId: siteIdPick!.value,
+          token: tokenPick!.value,
+          apiUrl: apiPick?.value || undefined,
+          edgeUrl: edgePick?.value || undefined,
+          uncachedEdgeUrl: uncachedPick?.value || undefined,
+          consistency,
+        }
+      : null
+
+  return { config, diagnostics }
 }
 
 function getNetlifyConfig(): NetlifyConfig | null {
-  if (typeof netlifyConfig === 'undefined') {
-    netlifyConfig = readNetlifyConfig()
+  if (typeof netlifyConfig === 'undefined' || typeof netlifyDiagnostics === 'undefined') {
+    const result = readNetlifyConfig()
+    netlifyConfig = result.config
+    netlifyDiagnostics = result.diagnostics
   }
 
   if (!netlifyConfig && !netlifyWarningIssued) {
@@ -202,6 +401,16 @@ function getNetlifyConfig(): NetlifyConfig | null {
   }
 
   return netlifyConfig ?? null
+}
+
+function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
+  if (typeof netlifyConfig === 'undefined' || typeof netlifyDiagnostics === 'undefined') {
+    const result = readNetlifyConfig()
+    netlifyConfig = result.config
+    netlifyDiagnostics = result.diagnostics
+  }
+
+  return netlifyDiagnostics ?? defaultDiagnostics()
 }
 
 function getNetlifyStore(): Store | null {
@@ -576,16 +785,19 @@ export async function blobHealth() {
 }
 
 export function getBlobEnvironment() {
+  const diagnostics = getBlobEnvDiagnostics()
   const config = getNetlifyConfig()
   if (!config) {
-    return { provider: 'memory', configured: false as const }
+    return { provider: 'memory', configured: false as const, diagnostics }
   }
   return {
     provider: 'netlify',
     configured: true as const,
     store: config.storeName,
     siteId: config.siteId,
+    diagnostics,
   }
 }
 
 export { BLOB_PROXY_PREFIX }
+export type { BlobEnvDiagnostics, CandidateSummary }
