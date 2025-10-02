@@ -87,13 +87,78 @@ function formatSummary(key: TestKey, data: any): string {
     ]
     if (blob) parts.push(`Storage health: ${blob.ok ? 'ok' : blob.reason || 'error'}`)
     if (db) parts.push(`DB: ${db.ok ? db.mode || 'ok' : db.reason || 'error'}`)
+    if (env?.blobDiagnostics) {
+      const missing = Array.isArray(env.blobDiagnostics.missing)
+        ? env.blobDiagnostics.missing.filter((item: string) => typeof item === 'string')
+        : []
+      const contextLabel = env.blobDiagnostics.usingContext ? 'context detected' : 'no context payload'
+      parts.push(`Blob env: ${missing.length ? `missing ${missing.join(', ')}` : 'complete'} · ${contextLabel}`)
+    }
     return parts.join(' · ')
   }
 
   if (key === 'storage') {
-    if (typeof data?.message === 'string') return data.message
-    if (data?.env?.provider === 'netlify' && data?.ok) return 'Netlify blob storage ready.'
-    if (data?.env?.provider === 'memory') return 'Using in-memory storage fallback.'
+    const diagnostics = data?.env?.diagnostics
+    const detailParts: string[] = []
+    if (diagnostics) {
+      const tokenSource = diagnostics.token?.selected?.key
+      const tokenStatus = diagnostics.token?.present
+        ? `token present (${tokenSource || 'source unknown'})`
+        : 'token missing'
+      detailParts.push(tokenStatus)
+      const siteSource = diagnostics.siteId?.selected?.key
+      const siteStatus = diagnostics.siteId?.present
+        ? `site ID present (${siteSource || 'source unknown'})`
+        : 'site ID missing'
+      detailParts.push(siteStatus)
+      const storeStatus = diagnostics.store?.selected?.valuePreview
+        ? `store ${diagnostics.store.selected.valuePreview}${diagnostics.store.defaulted ? ' (defaulted)' : ''}`
+        : 'store unresolved'
+      detailParts.push(storeStatus)
+      if (
+        diagnostics.optional?.edgeUrl?.present ||
+        diagnostics.optional?.apiUrl?.present ||
+        diagnostics.optional?.uncachedEdgeUrl?.present
+      ) {
+        const edge = diagnostics.optional?.edgeUrl?.selected?.valuePreview
+        const api = diagnostics.optional?.apiUrl?.selected?.valuePreview
+        const uncached = diagnostics.optional?.uncachedEdgeUrl?.selected?.valuePreview
+        if (edge) detailParts.push(`edge URL set (${edge})`)
+        if (api) detailParts.push(`API URL set (${api})`)
+        if (uncached) detailParts.push(`uncached edge URL set (${uncached})`)
+      }
+      if (Array.isArray(diagnostics.missing) && diagnostics.missing.length) {
+        detailParts.push(`missing: ${diagnostics.missing.join(', ')}`)
+      }
+    }
+    const healthDetails = data?.health?.details
+    if (healthDetails) {
+      if (typeof healthDetails.status === 'number') {
+        detailParts.push(`health status ${healthDetails.status}`)
+      }
+      if (healthDetails.code) {
+        detailParts.push(`health code ${healthDetails.code}`)
+      }
+      if (healthDetails.requestId) {
+        detailParts.push(`health request ${healthDetails.requestId}`)
+      }
+      if (healthDetails.responseBodySnippet) {
+        detailParts.push(`health body: ${healthDetails.responseBodySnippet}`)
+      }
+    }
+    if (typeof data?.message === 'string') {
+      return detailParts.length ? `${data.message} · ${detailParts.join(' · ')}` : data.message
+    }
+    if (data?.env?.provider === 'netlify' && data?.ok) {
+      return detailParts.length
+        ? `Netlify blob storage ready · ${detailParts.join(' · ')}`
+        : 'Netlify blob storage ready.'
+    }
+    if (data?.env?.provider === 'memory') {
+      return detailParts.length
+        ? `Using in-memory storage fallback · ${detailParts.join(' · ')}`
+        : 'Using in-memory storage fallback.'
+    }
     if (data?.health?.reason) return `Error: ${data.health.reason}`
     return data?.ok ? 'Storage check passed' : 'Storage check failed'
   }
@@ -128,8 +193,40 @@ function formatSummary(key: TestKey, data: any): string {
     if (status.skipped) return 'Email skipped (no provider configured)'
   }
 
-  if (key === 'smoke' && data.ok) return 'Session created and finalized'
-  if (key === 'e2e' && data.ok) return 'Session completed end-to-end'
+  if (key === 'smoke') {
+    if (data.ok) return 'Session created and finalized'
+    const detailParts: string[] = []
+    if (data.stage) detailParts.push(`stage ${data.stage}`)
+    if (data.cause) detailParts.push(`cause: ${data.cause}`)
+    const blobDetails = data.details || data.blobDetails
+    if (blobDetails) {
+      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
+      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
+      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
+      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
+      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+    }
+    return detailParts.length
+      ? `${data.error || 'Smoke test failed'} · ${detailParts.join(' · ')}`
+      : data.error || 'Smoke test failed'
+  }
+  if (key === 'e2e') {
+    if (data.ok) return 'Session completed end-to-end'
+    const detailParts: string[] = []
+    if (data.stage) detailParts.push(`stage ${data.stage}`)
+    if (data.cause) detailParts.push(`cause: ${data.cause}`)
+    const blobDetails = data.details || data.blobDetails
+    if (blobDetails) {
+      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
+      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
+      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
+      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
+      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+    }
+    return detailParts.length
+      ? `${data.error || 'E2E test failed'} · ${detailParts.join(' · ')}`
+      : data.error || 'E2E test failed'
+  }
 
   if (data.error) return `Error: ${data.error}`
   return data.ok ? 'Passed' : 'Failed'
