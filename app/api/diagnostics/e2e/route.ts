@@ -38,11 +38,22 @@ export async function POST() {
 
     return NextResponse.json({ ok: true, sessionId: session.id, result, foxes: listFoxes() })
   } catch (error: any) {
+    const blobDetails =
+      error && typeof error === 'object'
+        ? error.blobDetails ||
+          (error.cause && typeof error.cause === 'object' ? (error.cause as any).blobDetails : undefined)
+        : undefined
+    const causeMessage =
+      error && typeof error === 'object' && error.cause && typeof error.cause === 'object'
+        ? (error.cause as any).message
+        : undefined
     return NextResponse.json(
       {
         ok: false,
         error: error?.message || 'e2e_failed',
         stage: error?.diagnosticStage || 'unknown',
+        details: blobDetails,
+        cause: causeMessage,
         foxes: listFoxes(),
       },
       { status: 500 }

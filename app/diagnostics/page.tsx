@@ -131,6 +131,21 @@ function formatSummary(key: TestKey, data: any): string {
         detailParts.push(`missing: ${diagnostics.missing.join(', ')}`)
       }
     }
+    const healthDetails = data?.health?.details
+    if (healthDetails) {
+      if (typeof healthDetails.status === 'number') {
+        detailParts.push(`health status ${healthDetails.status}`)
+      }
+      if (healthDetails.code) {
+        detailParts.push(`health code ${healthDetails.code}`)
+      }
+      if (healthDetails.requestId) {
+        detailParts.push(`health request ${healthDetails.requestId}`)
+      }
+      if (healthDetails.responseBodySnippet) {
+        detailParts.push(`health body: ${healthDetails.responseBodySnippet}`)
+      }
+    }
     if (typeof data?.message === 'string') {
       return detailParts.length ? `${data.message} · ${detailParts.join(' · ')}` : data.message
     }
@@ -178,8 +193,40 @@ function formatSummary(key: TestKey, data: any): string {
     if (status.skipped) return 'Email skipped (no provider configured)'
   }
 
-  if (key === 'smoke' && data.ok) return 'Session created and finalized'
-  if (key === 'e2e' && data.ok) return 'Session completed end-to-end'
+  if (key === 'smoke') {
+    if (data.ok) return 'Session created and finalized'
+    const detailParts: string[] = []
+    if (data.stage) detailParts.push(`stage ${data.stage}`)
+    if (data.cause) detailParts.push(`cause: ${data.cause}`)
+    const blobDetails = data.details || data.blobDetails
+    if (blobDetails) {
+      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
+      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
+      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
+      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
+      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+    }
+    return detailParts.length
+      ? `${data.error || 'Smoke test failed'} · ${detailParts.join(' · ')}`
+      : data.error || 'Smoke test failed'
+  }
+  if (key === 'e2e') {
+    if (data.ok) return 'Session completed end-to-end'
+    const detailParts: string[] = []
+    if (data.stage) detailParts.push(`stage ${data.stage}`)
+    if (data.cause) detailParts.push(`cause: ${data.cause}`)
+    const blobDetails = data.details || data.blobDetails
+    if (blobDetails) {
+      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
+      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
+      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
+      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
+      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+    }
+    return detailParts.length
+      ? `${data.error || 'E2E test failed'} · ${detailParts.join(' · ')}`
+      : data.error || 'E2E test failed'
+  }
 
   if (data.error) return `Error: ${data.error}`
   return data.ok ? 'Passed' : 'Failed'

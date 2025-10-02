@@ -322,7 +322,11 @@ async function ensurePrimerLoadedFromStorage(handle?: string | null) {
           : undefined,
       )
     } catch (err) {
-      console.warn('Failed to load memory primer from storage', err)
+      console.warn(
+        'Failed to load memory primer from storage',
+        err,
+        err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+      )
     } finally {
       state.loaded = true
     }
@@ -360,12 +364,20 @@ async function hydrateSessionsFromBlobs() {
           mem.sessions.set(derived.id, { ...derived, turns: derived.turns ? [...derived.turns] : [] })
         }
       } catch (err) {
-        console.warn('Failed to parse session manifest', err)
+        console.warn(
+          'Failed to parse session manifest',
+          err,
+          err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        )
       }
     }
     hydrationState.hydrated = true
   } catch (err) {
-    console.warn('Failed to list session manifests', err)
+    console.warn(
+      'Failed to list session manifests',
+      err,
+      err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+    )
   } finally {
     hydrationState.attempted = true
   }
@@ -627,7 +639,11 @@ async function persistSessionSnapshot(session: RememberedSession) {
       }
     }
   } catch (err) {
-    console.warn('Failed to persist session snapshot', err)
+    console.warn(
+      'Failed to persist session snapshot',
+      err,
+      err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+    )
   }
 }
 
@@ -808,7 +824,7 @@ export async function finalizeSession(
   mem.sessions.set(id, s)
 
   await rebuildMemoryPrimer(s.user_handle ?? null).catch((err) => {
-    console.warn('Failed to rebuild memory primer', err)
+    console.warn('Failed to rebuild memory primer', err, (err as any)?.blobDetails)
   })
 
   const emailed = !!('ok' in emailStatus && emailStatus.ok)
@@ -868,7 +884,12 @@ export async function deleteSession(
       const deleted = await deleteBlob(url)
       if (deleted) removed = true
     } catch (err) {
-      console.warn('Failed to delete session artifact blob', { id, url, err })
+      console.warn('Failed to delete session artifact blob', {
+        id,
+        url,
+        err,
+        blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+      })
     }
   }
 
@@ -880,7 +901,12 @@ export async function deleteSession(
         removed = true
       }
     } catch (err) {
-      console.warn('Failed to delete blobs for prefix', { id, prefix, err })
+      console.warn('Failed to delete blobs for prefix', {
+        id,
+        prefix,
+        err,
+        blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+      })
     }
   }
 
@@ -899,7 +925,7 @@ export async function deleteSession(
     )
     if (hasRemainingForHandle) {
       await rebuildMemoryPrimer(deletedHandle).catch((err) => {
-        console.warn('Failed to rebuild memory primer after deletion', err)
+        console.warn('Failed to rebuild memory primer after deletion', err, (err as any)?.blobDetails)
       })
     } else {
       await deleteBlob(memoryPrimerPathForKey(deletedHandleKey)).catch(() => undefined)
@@ -931,7 +957,11 @@ export async function clearAllSessions(): Promise<{ ok: boolean }> {
       try {
         await deleteBlobsByPrefix(prefix)
       } catch (err) {
-        console.warn('Failed to delete blobs during clearAllSessions', { prefix, err })
+        console.warn('Failed to delete blobs during clearAllSessions', {
+          prefix,
+          err,
+          blobDetails: err && typeof err === 'object' ? (err as any).blobDetails : undefined,
+        })
       }
     }),
   )
@@ -1122,7 +1152,7 @@ async function fetchSessionManifest(sessionId: string): Promise<ManifestLookup |
       data,
     }
   } catch (err) {
-    console.warn('Failed to fetch session manifest', err)
+    console.warn('Failed to fetch session manifest', err, (err as any)?.blobDetails)
     return null
   }
 }
