@@ -67,4 +67,78 @@ describe('listBlobs', () => {
     expect(result.blobs[0].pathname).toBe('sessions/test/item.json')
     expect(result.blobs[0].downloadUrl).toEqual(result.blobs[0].url)
   })
+
+  it('maps Netlify metadata into the blob listing when available', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = 'site-id'
+    process.env.NETLIFY_BLOBS_TOKEN = 'token'
+
+    const listSpy = vi.fn(async () => ({
+      blobs: [{ key: 'sessions/a.json' }, { key: 'sessions/b.json' }],
+    }))
+    const getMetadataSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ metadata: { uploadedAt: '2024-05-01T12:34:56.000Z', size: '1234' } })
+      .mockResolvedValueOnce({ metadata: { uploadedAt: 42, size: 'not-a-number' } })
+
+    vi.doMock('@netlify/blobs', () => ({
+      getStore: vi.fn(() => ({
+        list: listSpy,
+        getMetadata: getMetadataSpy,
+        set: vi.fn(),
+        delete: vi.fn(),
+        getWithMetadata: vi.fn(),
+      })),
+    }))
+
+    const { listBlobs } = await import('../lib/blob')
+    const result = await listBlobs({ prefix: 'sessions/' })
+
+    expect(listSpy).toHaveBeenCalledWith({ prefix: 'sessions/', directories: false })
+    expect(getMetadataSpy).toHaveBeenCalledTimes(2)
+    expect(result.blobs).toHaveLength(2)
+
+    expect(result.blobs[0]).toMatchObject({
+      pathname: 'sessions/a.json',
+      size: 1234,
+    })
+    expect(result.blobs[0].uploadedAt?.toISOString()).toBe('2024-05-01T12:34:56.000Z')
+
+    expect(result.blobs[1].pathname).toBe('sessions/b.json')
+    expect(result.blobs[1].size).toBeUndefined()
+    expect(result.blobs[1].uploadedAt).toBeUndefined()
+  })
+
+  it('still returns entries when Netlify metadata lookups fail', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = 'site-id'
+    process.env.NETLIFY_BLOBS_TOKEN = 'token'
+
+    const listSpy = vi.fn(async () => ({
+      blobs: [{ key: 'sessions/a.json' }, { key: 'sessions/b.json' }],
+    }))
+    const getMetadataSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({ metadata: {} })
+
+    vi.doMock('@netlify/blobs', () => ({
+      getStore: vi.fn(() => ({
+        list: listSpy,
+        getMetadata: getMetadataSpy,
+        set: vi.fn(),
+        delete: vi.fn(),
+        getWithMetadata: vi.fn(),
+      })),
+    }))
+
+    const { listBlobs } = await import('../lib/blob')
+    const result = await listBlobs({ prefix: 'sessions/' })
+
+    expect(getMetadataSpy).toHaveBeenCalledTimes(2)
+    expect(result.blobs.map((b) => b.pathname)).toEqual([
+      'sessions/a.json',
+      'sessions/b.json',
+    ])
+    expect(result.blobs[0].uploadedAt).toBeUndefined()
+    expect(result.blobs[0].size).toBeUndefined()
+  })
 })
