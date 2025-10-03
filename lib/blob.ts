@@ -423,10 +423,13 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
         const metadataResult = await store.getMetadata(key)
         const metadata = metadataResult?.metadata || {}
         const uploadedRaw = (metadata as any).uploadedAt
-        const uploadedAt =
-          typeof uploadedRaw === 'string' && uploadedRaw.length
-            ? new Date(uploadedRaw)
-            : undefined
+        let uploadedAt: Date | undefined
+        if (typeof uploadedRaw === 'string' && uploadedRaw.length) {
+          const parsed = new Date(uploadedRaw)
+          if (!Number.isNaN(parsed.getTime())) {
+            uploadedAt = parsed
+          }
+        }
         const size = Number((metadata as any).size)
         const proxyUrl = buildProxyUrl(key)
         blobs.push({
