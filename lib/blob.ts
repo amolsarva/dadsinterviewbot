@@ -349,14 +349,25 @@ export async function putBlobFromBuffer(
   }
 
   const uploadedAt = new Date().toISOString()
+  const metadataEntries: Array<[string, string]> = [
+    ['contentType', contentType],
+    ['uploadedAt', uploadedAt],
+    ['size', String(buf.byteLength)],
+  ]
+
+  if (typeof cacheControl === 'string' && cacheControl.length) {
+    metadataEntries.push(['cacheControl', cacheControl])
+  }
+
+  if (typeof options.cacheControlMaxAge === 'number' && Number.isFinite(options.cacheControlMaxAge)) {
+    const normalizedMaxAge = Math.max(0, Math.trunc(options.cacheControlMaxAge))
+    metadataEntries.push(['cacheControlMaxAge', String(normalizedMaxAge)])
+  }
+
+  const metadata: Record<string, string> = Object.fromEntries(metadataEntries)
+
   await store.set(targetPath, buf, {
-    metadata: {
-      contentType,
-      uploadedAt,
-      size: buf.byteLength,
-      cacheControl,
-      cacheControlMaxAge: options.cacheControlMaxAge,
-    },
+    metadata,
   })
 
   const proxyUrl = buildProxyUrl(targetPath)
