@@ -32,6 +32,8 @@ type NetlifyConfig = {
   edgeUrl?: string
   uncachedEdgeUrl?: string
   consistency?: 'strong' | 'eventual'
+  siteSlug?: string
+  siteName?: string
 }
 
 type CandidateSource = 'env' | 'context' | 'default'
@@ -78,6 +80,8 @@ type BlobErrorDetails = {
   target?: string
   store?: string
   siteId?: string
+  siteSlug?: string
+  siteName?: string
   tokenSource?: string
   tokenLength?: number
   usingContext?: boolean
@@ -121,6 +125,8 @@ type ReadBlobResult = {
 
 const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
 const BLOB_PROXY_PREFIX = '/api/blob/'
+const NETLIFY_API_BASE_URL = 'https://api.netlify.com'
+const CANONICAL_SITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const globalAny = globalThis as any
 if (!globalAny[GLOBAL_STORE_KEY]) {
@@ -133,6 +139,15 @@ let netlifyConfig: NetlifyConfig | null | undefined
 let netlifyStore: Store | null | undefined
 let netlifyWarningIssued = false
 let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
+let netlifySiteResolution: Promise<SiteResolution | null> | null = null
+let netlifySiteResolutionSlug: string | null = null
+let netlifySiteResolutionNotified = false
+
+type SiteResolution = {
+  slug: string
+  siteId: string
+  siteName?: string
+}
 
 function defaultDiagnostics(): BlobEnvDiagnostics {
   return {
@@ -176,6 +191,143 @@ function truncateForDiagnostics(value: string, limit = 240) {
   if (!cleaned.length) return ''
   if (cleaned.length <= limit) return cleaned
   return `${cleaned.slice(0, limit - 1)}…`
+}
+
+function looksLikeSiteId(value: string): boolean {
+  return CANONICAL_SITE_ID.test(value.trim())
+}
+
+async function resolveSiteId(config: NetlifyConfig): Promise<SiteResolution | null> {
+  const slug = config.siteId.trim()
+  if (!slug.length) return null
+  const token = config.token.trim()
+  if (!token.length) return null
+  const base = (config.apiUrl || '').trim() || NETLIFY_API_BASE_URL
+  const url = new URL(`/api/v1/sites/${encodeURIComponent(slug)}`, base)
+
+  if (typeof fetch !== 'function') {
+    throw new Error('Global fetch implementation is required to resolve Netlify site slugs.')
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'user-agent': 'dads-interview-bot/slug-resolver',
+    },
+  })
+
+  if (response.status === 404) {
+    return null
+  }
+
+  if (!response.ok) {
+    let snippet: string | undefined
+    try {
+      const text = await response.text()
+      if (text && text.trim().length) {
+        snippet = truncateForDiagnostics(text, 160)
+      }
+    } catch {}
+    const summary = snippet ? `: ${snippet}` : ''
+    throw new Error(`Failed to resolve Netlify site slug "${slug}" (status ${response.status})${summary}`)
+  }
+
+  let payload: any
+  try {
+    payload = await response.json()
+  } catch (error) {
+    throw new Error(`Resolved Netlify site slug "${slug}" but failed to parse response JSON: ${(error as Error).message}`)
+  }
+
+  const rawId = typeof payload?.id === 'string' ? payload.id.trim() : ''
+  if (!looksLikeSiteId(rawId)) {
+    throw new Error(
+      `Netlify site lookup for slug "${slug}" returned an unexpected site identifier. Expected a UUID but received "${rawId}".`,
+    )
+  }
+
+  const siteName =
+    typeof payload?.name === 'string' && payload.name.trim().length
+      ? payload.name.trim()
+      : typeof payload?.site_name === 'string' && payload.site_name.trim().length
+      ? payload.site_name.trim()
+      : undefined
+
+  return { slug, siteId: rawId, siteName }
+}
+
+async function ensureCanonicalSiteId(config: NetlifyConfig): Promise<NetlifyConfig> {
+  if (looksLikeSiteId(config.siteId)) {
+    if (!config.siteSlug) {
+      return config
+    }
+    return { ...config }
+  }
+
+  if (!netlifySiteResolution || netlifySiteResolutionSlug !== config.siteId) {
+    netlifySiteResolutionSlug = config.siteId
+    netlifySiteResolution = resolveSiteId(config).catch((error) => {
+      netlifySiteResolution = null
+      throw error
+    })
+  }
+
+  const resolution = await netlifySiteResolution
+  if (!resolution) {
+    throw new Error(
+      `NETLIFY_BLOBS_SITE_ID is set to "${config.siteId}", which looks like a site slug. Provide the Site ID (UUID) from Netlify or ensure the slug is accessible to this token.`,
+    )
+  }
+
+  const updated: NetlifyConfig = {
+    ...config,
+    siteId: resolution.siteId,
+    siteSlug: resolution.slug,
+    siteName: resolution.siteName,
+  }
+
+  netlifyConfig = updated
+  updateDiagnosticsForResolution(resolution)
+  notifySiteResolution(resolution)
+
+  return updated
+}
+
+function updateDiagnosticsForResolution(resolution: SiteResolution) {
+  if (!netlifyDiagnostics) return
+  const noteParts = [`resolved slug "${resolution.slug}" to site ID ${maskValue(resolution.siteId)}`]
+  if (resolution.siteName && resolution.siteName !== resolution.slug) {
+    noteParts.push(`(${resolution.siteName})`)
+  }
+  const note = noteParts.join(' ')
+  if (netlifyDiagnostics.siteId.selected) {
+    netlifyDiagnostics.siteId.selected = {
+      ...netlifyDiagnostics.siteId.selected,
+      valuePreview: maskValue(resolution.siteId),
+      note: netlifyDiagnostics.siteId.selected.note
+        ? `${netlifyDiagnostics.siteId.selected.note}; ${note}`
+        : note,
+    }
+  }
+  netlifyDiagnostics.siteId.present = true
+  netlifyDiagnostics.missing = netlifyDiagnostics.missing.filter((entry) => entry !== 'siteId')
+}
+
+function notifySiteResolution(resolution: SiteResolution) {
+  if (netlifySiteResolutionNotified) return
+  netlifySiteResolutionNotified = true
+  flagFox({
+    id: 'netlify-site-slug-resolved',
+    theory: 2,
+    level: 'info',
+    message: `Resolved Netlify site slug "${resolution.slug}" to site ID ${maskValue(resolution.siteId)} for blob storage.`,
+    details: {
+      siteSlug: resolution.slug,
+      siteId: maskValue(resolution.siteId),
+      siteName: resolution.siteName,
+    },
+  })
 }
 
 function extractStatusCode(error: any): number | undefined {
@@ -300,6 +452,8 @@ async function buildBlobError(
     target: context.target,
     store: config?.storeName,
     siteId: config?.siteId,
+    siteSlug: config?.siteSlug,
+    siteName: config?.siteName,
     tokenSource: diagnostics.token.selected?.key,
     tokenLength: diagnostics.token.length,
     usingContext: diagnostics.usingContext,
@@ -596,9 +750,11 @@ function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
   return netlifyDiagnostics ?? defaultDiagnostics()
 }
 
-function getNetlifyStore(): Store | null {
-  const config = getNetlifyConfig()
-  if (!config) return null
+async function getNetlifyStore(): Promise<Store | null> {
+  const baseConfig = getNetlifyConfig()
+  if (!baseConfig) return null
+
+  const config = await ensureCanonicalSiteId(baseConfig)
 
   if (!netlifyStore) {
     netlifyStore = getStore({
@@ -714,7 +870,7 @@ export async function putBlobFromBuffer(
   contentType: string,
   options: PutBlobOptions = {},
 ) {
-  const store = getNetlifyStore()
+  const store = await getNetlifyStore()
   let targetPath = normalizePath(path)
   if (options.addRandomSuffix) {
     targetPath = applyRandomSuffix(targetPath)
@@ -789,7 +945,7 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
   const limit = typeof options?.limit === 'number' ? Math.max(1, options.limit) : 100
   const offset = options?.cursor ? Number.parseInt(options.cursor, 10) || 0 : 0
 
-  const store = getNetlifyStore()
+  const store = await getNetlifyStore()
   if (!store) {
     const fallback = await listFallbackBlobs({ prefix })
     const sliced = fallback.slice(offset, offset + limit)
@@ -861,7 +1017,7 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
 }
 
 export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
-  const store = getNetlifyStore()
+  const store = await getNetlifyStore()
   const sanitizedPrefix = normalizePath(prefix)
 
   if (!store) {
@@ -904,7 +1060,7 @@ export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
 export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
   if (!pathOrUrl) return false
 
-  const store = getNetlifyStore()
+  const store = await getNetlifyStore()
 
   if (!store) {
     if (memoryStore.delete(pathOrUrl) || memoryStore.delete(normalizePath(pathOrUrl))) {
@@ -954,7 +1110,7 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
     return null
   }
 
-  const store = getNetlifyStore()
+  const store = await getNetlifyStore()
   if (!store) {
     const record = memoryStore.get(pathOrUrl) || memoryStore.get(normalizePath(pathOrUrl))
     if (!record) return null
@@ -1017,7 +1173,7 @@ export async function blobHealth() {
   }
 
   try {
-    const store = getNetlifyStore()
+    const store = await getNetlifyStore()
     if (!store) {
       return { ok: false, mode: 'netlify', reason: 'failed to initialize store' }
     }
@@ -1048,6 +1204,8 @@ export function getBlobEnvironment() {
     configured: true as const,
     store: config.storeName,
     siteId: config.siteId,
+    siteSlug: config.siteSlug,
+    siteName: config.siteName,
     diagnostics,
   }
 }

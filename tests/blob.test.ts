@@ -7,11 +7,12 @@ afterEach(() => {
   delete process.env.NETLIFY_BLOBS_CONTEXT
   vi.resetModules()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('putBlobFromBuffer', () => {
   it('uploads via Netlify when credentials are provided', async () => {
-    process.env.NETLIFY_BLOBS_SITE_ID = 'site-id'
+    process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
     process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
 
@@ -32,7 +33,7 @@ describe('putBlobFromBuffer', () => {
 
     expect(getStoreSpy).toHaveBeenCalledWith({
       name: 'store-name',
-      siteID: 'site-id',
+      siteID: '12345678-1234-1234-1234-1234567890ab',
       token: 'api-token',
       apiURL: undefined,
       edgeURL: undefined,
@@ -52,6 +53,42 @@ describe('putBlobFromBuffer', () => {
     expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
     expect(result.downloadUrl).toBe(result.url)
   })
+})
+
+it('resolves a site slug to the canonical Netlify site ID', async () => {
+  process.env.NETLIFY_BLOBS_SITE_ID = 'dadsbot'
+  process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
+
+  const setSpy = vi.fn(async () => ({}))
+  const storeMock = {
+    set: setSpy,
+    list: vi.fn(async () => ({ blobs: [] })),
+    getMetadata: vi.fn(async () => null),
+    delete: vi.fn(async () => {}),
+    getWithMetadata: vi.fn(async () => null),
+  }
+
+  const getStoreSpy = vi.fn(() => storeMock)
+  const fetchSpy = vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ id: '98765432-4321-4321-4321-ba0987654321', name: 'dadsbot-site' }),
+  }))
+  vi.stubGlobal('fetch', fetchSpy)
+
+  vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
+  const { putBlobFromBuffer } = await import('../lib/blob')
+  await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
+
+  expect(fetchSpy).toHaveBeenCalledWith(
+    expect.stringContaining('/api/v1/sites/dadsbot'),
+    expect.objectContaining({ method: 'GET' }),
+  )
+
+  expect(getStoreSpy).toHaveBeenCalledWith(
+    expect.objectContaining({ siteID: '98765432-4321-4321-4321-ba0987654321' }),
+  )
 })
 
 describe('listBlobs', () => {
