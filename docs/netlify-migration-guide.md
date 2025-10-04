@@ -29,6 +29,8 @@ Add these values under **Site settings → Environment variables**:
 - `NETLIFY_BLOBS_STORE` (optional override; omit to use the default)
 - Optional overrides if you host the store elsewhere: `NETLIFY_BLOBS_API_URL`, `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_PUBLIC_BASE_URL`.
 
+> Tip: If you accidentally paste the site slug (for example `dadsbot`) instead of the UUID Site ID, the runtime now resolves it automatically before connecting to Netlify Blobs. You’ll still save a network round-trip by storing the actual Site ID.
+
 > Without the token or site ID the runtime falls back to the in-memory store. Diagnostics will warn with `mode: "memory"` until you add the secrets and redeploy.
 
 ## 4. Wire the AI + email providers
