@@ -66,6 +66,49 @@ function initialResults(): Record<TestKey, TestResult> {
   }
 }
 
+function describeBlobDetails(raw: any): string[] {
+  if (!raw || typeof raw !== 'object') return []
+  const details = raw as Record<string, any>
+  const parts: string[] = []
+
+  if (typeof details.action === 'string' && details.action.length) {
+    parts.push(`action ${details.action}`)
+  }
+  if (typeof details.target === 'string' && details.target.length) {
+    parts.push(`target ${details.target}`)
+  }
+  if (typeof details.store === 'string' && details.store.length) {
+    parts.push(`store ${details.store}`)
+  }
+  if (typeof details.siteSlug === 'string' && details.siteSlug.length) {
+    parts.push(`site ${details.siteSlug}`)
+  } else if (typeof details.siteName === 'string' && details.siteName.length) {
+    parts.push(`site ${details.siteName}`)
+  } else if (typeof details.siteId === 'string' && details.siteId.length) {
+    parts.push(`site ${details.siteId}`)
+  }
+  if (Array.isArray(details.missing) && details.missing.length) {
+    parts.push(`missing ${details.missing.join(', ')}`)
+  }
+  if (typeof details.status === 'number' && Number.isFinite(details.status)) {
+    parts.push(`status ${details.status}`)
+  }
+  if (typeof details.code === 'string' && details.code.length) {
+    parts.push(`code ${details.code}`)
+  }
+  if (typeof details.requestId === 'string' && details.requestId.length) {
+    parts.push(`request ${details.requestId}`)
+  }
+  if (typeof details.responseBodySnippet === 'string' && details.responseBodySnippet.length) {
+    parts.push(`body: ${details.responseBodySnippet}`)
+  }
+  if (typeof details.originalMessage === 'string' && details.originalMessage.length) {
+    parts.push(`origin: ${details.originalMessage}`)
+  }
+
+  return parts
+}
+
 function formatSummary(key: TestKey, data: any): string {
   if (!data || typeof data !== 'object') return ''
 
@@ -133,17 +176,9 @@ function formatSummary(key: TestKey, data: any): string {
     }
     const healthDetails = data?.health?.details
     if (healthDetails) {
-      if (typeof healthDetails.status === 'number') {
-        detailParts.push(`health status ${healthDetails.status}`)
-      }
-      if (healthDetails.code) {
-        detailParts.push(`health code ${healthDetails.code}`)
-      }
-      if (healthDetails.requestId) {
-        detailParts.push(`health request ${healthDetails.requestId}`)
-      }
-      if (healthDetails.responseBodySnippet) {
-        detailParts.push(`health body: ${healthDetails.responseBodySnippet}`)
+      const detailSnippets = describeBlobDetails(healthDetails)
+      if (detailSnippets.length) {
+        detailParts.push(...detailSnippets.map(snippet => `health ${snippet}`))
       }
     }
     if (typeof data?.message === 'string') {
@@ -200,11 +235,7 @@ function formatSummary(key: TestKey, data: any): string {
     if (data.cause) detailParts.push(`cause: ${data.cause}`)
     const blobDetails = data.details || data.blobDetails
     if (blobDetails) {
-      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
-      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
-      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
-      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
-      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+      detailParts.push(...describeBlobDetails(blobDetails))
     }
     return detailParts.length
       ? `${data.error || 'Smoke test failed'} · ${detailParts.join(' · ')}`
@@ -217,11 +248,7 @@ function formatSummary(key: TestKey, data: any): string {
     if (data.cause) detailParts.push(`cause: ${data.cause}`)
     const blobDetails = data.details || data.blobDetails
     if (blobDetails) {
-      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
-      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
-      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
-      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
-      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+      detailParts.push(...describeBlobDetails(blobDetails))
     }
     return detailParts.length
       ? `${data.error || 'E2E test failed'} · ${detailParts.join(' · ')}`
