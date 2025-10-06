@@ -66,6 +66,136 @@ function initialResults(): Record<TestKey, TestResult> {
   }
 }
 
+function describeBlobDetails(raw: any): string[] {
+  if (!raw || typeof raw !== 'object') return []
+  const details = raw as Record<string, any>
+  const parts: string[] = []
+
+  if (typeof details.action === 'string' && details.action.length) {
+    parts.push(`action ${details.action}`)
+  }
+  if (typeof details.target === 'string' && details.target.length) {
+    parts.push(`target ${details.target}`)
+  }
+  if (typeof details.store === 'string' && details.store.length) {
+    parts.push(`store ${details.store}`)
+  }
+  if (typeof details.siteSlug === 'string' && details.siteSlug.length) {
+    parts.push(`site ${details.siteSlug}`)
+  } else if (typeof details.siteName === 'string' && details.siteName.length) {
+    parts.push(`site ${details.siteName}`)
+  } else if (typeof details.siteId === 'string' && details.siteId.length) {
+    parts.push(`site ${details.siteId}`)
+  }
+  if (typeof details.tokenSource === 'string' && details.tokenSource.length) {
+    parts.push(`token from ${details.tokenSource}`)
+  }
+  if (typeof details.tokenLength === 'number' && Number.isFinite(details.tokenLength)) {
+    parts.push(`token length ${details.tokenLength}`)
+  }
+  if (Array.isArray(details.missing) && details.missing.length) {
+    const missingLabels = details.missing
+      .filter(
+        (item: unknown): item is string => typeof item === 'string' && item.length > 0,
+      )
+      .join(', ')
+    if (missingLabels.length) {
+      parts.push(`missing ${missingLabels}`)
+    }
+  }
+  if (typeof details.usingContext === 'boolean') {
+    parts.push(details.usingContext ? 'context payload detected' : 'context payload missing')
+  }
+  if (Array.isArray(details.contextKeys) && details.contextKeys.length) {
+    const contextKeys = details.contextKeys
+      .filter(
+        (item: unknown): item is string => typeof item === 'string' && item.length > 0,
+      )
+      .slice(0, 4)
+    if (contextKeys.length) {
+      parts.push(`context keys ${contextKeys.join(', ')}`)
+    }
+  }
+  if (typeof details.status === 'number' && Number.isFinite(details.status)) {
+    parts.push(`status ${details.status}`)
+  }
+  if (typeof details.code === 'string' && details.code.length) {
+    parts.push(`code ${details.code}`)
+  }
+  if (typeof details.requestId === 'string' && details.requestId.length) {
+    parts.push(`request ${details.requestId}`)
+  }
+  if (typeof details.responseBodySnippet === 'string' && details.responseBodySnippet.length) {
+    parts.push(`body: ${details.responseBodySnippet}`)
+  }
+  if (typeof details.originalMessage === 'string' && details.originalMessage.length) {
+    parts.push(`origin: ${details.originalMessage}`)
+  }
+
+  return parts
+}
+
+function summarizeNetlifyDiagnostics(raw: any): string[] {
+  if (!raw || typeof raw !== 'object') return []
+  const summary: string[] = []
+
+  const tokenPresent = raw?.token?.present === true
+  const tokenKeyCandidate = raw?.token?.selected?.key
+  const tokenSource =
+    typeof tokenKeyCandidate === 'string' && tokenKeyCandidate.length ? tokenKeyCandidate : undefined
+  const tokenLabel = tokenPresent
+    ? `present${tokenSource ? ` from ${tokenSource}` : ''}`
+    : raw?.token?.present === false
+    ? 'missing'
+    : 'unknown'
+
+  const storePreviewCandidate = raw?.store?.selected?.valuePreview ?? raw?.store?.selected?.value
+  const storePreview =
+    typeof storePreviewCandidate === 'string' && storePreviewCandidate.length
+      ? storePreviewCandidate
+      : undefined
+  const storeDefaulted = raw?.store?.defaulted === true
+  const storeLabel = storePreview
+    ? `${storePreview}${storeDefaulted ? ' (defaulted)' : ''}`
+    : storeDefaulted
+    ? 'defaulted (value unknown)'
+    : 'unresolved'
+
+  const sitePreviewCandidate = raw?.siteId?.selected?.valuePreview ?? raw?.siteId?.selected?.value
+  const sitePreview =
+    typeof sitePreviewCandidate === 'string' && sitePreviewCandidate.length
+      ? sitePreviewCandidate
+      : undefined
+  const sitePresent = raw?.siteId?.present === true
+  const siteLabel = sitePresent
+    ? `${sitePreview || 'value provided'}${raw?.siteId?.defaulted ? ' (defaulted)' : ''}`
+    : raw?.siteId?.present === false
+    ? 'missing'
+    : 'unknown'
+
+  const overrides: string[] = []
+  const edgeUrlCandidate = raw?.optional?.edgeUrl?.selected?.valuePreview
+  const apiUrlCandidate = raw?.optional?.apiUrl?.selected?.valuePreview
+  const uncachedEdgeUrlCandidate = raw?.optional?.uncachedEdgeUrl?.selected?.valuePreview
+  const edgeUrl = typeof edgeUrlCandidate === 'string' && edgeUrlCandidate.length ? edgeUrlCandidate : undefined
+  const apiUrl = typeof apiUrlCandidate === 'string' && apiUrlCandidate.length ? apiUrlCandidate : undefined
+  const uncachedEdgeUrl =
+    typeof uncachedEdgeUrlCandidate === 'string' && uncachedEdgeUrlCandidate.length
+      ? uncachedEdgeUrlCandidate
+      : undefined
+
+  if (edgeUrl) overrides.push(`edge=${edgeUrl}`)
+  if (uncachedEdgeUrl) overrides.push(`uncached_edge=${uncachedEdgeUrl}`)
+  if (apiUrl) overrides.push(`api=${apiUrl}`)
+
+  summary.push(`Store: ${storeLabel}`)
+  summary.push(`Token: ${tokenLabel}`)
+  summary.push(`Site ID: ${siteLabel}`)
+  summary.push(`Overrides: ${overrides.length ? overrides.join(' · ') : 'none set'}`)
+
+  return summary
+}
+
 function formatSummary(key: TestKey, data: any): string {
   if (!data || typeof data !== 'object') return ''
 
@@ -133,17 +263,9 @@ function formatSummary(key: TestKey, data: any): string {
     }
     const healthDetails = data?.health?.details
     if (healthDetails) {
-      if (typeof healthDetails.status === 'number') {
-        detailParts.push(`health status ${healthDetails.status}`)
-      }
-      if (healthDetails.code) {
-        detailParts.push(`health code ${healthDetails.code}`)
-      }
-      if (healthDetails.requestId) {
-        detailParts.push(`health request ${healthDetails.requestId}`)
-      }
-      if (healthDetails.responseBodySnippet) {
-        detailParts.push(`health body: ${healthDetails.responseBodySnippet}`)
+      const detailSnippets = describeBlobDetails(healthDetails)
+      if (detailSnippets.length) {
+        detailParts.push(...detailSnippets.map(snippet => `health ${snippet}`))
       }
     }
     if (typeof data?.message === 'string') {
@@ -200,11 +322,7 @@ function formatSummary(key: TestKey, data: any): string {
     if (data.cause) detailParts.push(`cause: ${data.cause}`)
     const blobDetails = data.details || data.blobDetails
     if (blobDetails) {
-      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
-      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
-      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
-      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
-      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+      detailParts.push(...describeBlobDetails(blobDetails))
     }
     return detailParts.length
       ? `${data.error || 'Smoke test failed'} · ${detailParts.join(' · ')}`
@@ -217,11 +335,7 @@ function formatSummary(key: TestKey, data: any): string {
     if (data.cause) detailParts.push(`cause: ${data.cause}`)
     const blobDetails = data.details || data.blobDetails
     if (blobDetails) {
-      if (typeof blobDetails.status === 'number') detailParts.push(`status ${blobDetails.status}`)
-      if (blobDetails.code) detailParts.push(`code ${blobDetails.code}`)
-      if (blobDetails.requestId) detailParts.push(`request ${blobDetails.requestId}`)
-      if (blobDetails.store) detailParts.push(`store ${blobDetails.store}`)
-      if (blobDetails.target) detailParts.push(`target ${blobDetails.target}`)
+      detailParts.push(...describeBlobDetails(blobDetails))
     }
     return detailParts.length
       ? `${data.error || 'E2E test failed'} · ${detailParts.join(' · ')}`
@@ -521,6 +635,14 @@ export default function DiagnosticsPage() {
           const ok = typeof parsed.ok === 'boolean' ? parsed.ok : res.ok
           const message = formatSummary(key, parsed)
           updateResult(key, { status: ok ? 'ok' : 'error', message })
+          if (key === 'storage') {
+            const diagnosticsSummary = summarizeNetlifyDiagnostics(parsed?.env?.diagnostics)
+            if (diagnosticsSummary.length) {
+              append('***KEY NETFLIFY ITEMS***')
+              diagnosticsSummary.forEach(line => append(line))
+              append('***KEY NETFLIFY ITEMS***')
+            }
+          }
         } else {
           append(rawText || '(no response body)')
           updateResult(key, {
