@@ -1,0 +1,91 @@
+import { NextResponse } from 'next/server'
+
+type EndpointSummary = {
+  key: string
+  method: 'GET' | 'POST'
+  path: string
+  description: string
+}
+
+const ENDPOINTS: EndpointSummary[] = [
+  {
+    key: 'health',
+    method: 'GET',
+    path: '/api/health',
+    description: 'Overall service health, storage configuration, and email defaults.',
+  },
+  {
+    key: 'storage',
+    method: 'GET',
+    path: '/api/diagnostics/storage',
+    description: 'Blob store readiness check and environment diagnostics.',
+  },
+  {
+    key: 'google',
+    method: 'GET',
+    path: '/api/diagnostics/google',
+    description: 'Connectivity test against the configured Google AI model.',
+  },
+  {
+    key: 'openai',
+    method: 'GET',
+    path: '/api/diagnostics/openai',
+    description: 'Connectivity test against the configured OpenAI model.',
+  },
+  {
+    key: 'smoke',
+    method: 'POST',
+    path: '/api/diagnostics/smoke',
+    description: 'End-to-end session smoke test that writes to the configured blob store.',
+  },
+  {
+    key: 'e2e',
+    method: 'POST',
+    path: '/api/diagnostics/e2e',
+    description: 'Full workflow exercise that mirrors production transcript storage.',
+  },
+  {
+    key: 'email',
+    method: 'POST',
+    path: '/api/diagnostics/email',
+    description: 'Dispatches a summary email via the configured provider.',
+  },
+]
+
+function detectDeployment() {
+  const platform = process.env.NETLIFY === 'true' ? 'netlify' : process.env.VERCEL ? 'vercel' : 'custom'
+  const functionBase = platform === 'netlify' ? '/.netlify/functions' : null
+
+  return {
+    platform,
+    functionBase,
+    nodeEnv: process.env.NODE_ENV,
+    edgeMiddleware: Boolean(process.env.NEXT_RUNTIME && process.env.NEXT_RUNTIME !== 'nodejs'),
+    netlifySiteId: process.env.NETLIFY_SITE_ID ?? null,
+    vercelEnv: process.env.VERCEL_ENV ?? null,
+    vercelUrl: process.env.VERCEL_URL ?? null,
+  }
+}
+
+const TROUBLESHOOTING = [
+  'If this endpoint returns 404 in production, the diagnostics routes were not bundled as server functions.',
+  'Confirm your build preserves the Next.js app directory and that Netlify is using the Next.js runtime.',
+  'When deploying to Netlify without the Next adapter, place functions under netlify/functions or configure `netlify.toml`.',
+  'Use `netlify functions:list` or `netlify dev` locally to confirm the diagnostics handlers are registered.',
+]
+
+export async function GET() {
+  const deployment = detectDeployment()
+
+  const preferredBase = deployment.functionBase ? `${deployment.functionBase}/diagnostics` : '/api/diagnostics'
+
+  return NextResponse.json({
+    ok: true,
+    message:
+      'Diagnostics base route is available. Invoke the specific endpoints below to run targeted checks.',
+    preferredBase,
+    deployment,
+    endpoints: ENDPOINTS,
+    troubleshooting: TROUBLESHOOTING,
+  })
+}
