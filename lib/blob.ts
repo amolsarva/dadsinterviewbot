@@ -145,6 +145,7 @@ let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyEdgeOverrideSuppressed = false
 let netlifyContextKey: string | null = null
+let netlifyEnvSanitizedKey: string | null = null
 
 type SiteResolution = {
   slug: string
@@ -773,11 +774,16 @@ function shouldSuppressEdgeOverride(edgeUrl: string): boolean {
   return false
 }
 
-function noteEdgeOverrideSuppressed(edgeUrl: string, field: 'edgeUrl' | 'uncachedEdgeUrl') {
+function noteEdgeOverrideSuppressed(
+  edgeUrl: string,
+  field: 'edgeUrl' | 'uncachedEdgeUrl' | 'apiUrl'
+) {
   const fieldDiagnostics =
     field === 'edgeUrl'
       ? netlifyDiagnostics?.optional?.edgeUrl
-      : netlifyDiagnostics?.optional?.uncachedEdgeUrl
+      : field === 'uncachedEdgeUrl'
+      ? netlifyDiagnostics?.optional?.uncachedEdgeUrl
+      : netlifyDiagnostics?.optional?.apiUrl
 
   const selected = fieldDiagnostics?.selected
   if (selected && fieldDiagnostics) {
@@ -795,7 +801,7 @@ function noteEdgeOverrideSuppressed(edgeUrl: string, field: 'edgeUrl' | 'uncache
       theory: 2,
       level: 'warn',
       message:
-        'NETLIFY_BLOBS_EDGE_URL points at a read-only edge host; using API host for uploads instead.',
+        'Netlify blob configuration provided a read-only host override; using the API host for uploads instead.',
       details: { edgeUrl, field },
     })
   }
@@ -817,12 +823,67 @@ function sanitizeConfigForStore(config: NetlifyConfig): NetlifyConfig {
     mutated = true
   }
 
-  if (!sanitized.apiUrl) {
-    sanitized.apiUrl = `${NETLIFY_API_BASE_URL}/api/v1/blobs`
+  const defaultApi = `${NETLIFY_API_BASE_URL}/api/v1/blobs`
+
+  if (sanitized.apiUrl) {
+    if (shouldSuppressEdgeOverride(sanitized.apiUrl)) {
+      noteEdgeOverrideSuppressed(sanitized.apiUrl, 'apiUrl')
+      sanitized.apiUrl = defaultApi
+      mutated = true
+    }
+  } else {
+    sanitized.apiUrl = defaultApi
     mutated = true
   }
 
   return mutated ? sanitized : config
+}
+
+function applySanitizedEnvironmentOverrides(config: NetlifyConfig) {
+  const beforeSnapshot = JSON.stringify({
+    api: config.apiUrl ?? null,
+    edge: config.edgeUrl ?? null,
+    uncached: config.uncachedEdgeUrl ?? null,
+    envEdge: process.env.NETLIFY_BLOBS_EDGE_URL ?? null,
+    envUncached: process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL ?? null,
+    envApi: process.env.NETLIFY_BLOBS_API_URL ?? null,
+  })
+
+  if (beforeSnapshot === netlifyEnvSanitizedKey) {
+    return
+  }
+
+  const edgeEnv = process.env.NETLIFY_BLOBS_EDGE_URL
+  if (edgeEnv && shouldSuppressEdgeOverride(edgeEnv)) {
+    delete process.env.NETLIFY_BLOBS_EDGE_URL
+  }
+
+  const uncachedEnv = process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL
+  if (uncachedEnv && shouldSuppressEdgeOverride(uncachedEnv)) {
+    delete process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL
+  }
+
+  const apiEnv = process.env.NETLIFY_BLOBS_API_URL
+  const desiredApi = config.apiUrl
+
+  if (desiredApi) {
+    if (apiEnv !== desiredApi) {
+      process.env.NETLIFY_BLOBS_API_URL = desiredApi
+    }
+  } else if (apiEnv && shouldSuppressEdgeOverride(apiEnv)) {
+    process.env.NETLIFY_BLOBS_API_URL = `${NETLIFY_API_BASE_URL}/api/v1/blobs`
+  }
+
+  const afterSnapshot = JSON.stringify({
+    api: config.apiUrl ?? null,
+    edge: config.edgeUrl ?? null,
+    uncached: config.uncachedEdgeUrl ?? null,
+    envEdge: process.env.NETLIFY_BLOBS_EDGE_URL ?? null,
+    envUncached: process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL ?? null,
+    envApi: process.env.NETLIFY_BLOBS_API_URL ?? null,
+  })
+
+  netlifyEnvSanitizedKey = afterSnapshot
 }
 
 function applySanitizedEnvironmentContext(config: NetlifyConfig) {
@@ -870,6 +931,7 @@ async function getNetlifyStore(): Promise<Store | null> {
   const configKey = buildStoreConfigKey(config)
 
   if (!netlifyStore || netlifyStoreConfigKey !== configKey) {
+    applySanitizedEnvironmentOverrides(config)
     applySanitizedEnvironmentContext(config)
     netlifyStore = getStore({
       name: config.storeName,
