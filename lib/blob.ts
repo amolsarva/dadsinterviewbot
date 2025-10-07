@@ -1,4 +1,4 @@
-import { getStore, type Store } from '@netlify/blobs'
+import { getStore, setEnvironmentContext, type Store } from '@netlify/blobs'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -144,6 +144,7 @@ let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyEdgeOverrideSuppressed = false
+let netlifyContextKey: string | null = null
 
 type SiteResolution = {
   slug: string
@@ -824,6 +825,30 @@ function sanitizeConfigForStore(config: NetlifyConfig): NetlifyConfig {
   return mutated ? sanitized : config
 }
 
+function applySanitizedEnvironmentContext(config: NetlifyConfig) {
+  const context = parseNetlifyContext() ?? {}
+  const sanitizedContext: NetlifyContext = {
+    ...context,
+    siteID: config.siteId,
+    token: config.token,
+    apiURL: config.apiUrl,
+    edgeURL: config.edgeUrl,
+    uncachedEdgeURL: config.uncachedEdgeUrl,
+  }
+
+  const serialized = JSON.stringify(sanitizedContext)
+  if (serialized === netlifyContextKey) {
+    return
+  }
+
+  try {
+    setEnvironmentContext(sanitizedContext)
+    netlifyContextKey = serialized
+  } catch (error) {
+    console.warn('Failed to apply sanitized Netlify blobs context', error)
+  }
+}
+
 function buildStoreConfigKey(config: NetlifyConfig): string {
   return JSON.stringify({
     name: config.storeName,
@@ -845,6 +870,7 @@ async function getNetlifyStore(): Promise<Store | null> {
   const configKey = buildStoreConfigKey(config)
 
   if (!netlifyStore || netlifyStoreConfigKey !== configKey) {
+    applySanitizedEnvironmentContext(config)
     netlifyStore = getStore({
       name: config.storeName,
       siteID: config.siteId,
