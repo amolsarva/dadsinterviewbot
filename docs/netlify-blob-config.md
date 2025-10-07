@@ -24,7 +24,7 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 ## 4. Validate optional URL overrides (if any)
 1. Only follow this step if you have provided `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_API_URL`, or similar overrides.
 2. In the blob store view from step 1, check the **Region** value. Netlify uses different base URLs per region.
-3. Compare the region to the override values you have set. Confirm the hostnames point to the same region as your store. If unsure, remove the overrides so the SDK falls back to Netlify’s default URLs.
+3. Compare the region to the override values you have set. Confirm the hostnames point to the same region as your store. In particular, do **not** send writes to `https://netlify-blobs.netlify.app`; that domain serves cached reads only. For upload operations, rely on `NETLIFY_BLOBS_API_URL=https://api.netlify.com/api/v1/blobs` (the default) and remove the edge override unless Netlify support instructs otherwise.
 4. After adjusting overrides, redeploy the environment so the updated settings apply.
 
 ## After completing the checklist

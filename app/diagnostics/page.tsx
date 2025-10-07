@@ -174,6 +174,7 @@ function summarizeNetlifyDiagnostics(raw: any): string[] {
     : 'unknown'
 
   const overrides: string[] = []
+  const warnings: string[] = []
   const edgeUrlCandidate = raw?.optional?.edgeUrl?.selected?.valuePreview
   const apiUrlCandidate = raw?.optional?.apiUrl?.selected?.valuePreview
   const uncachedEdgeUrlCandidate = raw?.optional?.uncachedEdgeUrl?.selected?.valuePreview
@@ -188,10 +189,20 @@ function summarizeNetlifyDiagnostics(raw: any): string[] {
   if (uncachedEdgeUrl) overrides.push(`uncached_edge=${uncachedEdgeUrl}`)
   if (apiUrl) overrides.push(`api=${apiUrl}`)
 
+  if (edgeUrl && /^https?:\/\/netlify-blobs\.netlify\.app/i.test(edgeUrl)) {
+    warnings.push('Edge override points at netlify-blobs.netlify.app; remove or switch to the API host for writes')
+  }
+  if (edgeUrl && !apiUrl) {
+    warnings.push('Edge override is set without NETLIFY_BLOBS_API_URL; uploads will target the edge host')
+  }
+
   summary.push(`Store: ${storeLabel}`)
   summary.push(`Token: ${tokenLabel}`)
   summary.push(`Site ID: ${siteLabel}`)
   summary.push(`Overrides: ${overrides.length ? overrides.join(' · ') : 'none set'}`)
+  if (warnings.length) {
+    summary.push(`Warnings: ${warnings.join(' · ')}`)
+  }
 
   return summary
 }
