@@ -27,5 +27,10 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 3. Compare the region to the override values you have set. Confirm the hostnames point to the same region as your store. In particular, do **not** send writes to `https://netlify-blobs.netlify.app`; that domain serves cached reads only. For upload operations, rely on `NETLIFY_BLOBS_API_URL=https://api.netlify.com/api/v1/blobs` (the default) and remove the edge override unless Netlify support instructs otherwise.
 4. After adjusting overrides, redeploy the environment so the updated settings apply.
 
+## 5. Confirm the deployment context in diagnostics
+1. Open the in-app **Diagnostics** page and run the full suite.
+2. In the log viewer, find the `***KEY NETFLIFY ITEMS***` block. It now repeats the store/token/site wiring and lists the detected deployment origin and URL so you can verify you are exercising the intended test release (for example, `https://dadsbot.netlify.app`).
+3. If the deployment origin or URL do not match the environment you expected, re-run the tests from the correct host before continuing troubleshooting.
+
 ## After completing the checklist
 Redeploy the site (or trigger the failing tests again) to confirm blob uploads now succeed. If 405 errors persist, recheck the store name, token scope, and site ID for typographical errors, then contact Netlify support with the failing request ID shown in the diagnostics.
