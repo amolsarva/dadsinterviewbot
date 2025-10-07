@@ -137,11 +137,13 @@ const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
 
 let netlifyConfig: NetlifyConfig | null | undefined
 let netlifyStore: Store | null | undefined
+let netlifyStoreConfigKey: string | null = null
 let netlifyWarningIssued = false
 let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
 let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
+let netlifyEdgeOverrideSuppressed = false
 
 type SiteResolution = {
   slug: string
@@ -750,13 +752,99 @@ function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
   return netlifyDiagnostics ?? defaultDiagnostics()
 }
 
+function shouldSuppressEdgeOverride(edgeUrl: string): boolean {
+  const trimmed = edgeUrl.trim()
+  if (!trimmed.length) return true
+  try {
+    const parsed = new URL(trimmed)
+    const hostname = parsed.hostname.toLowerCase()
+    if (hostname === 'netlify-blobs.netlify.app') {
+      return true
+    }
+    if (hostname.endsWith('.netlify.app') && hostname.startsWith('netlify-blobs')) {
+      return true
+    }
+  } catch {
+    if (/netlify-blobs\.netlify\.app/i.test(trimmed)) {
+      return true
+    }
+  }
+  return false
+}
+
+function noteEdgeOverrideSuppressed(edgeUrl: string, field: 'edgeUrl' | 'uncachedEdgeUrl') {
+  const fieldDiagnostics =
+    field === 'edgeUrl'
+      ? netlifyDiagnostics?.optional?.edgeUrl
+      : netlifyDiagnostics?.optional?.uncachedEdgeUrl
+
+  const selected = fieldDiagnostics?.selected
+  if (selected && fieldDiagnostics) {
+    const existingNote = selected.note ? `${selected.note}; ` : ''
+    fieldDiagnostics.selected = {
+      ...selected,
+      note: `${existingNote}suppressed for uploads`,
+    }
+  }
+
+  if (!netlifyEdgeOverrideSuppressed) {
+    netlifyEdgeOverrideSuppressed = true
+    flagFox({
+      id: 'theory-2-edge-override-suppressed',
+      theory: 2,
+      level: 'warn',
+      message:
+        'NETLIFY_BLOBS_EDGE_URL points at a read-only edge host; using API host for uploads instead.',
+      details: { edgeUrl, field },
+    })
+  }
+}
+
+function sanitizeConfigForStore(config: NetlifyConfig): NetlifyConfig {
+  const sanitized: NetlifyConfig = { ...config }
+  let mutated = false
+
+  if (sanitized.edgeUrl && shouldSuppressEdgeOverride(sanitized.edgeUrl)) {
+    noteEdgeOverrideSuppressed(sanitized.edgeUrl, 'edgeUrl')
+    sanitized.edgeUrl = undefined
+    mutated = true
+  }
+
+  if (sanitized.uncachedEdgeUrl && shouldSuppressEdgeOverride(sanitized.uncachedEdgeUrl)) {
+    noteEdgeOverrideSuppressed(sanitized.uncachedEdgeUrl, 'uncachedEdgeUrl')
+    sanitized.uncachedEdgeUrl = undefined
+    mutated = true
+  }
+
+  if (!sanitized.apiUrl) {
+    sanitized.apiUrl = `${NETLIFY_API_BASE_URL}/api/v1/blobs`
+    mutated = true
+  }
+
+  return mutated ? sanitized : config
+}
+
+function buildStoreConfigKey(config: NetlifyConfig): string {
+  return JSON.stringify({
+    name: config.storeName,
+    siteId: config.siteId,
+    token: config.token,
+    apiUrl: config.apiUrl || null,
+    edgeUrl: config.edgeUrl || null,
+    uncachedEdgeUrl: config.uncachedEdgeUrl || null,
+    consistency: config.consistency || null,
+  })
+}
+
 async function getNetlifyStore(): Promise<Store | null> {
   const baseConfig = getNetlifyConfig()
   if (!baseConfig) return null
 
-  const config = await ensureCanonicalSiteId(baseConfig)
+  const canonicalConfig = await ensureCanonicalSiteId(baseConfig)
+  const config = sanitizeConfigForStore(canonicalConfig)
+  const configKey = buildStoreConfigKey(config)
 
-  if (!netlifyStore) {
+  if (!netlifyStore || netlifyStoreConfigKey !== configKey) {
     netlifyStore = getStore({
       name: config.storeName,
       siteID: config.siteId,
@@ -766,6 +854,7 @@ async function getNetlifyStore(): Promise<Store | null> {
       uncachedEdgeURL: config.uncachedEdgeUrl,
       consistency: config.consistency,
     })
+    netlifyStoreConfigKey = configKey
   }
 
   return netlifyStore
