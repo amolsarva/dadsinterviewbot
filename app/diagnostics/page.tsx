@@ -39,6 +39,17 @@ type ProviderErrorSynopsis = {
   resolvedAt?: string
 }
 
+type DeploymentSnapshot = {
+  origin?: string
+  host?: string
+  href?: string
+  pathname?: string
+  releaseId?: string
+  vercelEnv?: string
+  vercelUrl?: string
+  netlifySiteUrl?: string
+}
+
 const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
 const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
@@ -87,8 +98,34 @@ function describeBlobDetails(raw: any): string[] {
   } else if (typeof details.siteId === 'string' && details.siteId.length) {
     parts.push(`site ${details.siteId}`)
   }
+  if (typeof details.tokenSource === 'string' && details.tokenSource.length) {
+    parts.push(`token from ${details.tokenSource}`)
+  }
+  if (typeof details.tokenLength === 'number' && Number.isFinite(details.tokenLength)) {
+    parts.push(`token length ${details.tokenLength}`)
+  }
   if (Array.isArray(details.missing) && details.missing.length) {
-    parts.push(`missing ${details.missing.join(', ')}`)
+    const missingLabels = details.missing
+      .filter(
+        (item: unknown): item is string => typeof item === 'string' && item.length > 0,
+      )
+      .join(', ')
+    if (missingLabels.length) {
+      parts.push(`missing ${missingLabels}`)
+    }
+  }
+  if (typeof details.usingContext === 'boolean') {
+    parts.push(details.usingContext ? 'context payload detected' : 'context payload missing')
+  }
+  if (Array.isArray(details.contextKeys) && details.contextKeys.length) {
+    const contextKeys = details.contextKeys
+      .filter(
+        (item: unknown): item is string => typeof item === 'string' && item.length > 0,
+      )
+      .slice(0, 4)
+    if (contextKeys.length) {
+      parts.push(`context keys ${contextKeys.join(', ')}`)
+    }
   }
   if (typeof details.status === 'number' && Number.isFinite(details.status)) {
     parts.push(`status ${details.status}`)
@@ -107,6 +144,156 @@ function describeBlobDetails(raw: any): string[] {
   }
 
   return parts
+}
+
+function readDeploymentSnapshot(): DeploymentSnapshot | null {
+  if (typeof window === 'undefined') return null
+
+  const snapshot: DeploymentSnapshot = {}
+  const { location } = window
+
+  if (location) {
+    if (typeof location.origin === 'string' && location.origin.length) {
+      snapshot.origin = location.origin
+    }
+    if (typeof location.host === 'string' && location.host.length) {
+      snapshot.host = location.host
+    }
+    if (typeof location.href === 'string' && location.href.length) {
+      snapshot.href = location.href
+    }
+    if (typeof location.pathname === 'string' && location.pathname.length) {
+      snapshot.pathname = location.pathname
+    }
+  }
+
+  const nextData = (window as any).__NEXT_DATA__
+  if (nextData && typeof nextData === 'object') {
+    if (typeof nextData.buildId === 'string' && nextData.buildId.length) {
+      snapshot.releaseId = nextData.buildId
+    }
+  }
+
+  const vercelEnv = process.env.NEXT_PUBLIC_VERCEL_ENV
+  if (typeof vercelEnv === 'string' && vercelEnv.length) {
+    snapshot.vercelEnv = vercelEnv
+  }
+
+  const vercelUrl =
+    process.env.NEXT_PUBLIC_VERCEL_URL ??
+    process.env.NEXT_PUBLIC_DEPLOYMENT_URL ??
+    process.env.NEXT_PUBLIC_SITE_URL
+  if (typeof vercelUrl === 'string' && vercelUrl.length) {
+    snapshot.vercelUrl = vercelUrl
+  }
+
+  const netlifySiteUrl = process.env.NEXT_PUBLIC_NETLIFY_SITE_URL
+  if (typeof netlifySiteUrl === 'string' && netlifySiteUrl.length) {
+    snapshot.netlifySiteUrl = netlifySiteUrl
+  }
+
+  return snapshot
+}
+
+function summarizeNetlifyDiagnostics(raw: any, deployment?: DeploymentSnapshot | null): string[] {
+  if (!raw || typeof raw !== 'object') return []
+  const summary: string[] = []
+
+  const tokenPresent = raw?.token?.present === true
+  const tokenKeyCandidate = raw?.token?.selected?.key
+  const tokenSource =
+    typeof tokenKeyCandidate === 'string' && tokenKeyCandidate.length ? tokenKeyCandidate : undefined
+  const tokenLabel = tokenPresent
+    ? `present${tokenSource ? ` from ${tokenSource}` : ''}`
+    : raw?.token?.present === false
+    ? 'missing'
+    : 'unknown'
+
+  const storePreviewCandidate = raw?.store?.selected?.valuePreview ?? raw?.store?.selected?.value
+  const storePreview =
+    typeof storePreviewCandidate === 'string' && storePreviewCandidate.length
+      ? storePreviewCandidate
+      : undefined
+  const storeDefaulted = raw?.store?.defaulted === true
+  const storeLabel = storePreview
+    ? `${storePreview}${storeDefaulted ? ' (defaulted)' : ''}`
+    : storeDefaulted
+    ? 'defaulted (value unknown)'
+    : 'unresolved'
+
+  const sitePreviewCandidate = raw?.siteId?.selected?.valuePreview ?? raw?.siteId?.selected?.value
+  const sitePreview =
+    typeof sitePreviewCandidate === 'string' && sitePreviewCandidate.length
+      ? sitePreviewCandidate
+      : undefined
+  const sitePresent = raw?.siteId?.present === true
+  const siteLabel = sitePresent
+    ? `${sitePreview || 'value provided'}${raw?.siteId?.defaulted ? ' (defaulted)' : ''}`
+    : raw?.siteId?.present === false
+    ? 'missing'
+    : 'unknown'
+
+  const overrides: string[] = []
+  const warnings: string[] = []
+  const edgeUrlCandidate = raw?.optional?.edgeUrl?.selected?.valuePreview
+  const apiUrlCandidate = raw?.optional?.apiUrl?.selected?.valuePreview
+  const uncachedEdgeUrlCandidate = raw?.optional?.uncachedEdgeUrl?.selected?.valuePreview
+  const edgeUrl = typeof edgeUrlCandidate === 'string' && edgeUrlCandidate.length ? edgeUrlCandidate : undefined
+  const edgeNoteCandidate = raw?.optional?.edgeUrl?.selected?.note
+  const apiUrl = typeof apiUrlCandidate === 'string' && apiUrlCandidate.length ? apiUrlCandidate : undefined
+  const uncachedEdgeUrl =
+    typeof uncachedEdgeUrlCandidate === 'string' && uncachedEdgeUrlCandidate.length
+      ? uncachedEdgeUrlCandidate
+      : undefined
+
+  if (edgeUrl) overrides.push(`edge=${edgeUrl}`)
+  if (uncachedEdgeUrl) overrides.push(`uncached_edge=${uncachedEdgeUrl}`)
+  if (apiUrl) overrides.push(`api=${apiUrl}`)
+
+  if (edgeUrl && /^https?:\/\/netlify-blobs\.netlify\.app/i.test(edgeUrl)) {
+    warnings.push('Edge override points at netlify-blobs.netlify.app; remove or switch to the API host for writes')
+  }
+  if (edgeUrl && !apiUrl) {
+    warnings.push('Edge override is set without NETLIFY_BLOBS_API_URL; uploads will target the edge host')
+  }
+  if (typeof edgeNoteCandidate === 'string' && /suppressed for uploads/i.test(edgeNoteCandidate)) {
+    warnings.push('Edge override sanitized for uploads to avoid Netlify blob 405 errors')
+  }
+
+  summary.push(`Store: ${storeLabel}`)
+  summary.push(`Token: ${tokenLabel}`)
+  summary.push(`Site ID: ${siteLabel}`)
+  summary.push(`Overrides: ${overrides.length ? overrides.join(' · ') : 'none set'}`)
+  if (warnings.length) {
+    summary.push(`Warnings: ${warnings.join(' · ')}`)
+  }
+
+  if (deployment) {
+    const originLabel = deployment.origin || deployment.host
+    if (originLabel) {
+      summary.push(`Deployment origin: ${originLabel}`)
+    }
+    if (deployment.href) {
+      summary.push(`Deployment URL: ${deployment.href}`)
+    }
+    if (deployment.pathname) {
+      summary.push(`Deployment path: ${deployment.pathname}`)
+    }
+    if (deployment.vercelEnv) {
+      summary.push(`Runtime env: ${deployment.vercelEnv}`)
+    }
+    if (deployment.vercelUrl && (!deployment.origin || !deployment.origin.includes(deployment.vercelUrl))) {
+      summary.push(`Vercel URL: ${deployment.vercelUrl}`)
+    }
+    if (deployment.netlifySiteUrl) {
+      summary.push(`Netlify site URL: ${deployment.netlifySiteUrl}`)
+    }
+    if (deployment.releaseId) {
+      summary.push(`Build ID: ${deployment.releaseId}`)
+    }
+  }
+
+  return summary
 }
 
 function formatSummary(key: TestKey, data: any): string {
@@ -469,11 +656,38 @@ export default function DiagnosticsPage() {
       } catch {}
     }
 
+    const deploymentSnapshot = readDeploymentSnapshot()
+
     setLatestTranscript(transcriptSnapshot)
     if (providerSnapshot) {
       setLatestProviderError(providerSnapshot)
     } else {
       setLatestProviderError(null)
+    }
+
+    if (deploymentSnapshot) {
+      const originLabel = deploymentSnapshot.origin || deploymentSnapshot.host || 'origin unknown'
+      append(`[deployment] Origin: ${originLabel}`)
+      if (deploymentSnapshot.href) {
+        append(`[deployment] URL: ${deploymentSnapshot.href}`)
+      }
+      if (deploymentSnapshot.pathname) {
+        append(`[deployment] Path: ${deploymentSnapshot.pathname}`)
+      }
+      if (deploymentSnapshot.vercelEnv) {
+        append(`[deployment] Runtime env: ${deploymentSnapshot.vercelEnv}`)
+      }
+      if (deploymentSnapshot.vercelUrl) {
+        append(`[deployment] Vercel URL: ${deploymentSnapshot.vercelUrl}`)
+      }
+      if (deploymentSnapshot.netlifySiteUrl) {
+        append(`[deployment] Netlify site URL: ${deploymentSnapshot.netlifySiteUrl}`)
+      }
+      if (deploymentSnapshot.releaseId) {
+        append(`[deployment] Build ID: ${deploymentSnapshot.releaseId}`)
+      }
+    } else {
+      append('[deployment] Unable to determine current deployment origin from browser context.')
     }
 
     if (transcriptSnapshot) {
@@ -548,6 +762,14 @@ export default function DiagnosticsPage() {
           const ok = typeof parsed.ok === 'boolean' ? parsed.ok : res.ok
           const message = formatSummary(key, parsed)
           updateResult(key, { status: ok ? 'ok' : 'error', message })
+          if (key === 'storage') {
+            const diagnosticsSummary = summarizeNetlifyDiagnostics(parsed?.env?.diagnostics, deploymentSnapshot)
+            if (diagnosticsSummary.length) {
+              append('***KEY NETFLIFY ITEMS***')
+              diagnosticsSummary.forEach(line => append(line))
+              append('***KEY NETFLIFY ITEMS***')
+            }
+          }
         } else {
           append(rawText || '(no response body)')
           updateResult(key, {

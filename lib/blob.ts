@@ -1,4 +1,5 @@
-import { getStore, type Store } from '@netlify/blobs'
+import { getStore, setEnvironmentContext, type Store } from '@netlify/blobs'
+import type { GetStoreOptions } from '@netlify/blobs'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -27,7 +28,7 @@ type NetlifyContext = {
 type NetlifyConfig = {
   storeName: string
   siteId: string
-  token: string
+  token: string | null
   apiUrl?: string
   edgeUrl?: string
   uncachedEdgeUrl?: string
@@ -137,11 +138,16 @@ const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
 
 let netlifyConfig: NetlifyConfig | null | undefined
 let netlifyStore: Store | null | undefined
+let netlifyStoreConfigKey: string | null = null
 let netlifyWarningIssued = false
 let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
 let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
+let netlifyEdgeOverrideSuppressed = false
+let netlifyContextKey: string | null = null
+let netlifyEnvSanitizedKey: string | null = null
+let netlifyImplicitAttempted = false
 
 type SiteResolution = {
   slug: string
@@ -200,7 +206,7 @@ function looksLikeSiteId(value: string): boolean {
 async function resolveSiteId(config: NetlifyConfig): Promise<SiteResolution | null> {
   const slug = config.siteId.trim()
   if (!slug.length) return null
-  const token = config.token.trim()
+  const token = typeof config.token === 'string' ? config.token.trim() : ''
   if (!token.length) return null
   const base = (config.apiUrl || '').trim() || NETLIFY_API_BASE_URL
   const url = new URL(`/api/v1/sites/${encodeURIComponent(slug)}`, base)
@@ -263,6 +269,10 @@ async function ensureCanonicalSiteId(config: NetlifyConfig): Promise<NetlifyConf
       return config
     }
     return { ...config }
+  }
+
+  if (!config.token || !config.token.trim().length) {
+    return config
   }
 
   if (!netlifySiteResolution || netlifySiteResolutionSlug !== config.siteId) {
@@ -704,18 +714,19 @@ function readNetlifyConfig(): { config: NetlifyConfig | null; diagnostics: BlobE
   if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
   if (!diagnostics.token.present) diagnostics.missing.push('token')
 
-  const config: NetlifyConfig | null =
-    diagnostics.siteId.present && diagnostics.token.present
-      ? {
-          storeName: storePick?.value || storeName,
-          siteId: siteIdPick!.value,
-          token: tokenPick!.value,
-          apiUrl: apiPick?.value || undefined,
-          edgeUrl: edgePick?.value || undefined,
-          uncachedEdgeUrl: uncachedPick?.value || undefined,
-          consistency,
-        }
-      : null
+  const tokenValue = tokenPick?.value || null
+
+  const config: NetlifyConfig | null = diagnostics.siteId.present
+    ? {
+        storeName: storePick?.value || storeName,
+        siteId: siteIdPick!.value,
+        token: tokenValue,
+        apiUrl: apiPick?.value || undefined,
+        edgeUrl: edgePick?.value || undefined,
+        uncachedEdgeUrl: uncachedPick?.value || undefined,
+        consistency,
+      }
+    : null
 
   return { config, diagnostics }
 }
@@ -750,22 +761,277 @@ function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
   return netlifyDiagnostics ?? defaultDiagnostics()
 }
 
+function shouldSuppressEdgeOverride(edgeUrl: string): boolean {
+  const trimmed = edgeUrl.trim()
+  if (!trimmed.length) return true
+  try {
+    const parsed = new URL(trimmed)
+    const hostname = parsed.hostname.toLowerCase()
+    if (hostname === 'netlify-blobs.netlify.app') {
+      return true
+    }
+    if (hostname.endsWith('.netlify.app') && hostname.startsWith('netlify-blobs')) {
+      return true
+    }
+  } catch {
+    if (/netlify-blobs\.netlify\.app/i.test(trimmed)) {
+      return true
+    }
+  }
+  return false
+}
+
+function noteEdgeOverrideSuppressed(
+  edgeUrl: string,
+  field: 'edgeUrl' | 'uncachedEdgeUrl' | 'apiUrl'
+) {
+  const fieldDiagnostics =
+    field === 'edgeUrl'
+      ? netlifyDiagnostics?.optional?.edgeUrl
+      : field === 'uncachedEdgeUrl'
+      ? netlifyDiagnostics?.optional?.uncachedEdgeUrl
+      : netlifyDiagnostics?.optional?.apiUrl
+
+  const selected = fieldDiagnostics?.selected
+  if (selected && fieldDiagnostics) {
+    const existingNote = selected.note ? `${selected.note}; ` : ''
+    fieldDiagnostics.selected = {
+      ...selected,
+      note: `${existingNote}suppressed for uploads`,
+    }
+  }
+
+  if (!netlifyEdgeOverrideSuppressed) {
+    netlifyEdgeOverrideSuppressed = true
+    flagFox({
+      id: 'theory-2-edge-override-suppressed',
+      theory: 2,
+      level: 'warn',
+      message:
+        'Netlify blob configuration provided a read-only host override; using the API host for uploads instead.',
+      details: { edgeUrl, field },
+    })
+  }
+}
+
+function sanitizeConfigForStore(config: NetlifyConfig): NetlifyConfig {
+  const sanitized: NetlifyConfig = { ...config }
+  let mutated = false
+
+  if (sanitized.edgeUrl && shouldSuppressEdgeOverride(sanitized.edgeUrl)) {
+    noteEdgeOverrideSuppressed(sanitized.edgeUrl, 'edgeUrl')
+    sanitized.edgeUrl = undefined
+    mutated = true
+  }
+
+  if (sanitized.uncachedEdgeUrl && shouldSuppressEdgeOverride(sanitized.uncachedEdgeUrl)) {
+    noteEdgeOverrideSuppressed(sanitized.uncachedEdgeUrl, 'uncachedEdgeUrl')
+    sanitized.uncachedEdgeUrl = undefined
+    mutated = true
+  }
+
+  const defaultApi = `${NETLIFY_API_BASE_URL}/api/v1/blobs`
+
+  if (sanitized.apiUrl) {
+    if (shouldSuppressEdgeOverride(sanitized.apiUrl)) {
+      noteEdgeOverrideSuppressed(sanitized.apiUrl, 'apiUrl')
+      sanitized.apiUrl = defaultApi
+      mutated = true
+    }
+  } else {
+    sanitized.apiUrl = defaultApi
+    mutated = true
+  }
+
+  return mutated ? sanitized : config
+}
+
+function isNetlifyRuntime(): boolean {
+  const netlifyFlag = (process.env.NETLIFY || '').toLowerCase()
+  if (netlifyFlag === 'true') return true
+  if ((process.env.NETLIFY_LOCAL || '').toLowerCase() === 'true') return true
+  if ((process.env.NETLIFY_DEV || '').toLowerCase() === 'true') return true
+  if (process.env.DEPLOY_ID || process.env.NETLIFY_CONTEXT) return true
+  return false
+}
+
+function initializeImplicitNetlifyStore(config: NetlifyConfig): Store | null {
+  const storeName = config.storeName?.trim()
+  if (!storeName) return null
+  if (!isNetlifyRuntime()) return null
+
+  const options: GetStoreOptions = { name: storeName }
+
+  if (config.siteId) options.siteID = config.siteId
+  if (config.apiUrl) options.apiURL = config.apiUrl
+  if (config.edgeUrl) options.edgeURL = config.edgeUrl
+  if (config.uncachedEdgeUrl) options.uncachedEdgeURL = config.uncachedEdgeUrl
+  if (config.consistency) options.consistency = config.consistency
+
+  try {
+    const store = getStore(options)
+    if (netlifyDiagnostics) {
+      netlifyDiagnostics.usingContext = true
+      const keys = new Set(netlifyDiagnostics.contextKeys ?? [])
+      keys.add('token')
+      keys.add('siteID')
+      netlifyDiagnostics.contextKeys = Array.from(keys)
+      netlifyDiagnostics.token.present = true
+      netlifyDiagnostics.token.length = undefined
+      netlifyDiagnostics.token.selected = {
+        key: 'context.token',
+        source: 'context',
+        present: true,
+        valuePreview: 'runtime-managed',
+        note: 'Using Netlify-managed site token provided at runtime.',
+      }
+      netlifyDiagnostics.missing = netlifyDiagnostics.missing.filter((entry) => entry !== 'token')
+    }
+    flagFox({
+      id: 'theory-2-runtime-token',
+      theory: 2,
+      level: 'info',
+      message: 'Netlify runtime token detected; using managed credentials for blob uploads.',
+    })
+    return store
+  } catch (error) {
+    if (!netlifyImplicitAttempted) {
+      netlifyImplicitAttempted = true
+      console.warn('Failed to initialize Netlify blob store with runtime-managed credentials', error)
+    }
+    return null
+  }
+}
+
+function applySanitizedEnvironmentOverrides(config: NetlifyConfig) {
+  const beforeSnapshot = JSON.stringify({
+    api: config.apiUrl ?? null,
+    edge: config.edgeUrl ?? null,
+    uncached: config.uncachedEdgeUrl ?? null,
+    envEdge: process.env.NETLIFY_BLOBS_EDGE_URL ?? null,
+    envUncached: process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL ?? null,
+    envApi: process.env.NETLIFY_BLOBS_API_URL ?? null,
+  })
+
+  if (beforeSnapshot === netlifyEnvSanitizedKey) {
+    return
+  }
+
+  const edgeEnv = process.env.NETLIFY_BLOBS_EDGE_URL
+  if (edgeEnv && shouldSuppressEdgeOverride(edgeEnv)) {
+    delete process.env.NETLIFY_BLOBS_EDGE_URL
+  }
+
+  const uncachedEnv = process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL
+  if (uncachedEnv && shouldSuppressEdgeOverride(uncachedEnv)) {
+    delete process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL
+  }
+
+  const apiEnv = process.env.NETLIFY_BLOBS_API_URL
+  const desiredApi = config.apiUrl
+
+  if (desiredApi) {
+    if (apiEnv !== desiredApi) {
+      process.env.NETLIFY_BLOBS_API_URL = desiredApi
+    }
+  } else if (apiEnv && shouldSuppressEdgeOverride(apiEnv)) {
+    process.env.NETLIFY_BLOBS_API_URL = `${NETLIFY_API_BASE_URL}/api/v1/blobs`
+  }
+
+  const afterSnapshot = JSON.stringify({
+    api: config.apiUrl ?? null,
+    edge: config.edgeUrl ?? null,
+    uncached: config.uncachedEdgeUrl ?? null,
+    envEdge: process.env.NETLIFY_BLOBS_EDGE_URL ?? null,
+    envUncached: process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL ?? null,
+    envApi: process.env.NETLIFY_BLOBS_API_URL ?? null,
+  })
+
+  netlifyEnvSanitizedKey = afterSnapshot
+}
+
+function applySanitizedEnvironmentContext(config: NetlifyConfig) {
+  const context = parseNetlifyContext() ?? {}
+  const sanitizedContext: NetlifyContext = {
+    ...context,
+    siteID: config.siteId,
+  }
+
+  if (config.token && config.token.trim().length) {
+    sanitizedContext.token = config.token
+  }
+
+  if (config.apiUrl) {
+    sanitizedContext.apiURL = config.apiUrl
+  }
+
+  if (config.edgeUrl) {
+    sanitizedContext.edgeURL = config.edgeUrl
+  }
+
+  if (config.uncachedEdgeUrl) {
+    sanitizedContext.uncachedEdgeURL = config.uncachedEdgeUrl
+  }
+
+  const serialized = JSON.stringify(sanitizedContext)
+  if (serialized === netlifyContextKey) {
+    return
+  }
+
+  try {
+    setEnvironmentContext(sanitizedContext)
+    netlifyContextKey = serialized
+  } catch (error) {
+    console.warn('Failed to apply sanitized Netlify blobs context', error)
+  }
+}
+
+function buildStoreConfigKey(config: NetlifyConfig): string {
+  return JSON.stringify({
+    name: config.storeName,
+    siteId: config.siteId,
+    token: config.token,
+    apiUrl: config.apiUrl || null,
+    edgeUrl: config.edgeUrl || null,
+    uncachedEdgeUrl: config.uncachedEdgeUrl || null,
+    consistency: config.consistency || null,
+  })
+}
+
 async function getNetlifyStore(): Promise<Store | null> {
   const baseConfig = getNetlifyConfig()
   if (!baseConfig) return null
 
-  const config = await ensureCanonicalSiteId(baseConfig)
+  const canonicalConfig =
+    baseConfig.token && baseConfig.token.trim().length
+      ? await ensureCanonicalSiteId(baseConfig)
+      : baseConfig
+  const config = sanitizeConfigForStore(canonicalConfig)
+  const configKey = buildStoreConfigKey(config)
 
-  if (!netlifyStore) {
-    netlifyStore = getStore({
-      name: config.storeName,
-      siteID: config.siteId,
-      token: config.token,
-      apiURL: config.apiUrl,
-      edgeURL: config.edgeUrl,
-      uncachedEdgeURL: config.uncachedEdgeUrl,
-      consistency: config.consistency,
-    })
+  if (!netlifyStore || netlifyStoreConfigKey !== configKey) {
+    applySanitizedEnvironmentOverrides(config)
+    applySanitizedEnvironmentContext(config)
+    if (config.token && config.token.trim().length) {
+      netlifyStore = getStore({
+        name: config.storeName,
+        siteID: config.siteId,
+        token: config.token,
+        apiURL: config.apiUrl,
+        edgeURL: config.edgeUrl,
+        uncachedEdgeURL: config.uncachedEdgeUrl,
+        consistency: config.consistency,
+      })
+      netlifyStoreConfigKey = configKey
+    } else {
+      const implicitStore = initializeImplicitNetlifyStore(config)
+      if (implicitStore) {
+        netlifyStore = implicitStore
+        netlifyStoreConfigKey = configKey
+      } else {
+        netlifyStore = null
+      }
+    }
   }
 
   return netlifyStore

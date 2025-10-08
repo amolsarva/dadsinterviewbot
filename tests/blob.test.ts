@@ -5,6 +5,11 @@ afterEach(() => {
   delete process.env.NETLIFY_BLOBS_TOKEN
   delete process.env.NETLIFY_BLOBS_STORE
   delete process.env.NETLIFY_BLOBS_CONTEXT
+  delete process.env.NETLIFY
+  delete process.env.NETLIFY_LOCAL
+  delete process.env.NETLIFY_DEV
+  delete process.env.NETLIFY_CONTEXT
+  delete process.env.DEPLOY_ID
   vi.resetModules()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -26,7 +31,11 @@ describe('putBlobFromBuffer', () => {
     }
 
     const getStoreSpy = vi.fn(() => storeMock)
-    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+    const setContextSpy = vi.fn()
+    vi.doMock('@netlify/blobs', () => ({
+      getStore: getStoreSpy,
+      setEnvironmentContext: setContextSpy,
+    }))
 
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
@@ -41,12 +50,59 @@ describe('putBlobFromBuffer', () => {
       consistency: undefined,
     })
     expect(setSpy).toHaveBeenCalled()
+    expect(setContextSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        siteID: '12345678-1234-1234-1234-1234567890ab',
+        token: 'api-token',
+      }),
+    )
     expect(result.url).toBe('/api/blob/path/file.txt')
     expect(result.downloadUrl).toBe(result.url)
   })
 
+  it('uses the Netlify runtime token when environment credentials are absent', async () => {
+    process.env.NETLIFY = 'true'
+    process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
+
+    const setSpy = vi.fn(async () => ({}))
+    const storeMock = {
+      set: setSpy,
+      list: vi.fn(async () => ({ blobs: [] })),
+      getMetadata: vi.fn(async () => null),
+      delete: vi.fn(async () => {}),
+      getWithMetadata: vi.fn(async () => null),
+    }
+
+    const getStoreSpy = vi.fn(() => storeMock)
+    const setContextSpy = vi.fn()
+    vi.doMock('@netlify/blobs', () => ({
+      getStore: getStoreSpy,
+      setEnvironmentContext: setContextSpy,
+    }))
+
+    const { putBlobFromBuffer } = await import('../lib/blob')
+    await putBlobFromBuffer('path/file.txt', Buffer.from('runtime'), 'text/plain')
+
+    expect(getStoreSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'store-name' }),
+    )
+    const callArg = getStoreSpy.mock.calls[0][0] as Record<string, unknown>
+    expect(callArg).not.toHaveProperty('token')
+    expect(callArg).toHaveProperty('siteID', '12345678-1234-1234-1234-1234567890ab')
+    expect(setSpy).toHaveBeenCalled()
+    expect(setContextSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        siteID: '12345678-1234-1234-1234-1234567890ab',
+      }),
+    )
+  })
+
   it('falls back to a data URL when storage is not configured', async () => {
-    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
+    vi.doMock('@netlify/blobs', () => ({
+      getStore: vi.fn(),
+      setEnvironmentContext: vi.fn(),
+    }))
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
@@ -76,7 +132,10 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
   }))
   vi.stubGlobal('fetch', fetchSpy)
 
-  vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+  vi.doMock('@netlify/blobs', () => ({
+    getStore: getStoreSpy,
+    setEnvironmentContext: vi.fn(),
+  }))
 
   const { putBlobFromBuffer } = await import('../lib/blob')
   await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
@@ -93,7 +152,10 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
 
 describe('listBlobs', () => {
   it('returns fallback entries when storage is not configured', async () => {
-    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
+    vi.doMock('@netlify/blobs', () => ({
+      getStore: vi.fn(),
+      setEnvironmentContext: vi.fn(),
+    }))
     const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
     clearFallbackBlobs()
 

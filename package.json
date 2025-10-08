@@ -27,6 +27,7 @@
     "zustand": "4.5.4"
   },
   "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.13.5",
     "@playwright/test": "1.46.1",
     "@types/node": "20.11.30",
     "@types/react": "18.3.3",
