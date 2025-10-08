@@ -15,6 +15,10 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 4. In the scopes list, enable **Blobs: Read and write** (or **Full access** if you prefer), then create the token.
 5. Copy the generated token immediately. In your deployment environment, set the `NETLIFY_BLOBS_TOKEN` secret to this value.
 
+> **Runtime-managed tokens**
+>
+> When the site runs inside Netlify’s infrastructure it now detects and prefers the platform-managed blob token that Netlify injects at request time. You can safely remove a manually configured `NETLIFY_BLOBS_TOKEN` once uploads succeed—diagnostics will show the token source as “runtime-managed.” Keep a personal access token handy for local testing or emergency overrides, but production no longer needs the secret in the environment variables.
+
 ## 3. Link the token to the correct site ID
 1. From the Netlify dashboard, open the **Sites** tab and select the site that hosts this app.
 2. On the site overview page, scroll to **Site information** and expand it to reveal the **API ID** (UUID). This is Netlify’s canonical Site ID.

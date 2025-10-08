@@ -1,4 +1,5 @@
 import { getStore, setEnvironmentContext, type Store } from '@netlify/blobs'
+import type { GetStoreOptions } from '@netlify/blobs'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -27,7 +28,7 @@ type NetlifyContext = {
 type NetlifyConfig = {
   storeName: string
   siteId: string
-  token: string
+  token: string | null
   apiUrl?: string
   edgeUrl?: string
   uncachedEdgeUrl?: string
@@ -146,6 +147,7 @@ let netlifySiteResolutionNotified = false
 let netlifyEdgeOverrideSuppressed = false
 let netlifyContextKey: string | null = null
 let netlifyEnvSanitizedKey: string | null = null
+let netlifyImplicitAttempted = false
 
 type SiteResolution = {
   slug: string
@@ -204,7 +206,7 @@ function looksLikeSiteId(value: string): boolean {
 async function resolveSiteId(config: NetlifyConfig): Promise<SiteResolution | null> {
   const slug = config.siteId.trim()
   if (!slug.length) return null
-  const token = config.token.trim()
+  const token = typeof config.token === 'string' ? config.token.trim() : ''
   if (!token.length) return null
   const base = (config.apiUrl || '').trim() || NETLIFY_API_BASE_URL
   const url = new URL(`/api/v1/sites/${encodeURIComponent(slug)}`, base)
@@ -267,6 +269,10 @@ async function ensureCanonicalSiteId(config: NetlifyConfig): Promise<NetlifyConf
       return config
     }
     return { ...config }
+  }
+
+  if (!config.token || !config.token.trim().length) {
+    return config
   }
 
   if (!netlifySiteResolution || netlifySiteResolutionSlug !== config.siteId) {
@@ -708,18 +714,19 @@ function readNetlifyConfig(): { config: NetlifyConfig | null; diagnostics: BlobE
   if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
   if (!diagnostics.token.present) diagnostics.missing.push('token')
 
-  const config: NetlifyConfig | null =
-    diagnostics.siteId.present && diagnostics.token.present
-      ? {
-          storeName: storePick?.value || storeName,
-          siteId: siteIdPick!.value,
-          token: tokenPick!.value,
-          apiUrl: apiPick?.value || undefined,
-          edgeUrl: edgePick?.value || undefined,
-          uncachedEdgeUrl: uncachedPick?.value || undefined,
-          consistency,
-        }
-      : null
+  const tokenValue = tokenPick?.value || null
+
+  const config: NetlifyConfig | null = diagnostics.siteId.present
+    ? {
+        storeName: storePick?.value || storeName,
+        siteId: siteIdPick!.value,
+        token: tokenValue,
+        apiUrl: apiPick?.value || undefined,
+        edgeUrl: edgePick?.value || undefined,
+        uncachedEdgeUrl: uncachedPick?.value || undefined,
+        consistency,
+      }
+    : null
 
   return { config, diagnostics }
 }
@@ -839,6 +846,57 @@ function sanitizeConfigForStore(config: NetlifyConfig): NetlifyConfig {
   return mutated ? sanitized : config
 }
 
+function isNetlifyRuntime(): boolean {
+  const netlifyFlag = (process.env.NETLIFY || '').toLowerCase()
+  if (netlifyFlag === 'true') return true
+  if ((process.env.NETLIFY_LOCAL || '').toLowerCase() === 'true') return true
+  if ((process.env.NETLIFY_DEV || '').toLowerCase() === 'true') return true
+  if (process.env.DEPLOY_ID || process.env.NETLIFY_CONTEXT) return true
+  return false
+}
+
+function initializeImplicitNetlifyStore(config: NetlifyConfig): Store | null {
+  const storeName = config.storeName?.trim()
+  if (!storeName) return null
+  if (!isNetlifyRuntime()) return null
+
+  const options: GetStoreOptions = { name: storeName }
+
+  if (config.apiUrl) options.apiURL = config.apiUrl
+  if (config.edgeUrl) options.edgeURL = config.edgeUrl
+  if (config.uncachedEdgeUrl) options.uncachedEdgeURL = config.uncachedEdgeUrl
+  if (config.consistency) options.consistency = config.consistency
+
+  try {
+    const store = getStore(options)
+    if (netlifyDiagnostics) {
+      netlifyDiagnostics.token.present = true
+      netlifyDiagnostics.token.length = undefined
+      netlifyDiagnostics.token.selected = {
+        key: 'context.token',
+        source: 'context',
+        present: true,
+        valuePreview: 'runtime-managed',
+        note: 'Using Netlify-managed site token provided at runtime.',
+      }
+      netlifyDiagnostics.missing = netlifyDiagnostics.missing.filter((entry) => entry !== 'token')
+    }
+    flagFox({
+      id: 'theory-2-runtime-token',
+      theory: 2,
+      level: 'info',
+      message: 'Netlify runtime token detected; using managed credentials for blob uploads.',
+    })
+    return store
+  } catch (error) {
+    if (!netlifyImplicitAttempted) {
+      netlifyImplicitAttempted = true
+      console.warn('Failed to initialize Netlify blob store with runtime-managed credentials', error)
+    }
+    return null
+  }
+}
+
 function applySanitizedEnvironmentOverrides(config: NetlifyConfig) {
   const beforeSnapshot = JSON.stringify({
     api: config.apiUrl ?? null,
@@ -891,10 +949,22 @@ function applySanitizedEnvironmentContext(config: NetlifyConfig) {
   const sanitizedContext: NetlifyContext = {
     ...context,
     siteID: config.siteId,
-    token: config.token,
-    apiURL: config.apiUrl,
-    edgeURL: config.edgeUrl,
-    uncachedEdgeURL: config.uncachedEdgeUrl,
+  }
+
+  if (config.token && config.token.trim().length) {
+    sanitizedContext.token = config.token
+  }
+
+  if (config.apiUrl) {
+    sanitizedContext.apiURL = config.apiUrl
+  }
+
+  if (config.edgeUrl) {
+    sanitizedContext.edgeURL = config.edgeUrl
+  }
+
+  if (config.uncachedEdgeUrl) {
+    sanitizedContext.uncachedEdgeURL = config.uncachedEdgeUrl
   }
 
   const serialized = JSON.stringify(sanitizedContext)
@@ -926,23 +996,36 @@ async function getNetlifyStore(): Promise<Store | null> {
   const baseConfig = getNetlifyConfig()
   if (!baseConfig) return null
 
-  const canonicalConfig = await ensureCanonicalSiteId(baseConfig)
+  const canonicalConfig =
+    baseConfig.token && baseConfig.token.trim().length
+      ? await ensureCanonicalSiteId(baseConfig)
+      : baseConfig
   const config = sanitizeConfigForStore(canonicalConfig)
   const configKey = buildStoreConfigKey(config)
 
   if (!netlifyStore || netlifyStoreConfigKey !== configKey) {
     applySanitizedEnvironmentOverrides(config)
-    applySanitizedEnvironmentContext(config)
-    netlifyStore = getStore({
-      name: config.storeName,
-      siteID: config.siteId,
-      token: config.token,
-      apiURL: config.apiUrl,
-      edgeURL: config.edgeUrl,
-      uncachedEdgeURL: config.uncachedEdgeUrl,
-      consistency: config.consistency,
-    })
-    netlifyStoreConfigKey = configKey
+    if (config.token && config.token.trim().length) {
+      applySanitizedEnvironmentContext(config)
+      netlifyStore = getStore({
+        name: config.storeName,
+        siteID: config.siteId,
+        token: config.token,
+        apiURL: config.apiUrl,
+        edgeURL: config.edgeUrl,
+        uncachedEdgeURL: config.uncachedEdgeUrl,
+        consistency: config.consistency,
+      })
+      netlifyStoreConfigKey = configKey
+    } else {
+      const implicitStore = initializeImplicitNetlifyStore(config)
+      if (implicitStore) {
+        netlifyStore = implicitStore
+        netlifyStoreConfigKey = configKey
+      } else {
+        netlifyStore = null
+      }
+    }
   }
 
   return netlifyStore
