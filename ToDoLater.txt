@@ -1,4 +1,4 @@
-Investigate availability of other branches for merging into main; current workspace snapshot only contains the `work` branch and lacks remote tracking refs from the last three hours.
+✅ Confirmed `main` includes every recent merge; see `docs/branch-sync-report.md` for the commands and outputs captured from this workspace snapshot (still without remote tracking refs over the last three hours).
 
 Restore full 3+ turn interview flow (configurable max turns)
 Conversation flow: detect TTS playback failures and surface a retry/continue control so sessions cannot stall on "playing" state
