@@ -150,8 +150,8 @@ function readNetlifyConfig(): NetlifyConfig | null {
   let token =
     (process.env.NETLIFY_BLOBS_TOKEN || '').trim() ||
     (process.env.BLOBS_TOKEN || '').trim() ||
-    (process.env.NETLIFY_API_TOKEN || '').trim() ||
-    (context?.token || '').trim()
+    (context?.token || '').trim() ||
+    (process.env.NETLIFY_API_TOKEN || '').trim()
 
   const edgeUrl =
     (process.env.NETLIFY_BLOBS_EDGE_URL || '').trim() ||
