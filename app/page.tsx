@@ -1810,6 +1810,14 @@ export function Home({ userHandle }: { userHandle?: string }) {
     }
   })()
 
+  const showSkipButton =
+    !finishRequested && machineState === 'recording' && !manualStopRequested && hasStarted
+  const statusHint = manualStopRequested
+    ? 'Next queued — finishing this turn…'
+    : showSkipButton
+      ? 'Skip the pause if you’re ready for the next question.'
+      : null
+
   const providerErrorTimestamp = providerError?.at
     ? (() => {
         const parsed = new Date(providerError.at)
@@ -1981,6 +1989,18 @@ export function Home({ userHandle }: { userHandle?: string }) {
 
         <div className="status-block">
           <div className="status-text">{statusMessage}</div>
+          {showSkipButton ? (
+            <div className="status-actions">
+              <button
+                type="button"
+                onClick={requestManualStop}
+                className="btn-secondary btn-large status-skip"
+              >
+                ⏭ Next question
+              </button>
+            </div>
+          ) : null}
+          {statusHint ? <div className="status-hint">{statusHint}</div> : null}
           {machineState === 'doneSuccess' ? (
             <button
               onClick={() => {
