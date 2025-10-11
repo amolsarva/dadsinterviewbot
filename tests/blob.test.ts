@@ -5,6 +5,7 @@ afterEach(() => {
   delete process.env.NETLIFY_BLOBS_TOKEN
   delete process.env.NETLIFY_BLOBS_STORE
   delete process.env.NETLIFY_BLOBS_CONTEXT
+  delete process.env.NETLIFY_API_TOKEN
   vi.resetModules()
   vi.restoreAllMocks()
 })
@@ -42,6 +43,41 @@ describe('putBlobFromBuffer', () => {
     expect(setSpy).toHaveBeenCalled()
     expect(result.url).toBe('/api/blob/path/file.txt')
     expect(result.downloadUrl).toBe(result.url)
+  })
+
+  it('prefers the Netlify context token over the generic API token fallback', async () => {
+    const context = {
+      token: 'context-token',
+      siteID: 'context-site',
+    }
+
+    process.env.NETLIFY_BLOBS_CONTEXT = Buffer.from(JSON.stringify(context), 'utf8').toString('base64')
+    process.env.NETLIFY_API_TOKEN = 'api-token'
+
+    const setSpy = vi.fn(async () => ({}))
+    const storeMock = {
+      set: setSpy,
+      list: vi.fn(async () => ({ blobs: [] })),
+      getMetadata: vi.fn(async () => null),
+      delete: vi.fn(async () => {}),
+      getWithMetadata: vi.fn(async () => null),
+    }
+
+    const getStoreSpy = vi.fn(() => storeMock)
+    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
+    const { putBlobFromBuffer } = await import('../lib/blob')
+    await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
+
+    expect(getStoreSpy).toHaveBeenCalledWith({
+      name: 'dads-interview-bot',
+      siteID: 'context-site',
+      token: 'context-token',
+      apiURL: undefined,
+      edgeURL: undefined,
+      uncachedEdgeURL: undefined,
+      consistency: undefined,
+    })
   })
 
   it('falls back to a data URL when storage is not configured', async () => {
