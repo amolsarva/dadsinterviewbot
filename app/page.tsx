@@ -1666,7 +1666,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           details.push(`Body: ${snippet}`)
         }
         recordFatal('Intro prompt request failed.', [
-          *details,
+          ...details,
           'Run Diagnostics and resolve the failure before starting again.',
         ])
         return
