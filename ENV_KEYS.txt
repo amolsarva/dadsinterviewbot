@@ -1,3 +1,4 @@
+
 Provision these environment variables for production deployments:
 - NETLIFY_BLOBS_SITE_ID: required for Netlify blob storage access (use the UUID).
 - NETLIFY_BLOBS_STORE (optional): overrides the default blob store name.
@@ -8,3 +9,4 @@ Provision these environment variables for production deployments:
 - RESEND_API_KEY: optional; sends the summary email on finalize.
 - DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co).
 - NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI polish.
+

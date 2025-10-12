@@ -768,7 +768,10 @@ async function getNetlifyStore(): Promise<Store | null> {
     })
   }
 
-  return netlifyStore
+if (!netlifyStore) {
+  netlifyStore = getStore(config.storeName, {
+    siteID: config.siteId, // optional; Netlify injects this automatically
+  });
 }
 
 
