@@ -761,22 +761,14 @@ async function getNetlifyStore(): Promise<Store | null> {
 
   const config = await ensureCanonicalSiteId(baseConfig)
 
-  if (!netlifyStore) {
-    const options: Extract<Parameters<typeof getStore>[0], Record<string, unknown>> = {
-      name: config.storeName,
-      siteID: config.siteId,
-      apiURL: config.apiUrl,
-      edgeURL: config.edgeUrl,
-      uncachedEdgeURL: config.uncachedEdgeUrl,
-      consistency: config.consistency,
-    }
-    if (config.token?.trim()) {
-      options.token = config.token.trim()
-    }
-    netlifyStore = getStore(options as Parameters<typeof getStore>[0])
-  }
+  import { getStore } from "@netlify/blobs";
 
-  return netlifyStore
+let netlifyStore;
+
+if (!netlifyStore) {
+  netlifyStore = getStore(config.storeName, {
+    siteID: config.siteId, // optional; Netlify injects this automatically
+  });
 }
 
 function buildProxyUrl(path: string): string {
