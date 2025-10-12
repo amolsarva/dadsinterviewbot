@@ -765,6 +765,7 @@ async function getNetlifyStore(): Promise<Store | null> {
     netlifyStore = getStore({
       name: config.storeName,
       siteID: config.siteId,
+       token: config.token,
     })
   }
 
