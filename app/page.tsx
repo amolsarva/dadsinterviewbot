@@ -19,7 +19,6 @@ import {
   normalizeHandle,
   scopedStorageKey,
 } from '@/lib/user-scope'
-import { getIntroClientFallback } from '@/lib/fallback-texts'
 
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
@@ -210,6 +209,14 @@ const persistSessionId = (id: string, handle?: string | null) => {
   } catch {}
 }
 
+const clearStoredSessionId = (handle?: string | null) => {
+  if (typeof window === 'undefined') return
+  try {
+    const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
+    window.sessionStorage.removeItem(key)
+  } catch {}
+}
+
 const readEmailPreferences = (handle?: string | null) => {
   if (typeof window === 'undefined') {
     return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
@@ -283,8 +290,6 @@ const ensureSessionIdOnce = async (handle?: string | null): Promise<SessionInitR
   const result = await state.sessionStartPromise
   return result
 }
-
-const INTRO_FALLBACK = getIntroClientFallback()
 
 const STATE_VISUALS: Record<
   | 'idle'
@@ -442,6 +447,10 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const [finishRequested, setFinishRequested] = useState(false)
   const [manualStopRequested, setManualStopRequested] = useState(false)
   const [providerError, setProviderError] = useState<DiagnosticProviderErrorPayload | null>(null)
+  const [startupError, setStartupError] = useState<string | null>(null)
+  const [startupDetails, setStartupDetails] = useState<string[]>([])
+  const [fatalError, setFatalError] = useState<string | null>(null)
+  const [fatalDetails, setFatalDetails] = useState<string[]>([])
   const inTurnRef = useRef(false)
   const manualStopRef = useRef(false)
   const recorderRef = useRef<SessionRecorder | null>(null)
@@ -455,6 +464,8 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const conversationRef = useRef<SummarizableTurn[]>([])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
   const providerErrorRef = useRef<DiagnosticProviderErrorPayload | null>(null)
+  const fatalErrorRef = useRef<string | null>(null)
+  const startupErrorRef = useRef<string | null>(null)
   const accountSwitcherRef = useRef<HTMLDivElement | null>(null)
   const newUserInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -664,6 +675,14 @@ export function Home({ userHandle }: { userHandle?: string }) {
   }, [finishRequested])
 
   useEffect(() => {
+    fatalErrorRef.current = fatalError
+  }, [fatalError])
+
+  useEffect(() => {
+    startupErrorRef.current = startupError
+  }, [startupError])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     if (normalizedHandle) {
       window.localStorage.setItem(ACTIVE_USER_HANDLE_STORAGE_KEY, normalizedHandle)
@@ -681,6 +700,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
     lastLoggedHandleRef.current = normalizedHandle
     pushLog(`Viewing account: /u/${normalizedHandle}`)
   }, [normalizedHandle, pushLog])
+
+  useEffect(() => {
+    setStartupError(null)
+    setStartupDetails([])
+    setFatalError(null)
+    setFatalDetails([])
+  }, [normalizedHandle])
 
   useEffect(() => {
     if (sessionInitRef.current) return
@@ -705,6 +731,21 @@ export function Home({ userHandle }: { userHandle?: string }) {
     ensureSessionIdOnce(normalizedHandle)
       .then((result) => {
         if (cancelled) return
+        if (result.source === 'fallback') {
+          pushLog('Session start blocked: server returned fallback session id')
+          setStartupError('Session initialization blocked — diagnostics did not pass.')
+          setStartupDetails([
+            'The server returned a fallback session identifier instead of a live session.',
+            'Run Diagnostics and resolve the failing checks before starting again.',
+          ])
+          const { state } = getScopedSessionState(normalizedHandle)
+          state.inMemorySessionId = null
+          clearStoredSessionId(normalizedHandle)
+          setSessionId(null)
+          return
+        }
+        setStartupError(null)
+        setStartupDetails([])
         setSessionId(result.id)
 
         if (lastAnnouncedSessionIdRef.current === result.id) return
@@ -712,23 +753,24 @@ export function Home({ userHandle }: { userHandle?: string }) {
 
         if (result.source === 'network') {
           pushLog('Session started: ' + result.id)
-        } else if (result.source === 'fallback') {
-          pushLog('Session started (fallback): ' + result.id)
         } else {
           pushLog('Session resumed: ' + result.id)
         }
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return
-        const fallbackId = createLocalSessionId()
+        const detail = error instanceof Error ? error.message : 'Unknown error'
+        const detailMessage = truncateForLog(detail, 200)
+        pushLog('Session initialization failed: ' + detailMessage)
+        setStartupError('Session initialization failed — diagnostics required.')
+        setStartupDetails([
+          `Reason: ${detailMessage}`,
+          'Open Diagnostics and review the failing checks before retrying.',
+        ])
         const { state } = getScopedSessionState(normalizedHandle)
-        state.inMemorySessionId = fallbackId
-        persistSessionId(fallbackId, normalizedHandle)
-        setSessionId(fallbackId)
-        if (lastAnnouncedSessionIdRef.current !== fallbackId) {
-          lastAnnouncedSessionIdRef.current = fallbackId
-          pushLog('Session started (fallback): ' + fallbackId)
-        }
+        state.inMemorySessionId = null
+        clearStoredSessionId(normalizedHandle)
+        setSessionId(null)
       })
 
     return () => {
@@ -742,12 +784,9 @@ export function Home({ userHandle }: { userHandle?: string }) {
         recorderRef.current?.cancel()
       } catch {}
       recorderRef.current = null
-      if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimeoutRef.current)
-      }
-      autoAdvanceTimeoutRef.current = null
+      stopAutoAdvance()
     }
-  }, [])
+  }, [stopAutoAdvance])
 
   const ensureSessionRecorder = useCallback(async () => {
     if (typeof window === 'undefined') return null
@@ -815,49 +854,6 @@ export function Home({ userHandle }: { userHandle?: string }) {
     [],
   )
 
-  const playWithSpeechSynthesis = useCallback(
-    async (
-      text: string,
-      options?: {
-        onStart?: () => void
-      },
-    ) => {
-      if (typeof window === 'undefined') return 0
-      return await new Promise<number>((resolve) => {
-        try {
-          if (!('speechSynthesis' in window)) {
-            resolve(0)
-            return
-          }
-          const utterance = new SpeechSynthesisUtterance(text)
-          utterance.rate = 1
-          utterance.pitch = 1
-          const triggerStart = () => {
-            if (!options?.onStart) return
-            try {
-              options.onStart()
-            } catch {}
-          }
-          let started = false
-          const ensureStarted = () => {
-            if (started) return
-            started = true
-            triggerStart()
-          }
-          utterance.onstart = ensureStarted
-          utterance.onend = () => resolve(0)
-          utterance.onerror = () => resolve(0)
-          window.speechSynthesis.cancel()
-          window.speechSynthesis.speak(utterance)
-          ensureStarted()
-        } catch {
-          resolve(0)
-        }
-      })
-    },
-    [],
-  )
-
   const playAssistantResponse = useCallback(
     async (
       text: string,
@@ -903,14 +899,12 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
         return { base64: data.audioBase64, mime, durationMs }
       } catch (err) {
-        pushLog('TTS unavailable, using speech synthesis fallback')
-        const durationMs = await playWithSpeechSynthesis(text, {
-          onStart: options?.onPlaybackStart,
-        })
-        return { base64: null, mime: 'audio/mpeg', durationMs }
+        const reason = err instanceof Error ? err.message : 'tts_failed'
+        pushLog(`TTS request failed: ${truncateForLog(reason, 160)}`)
+        throw (err instanceof Error ? err : new Error(reason || 'tts_failed'))
       }
     },
-    [playWithAudioElement, playWithSpeechSynthesis, pushLog],
+    [playWithAudioElement, pushLog],
   )
 
   const finalizeNow = useCallback(async () => {
@@ -1084,13 +1078,37 @@ export function Home({ userHandle }: { userHandle?: string }) {
     } catch {}
   }, [])
 
-  const runTurnLoop = useCallback(async () => {
-    if (!sessionId) return
-    if (inTurnRef.current) return
+  const stopAutoAdvance = useCallback(() => {
     if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
       window.clearTimeout(autoAdvanceTimeoutRef.current)
-      autoAdvanceTimeoutRef.current = null
     }
+    autoAdvanceTimeoutRef.current = null
+  }, [])
+
+  const recordFatal = useCallback(
+    (message: string, details: string[] = []) => {
+      const normalized = details.filter((detail) => typeof detail === 'string' && detail.trim().length)
+      setFatalError(message)
+      setFatalDetails(normalized)
+      fatalErrorRef.current = message
+      stopAutoAdvance()
+      finishRequestedRef.current = true
+      setFinishRequested(false)
+      manualStopRef.current = false
+      setManualStopRequested(false)
+      inTurnRef.current = false
+      updateMachineState('idle')
+      pushLog(`[fatal] ${truncateForLog(message, 200)}`)
+      normalized.forEach((detail) => pushLog(`[fatal] detail → ${truncateForLog(detail, 200)}`))
+    },
+    [pushLog, stopAutoAdvance, updateMachineState],
+  )
+
+  const runTurnLoop = useCallback(async () => {
+    if (!sessionId) return
+    if (startupErrorRef.current || fatalErrorRef.current) return
+    if (inTurnRef.current) return
+    stopAutoAdvance()
     inTurnRef.current = true
     manualStopRef.current = false
     setManualStopRequested(false)
@@ -1183,13 +1201,10 @@ export function Home({ userHandle }: { userHandle?: string }) {
       pushLog('Recording stopped → thinking')
       updateMachineState('thinking')
 
-      let askRes: AskResponse = {
-        reply: 'Tell me one small detail you remember from that moment.',
-        transcript: '',
-        end_intent: false,
-      }
+      let askRes: AskResponse | null = null
       let askResStatus: number | null = null
       let providerErrorForTurn: DiagnosticProviderErrorPayload | null = null
+      let askRawSnippet = ''
       try {
         const res = await fetch('/api/ask-audio', {
           method: 'POST',
@@ -1198,23 +1213,32 @@ export function Home({ userHandle }: { userHandle?: string }) {
         })
         askResStatus = res.status
         const rawText = await res.text()
-        let parsed: AskResponse | null = null
-        if (rawText && rawText.length) {
-          try {
-            parsed = JSON.parse(rawText) as AskResponse
-          } catch {
-            parsed = null
-          }
-        }
-        if (parsed && typeof parsed === 'object') {
-          askRes = parsed
-        }
+        askRawSnippet = rawText ? truncateForLog(rawText, 200) : ''
         if (!res.ok) {
           providerErrorForTurn = {
             status: askResStatus,
             message: res.statusText || 'ask-audio request failed',
-            reason: askRes?.debug?.reason || 'ask_audio_http_error',
-            snippet: rawText ? truncateForLog(rawText, 200) : undefined,
+            reason: 'ask_audio_http_error',
+            snippet: askRawSnippet || undefined,
+            at: new Date().toISOString(),
+          }
+        } else if (rawText && rawText.length) {
+          try {
+            askRes = JSON.parse(rawText) as AskResponse
+          } catch {
+            providerErrorForTurn = {
+              status: askResStatus,
+              message: 'ask-audio returned invalid JSON',
+              reason: 'ask_audio_invalid_json',
+              snippet: askRawSnippet || undefined,
+              at: new Date().toISOString(),
+            }
+          }
+        } else {
+          providerErrorForTurn = {
+            status: askResStatus,
+            message: 'ask-audio returned an empty response',
+            reason: 'ask_audio_empty_response',
             at: new Date().toISOString(),
           }
         }
@@ -1227,10 +1251,36 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
       }
 
-      const reply: string = askRes?.reply || 'Tell me one small detail you remember from that moment.'
+      const turnNumber = currentTurnNumber
+
+      if (!askRes) {
+        const detailParts: string[] = []
+        if (typeof providerErrorForTurn?.status === 'number') {
+          detailParts.push(`Status: ${providerErrorForTurn.status}`)
+        }
+        if (providerErrorForTurn?.message) {
+          detailParts.push(`Message: ${truncateForLog(providerErrorForTurn.message, 160)}`)
+        }
+        if (askRawSnippet) {
+          detailParts.push(`Response: ${askRawSnippet}`)
+        }
+        if (!detailParts.length) {
+          detailParts.push('ask-audio returned no usable reply.')
+        }
+        if (providerErrorForTurn) {
+          providerErrorRef.current = { ...providerErrorForTurn, resolved: false }
+          setProviderError(providerErrorRef.current)
+          publishProviderError(providerErrorRef.current)
+          pushLog(`[turn ${turnNumber}] Provider error flagged → ${providerErrorForTurn.status ? `HTTP ${providerErrorForTurn.status}` : 'request failed'} [${providerErrorForTurn.reason || 'unknown'}] ${truncateForLog(providerErrorForTurn.message || '', 160)}`)
+        }
+        const fatalDetails = [...detailParts, 'Resolve diagnostics before continuing.']
+        recordFatal('Turn failed — assistant reply unavailable.', fatalDetails)
+        return
+      }
+
+      const rawReply = typeof askRes.reply === 'string' ? askRes.reply.trim() : ''
       const transcript: string = askRes?.transcript || ''
       const endIntent: boolean = askRes?.end_intent === true
-      const turnNumber = currentTurnNumber
       const askDebug = askRes?.debug
       const providerStatus = typeof askDebug?.providerStatus === 'number' ? askDebug.providerStatus : null
       const providerErrorMessage =
@@ -1290,6 +1340,31 @@ export function Home({ userHandle }: { userHandle?: string }) {
         }
         setProviderError(null)
       }
+      if (askDebug?.usedFallback) {
+        const fallbackDetails: string[] = []
+        if (askDebug.reason) {
+          fallbackDetails.push(`Reason: ${truncateForLog(askDebug.reason, 160)}`)
+        }
+        if (askDebug.providerResponseSnippet) {
+          fallbackDetails.push(`Provider snippet: ${truncateForLog(askDebug.providerResponseSnippet, 200)}`)
+        }
+        fallbackDetails.push('Resolve diagnostics before continuing.')
+        recordFatal('Turn failed — provider fallback triggered.', fallbackDetails)
+        return
+      }
+
+      if (!rawReply) {
+        const missingDetails: string[] = []
+        if (askDebug?.providerResponseSnippet) {
+          missingDetails.push(`Provider snippet: ${truncateForLog(askDebug.providerResponseSnippet, 200)}`)
+        }
+        missingDetails.push('Resolve diagnostics before continuing.')
+        recordFatal('Turn failed — assistant reply missing.', missingDetails)
+        return
+      }
+
+      const reply = rawReply
+
       if (askDebug?.memory) {
         const memoryParts: string[] = []
         memoryParts.push(`prior sessions: ${askDebug.memory.hasPriorSessions ? 'yes' : 'no'}`)
@@ -1408,11 +1483,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
         if (!playbackStarted) {
           updateMachineState('playing')
         }
-      } catch {
-        if (!playbackStarted) {
-          updateMachineState('playing')
-        }
-        assistantPlayback = { base64: null, mime: 'audio/mpeg', durationMs: 0 }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'Unknown TTS error'
+        recordFatal('Turn failed — text-to-speech unavailable.', [
+          `Reason: ${truncateForLog(reason, 160)}`,
+          'Review the text-to-speech diagnostics before retrying.',
+        ])
+        return
       }
 
       const persistPromises: Promise<any>[] = []
@@ -1449,9 +1526,37 @@ export function Home({ userHandle }: { userHandle?: string }) {
           body: JSON.stringify({ role: 'assistant', text: reply || '' }),
         }),
       )
+      let persistResults: PromiseSettledResult<any>[] = []
       try {
-        await Promise.allSettled(persistPromises)
-      } catch {}
+        persistResults = await Promise.allSettled(persistPromises)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'Unknown persistence error'
+        recordFatal('Turn failed — unable to save the conversation.', [
+          `Reason: ${truncateForLog(reason, 160)}`,
+          'Resolve diagnostics before continuing.',
+        ])
+        return
+      }
+      const persistFailures: string[] = []
+      for (const result of persistResults) {
+        if (result.status === 'rejected') {
+          const reason = result.reason instanceof Error ? result.reason.message : String(result.reason ?? 'unknown error')
+          persistFailures.push(`Rejected: ${truncateForLog(reason, 160)}`)
+          continue
+        }
+        const response = result.value
+        if (response && typeof response.ok === 'boolean' && !response.ok) {
+          const statusLabel = typeof response.status === 'number' ? `HTTP ${response.status}` : 'non-OK response'
+          persistFailures.push(`${statusLabel} while saving turn`)
+        }
+      }
+      if (persistFailures.length) {
+        recordFatal('Turn failed — saving data was unsuccessful.', [
+          ...persistFailures,
+          'Resolve diagnostics before continuing.',
+        ])
+        return
+      }
 
       const nextTurn = turn + 1
       setTurn(nextTurn)
@@ -1474,19 +1579,22 @@ export function Home({ userHandle }: { userHandle?: string }) {
         await finalizeNow()
       } else {
         updateMachineState('readyToContinue')
-        if (!finishRequestedRef.current && typeof window !== 'undefined') {
-          if (autoAdvanceTimeoutRef.current !== null) {
-            window.clearTimeout(autoAdvanceTimeoutRef.current)
-          }
+        if (
+          !finishRequestedRef.current &&
+          !fatalErrorRef.current &&
+          !startupErrorRef.current &&
+          typeof window !== 'undefined'
+        ) {
+          stopAutoAdvance()
           autoAdvanceTimeoutRef.current = window.setTimeout(() => {
             autoAdvanceTimeoutRef.current = null
-            if (!finishRequestedRef.current) {
+            if (!finishRequestedRef.current && !fatalErrorRef.current && !startupErrorRef.current) {
               runTurnLoop().catch(() => {})
             }
           }, 700)
         }
       }
-    } catch (e) {
+    } catch (error) {
       if (diagnosticSynopsis) {
         publishTranscriptSynopsis({
           ...diagnosticSynopsis,
@@ -1494,11 +1602,11 @@ export function Home({ userHandle }: { userHandle?: string }) {
           reason: diagnosticSynopsis.reason || 'turn_error',
         })
       }
-      pushLog('There was a problem saving or asking. Check /api/health and env keys.')
-      inTurnRef.current = false
-      manualStopRef.current = false
-      setManualStopRequested(false)
-      updateMachineState('readyToContinue')
+      const reason = error instanceof Error ? error.message : 'Unknown turn error'
+      recordFatal('Turn failed — unexpected error occurred.', [
+        `Reason: ${truncateForLog(reason, 160)}`,
+        'Resolve diagnostics before continuing.',
+      ])
     }
   }, [
     MAX_TURNS,
@@ -1508,7 +1616,11 @@ export function Home({ userHandle }: { userHandle?: string }) {
     publishTranscriptSynopsis,
     playAssistantResponse,
     pushLog,
+    recordFatal,
     sessionId,
+    startupErrorRef,
+    stopAutoAdvance,
+    fatalErrorRef,
     turn,
     updateMachineState,
   ])
@@ -1516,6 +1628,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const startSession = useCallback(async () => {
     if (hasStarted) return
     if (!sessionId) return
+    if (startupErrorRef.current || fatalErrorRef.current) return
     conversationRef.current = []
     setFinishRequested(false)
     finishRequestedRef.current = false
@@ -1533,8 +1646,10 @@ export function Home({ userHandle }: { userHandle?: string }) {
         await new Promise((resolve) => setTimeout(resolve, waitMs))
       }
     }
+
     let introMessage = ''
-    let introSource: 'model' | 'fallback' = 'model'
+    let introDebug: IntroDebugPayload | null = null
+
     try {
       try {
         await ensureSessionRecorder()
@@ -1542,138 +1657,156 @@ export function Home({ userHandle }: { userHandle?: string }) {
         pushLog('Session recorder unavailable; proceeding without combined audio')
       }
 
-      try {
-        const res = await fetch(`/api/session/${sessionId}/intro`, { method: 'POST' })
-        const json = (await res.json().catch(() => null)) as IntroResponse | null
-        if (res.ok && typeof json?.message === 'string' && json.message.trim().length) {
-          introMessage = json.message.trim()
+      const res = await fetch(`/api/session/${sessionId}/intro`, { method: 'POST' })
+      const json = (await res.json().catch(() => null)) as IntroResponse | null
+      if (!res.ok) {
+        const snippet = json ? truncateForLog(JSON.stringify(json), 200) : ''
+        const details: string[] = [`Status: ${res.status}`]
+        if (snippet) {
+          details.push(`Body: ${snippet}`)
         }
-        introSource = json?.fallback ? 'fallback' : 'model'
-        if (json?.debug) {
-          const parts: string[] = []
-          if (json.debug.hasPriorSessions) {
-            const sessionCount = typeof json.debug.sessionCount === 'number' ? json.debug.sessionCount : undefined
-            parts.push(`history sessions: ${sessionCount ? String(sessionCount) : 'yes'}`)
-          } else {
-            parts.push('history sessions: none yet')
-          }
-          const rememberedDetails = formatPreviewList(json.debug.rememberedDetails, 3)
-          if (rememberedDetails) {
-            parts.push(`details: ${rememberedDetails}`)
-          }
-          const rememberedTitles = formatPreviewList(json.debug.rememberedTitles, 3)
-          if (rememberedTitles) {
-            parts.push(`titles: ${rememberedTitles}`)
-          }
-          if (json.debug.fallbackQuestion && json.debug.fallbackQuestion.trim().length) {
-            parts.push(`fallback question: ${truncateForLog(json.debug.fallbackQuestion, 120)}`)
-          }
-          if (parts.length) {
-            pushLog(`[init] Memory snapshot → ${parts.join(' · ')}`)
-          }
-          if (json.debug.askedQuestionsPreview && json.debug.askedQuestionsPreview.length) {
-            const avoidList = formatPreviewList(json.debug.askedQuestionsPreview, 4)
-            if (avoidList) {
-              pushLog(`[init] Avoid repeating → ${avoidList}`)
-            }
-          }
-          if (json.debug.primerPreview) {
-            pushLog(`[init] Primer preview → ${truncateForLog(json.debug.primerPreview, 180)}`)
-          }
-        }
-        if (json?.reason) {
-          pushLog(`[init] Intro fallback reason → ${truncateForLog(json.reason, 160)}`)
-        }
-        if (json?.fallback === true && !introMessage) {
-          pushLog('[init] Intro response fell back to default prompt')
-        }
-      } catch (err) {
-        pushLog('Intro prompt unavailable; using fallback greeting')
-        introSource = 'fallback'
+        recordFatal('Intro prompt request failed.', [
+          *details,
+          'Run Diagnostics and resolve the failure before starting again.',
+        ])
+        return
       }
-
-      if (!introMessage) {
-        introMessage = INTRO_FALLBACK
-        introSource = 'fallback'
+      if (json?.fallback) {
+        const details: string[] = []
+        if (json.reason) {
+          details.push(`Reason: ${truncateForLog(json.reason, 160)}`)
+        }
+        if (json?.debug?.fallbackQuestion) {
+          details.push(`Fallback question: ${truncateForLog(json.debug.fallbackQuestion, 160)}`)
+        }
+        details.push('Resolve diagnostics before continuing.')
+        recordFatal('Intro prompt returned fallback copy.', details)
+        return
       }
+      if (!json || typeof json.message !== 'string' || !json.message.trim().length) {
+        recordFatal('Intro prompt returned an empty message.', [
+          'The assistant cannot begin without a scripted welcome.',
+        ])
+        return
+      }
+      introMessage = json.message.trim()
+      introDebug = json.debug ?? null
 
-      pushLog(`[init] Intro message (${introSource}): ${truncateForLog(introMessage, 220)}`)
+      if (introDebug) {
+        const parts: string[] = []
+        if (introDebug.hasPriorSessions) {
+          const sessionCount = (
+            typeof introDebug.sessionCount === 'number' ? introDebug.sessionCount : undefined
+          )
+          parts.push(`history sessions: ${sessionCount ? String(sessionCount) : 'yes'}`)
+        } else {
+          parts.push('history sessions: none yet')
+        }
+        const rememberedDetails = formatPreviewList(introDebug.rememberedDetails, 3)
+        if (rememberedDetails) {
+          parts.push(`details: ${rememberedDetails}`)
+        }
+        const rememberedTitles = formatPreviewList(introDebug.rememberedTitles, 3)
+        if (rememberedTitles) {
+          parts.push(`titles: ${rememberedTitles}`)
+        }
+        if (parts.length) {
+          pushLog(`[init] Memory snapshot → ${parts.join(' · ')}`)
+        }
+        if (introDebug.askedQuestionsPreview && introDebug.askedQuestionsPreview.length) {
+          const avoidList = formatPreviewList(introDebug.askedQuestionsPreview, 4)
+          if (avoidList) {
+            pushLog(`[init] Avoid repeating → ${avoidList}`)
+          }
+        }
+        if (introDebug.primerPreview) {
+          pushLog(`[init] Primer preview → ${truncateForLog(introDebug.primerPreview, 180)}`)
+        }
+        if (introDebug.fallbackQuestion) {
+          pushLog(`[init] Primer fallback candidate → ${truncateForLog(introDebug.fallbackQuestion, 120)}`)
+        }
+      }
+      if (json?.reason) {
+        pushLog(`[init] Intro diagnostic note → ${truncateForLog(json.reason, 160)}`)
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Unknown intro error'
+      recordFatal('Intro preparation failed.', [
+        `Reason: ${truncateForLog(reason, 160)}`,
+        'Check diagnostics and try again.',
+      ])
+      return
+    }
 
-      conversationRef.current.push({ role: 'assistant', text: introMessage })
+    pushLog(`[init] Intro message (model): ${truncateForLog(introMessage, 220)}`)
+    conversationRef.current.push({ role: 'assistant', text: introMessage })
 
-      try {
-        await fetch(`/api/session/${sessionId}/turn`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ role: 'assistant', text: introMessage }),
-        })
-      } catch {}
+    try {
+      await fetch(`/api/session/${sessionId}/turn`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'assistant', text: introMessage }),
+      })
+    } catch {}
 
-      await ensureIntroDelay()
-      pushLog('Intro message ready → playing')
-      let introPlaybackStarted = false
-      updateMachineState('speakingPrep')
-      try {
-        await playAssistantResponse(introMessage, {
-          onPlaybackStart: () => {
-            introPlaybackStarted = true
-            updateMachineState('playing')
-          },
-        })
-      } catch {
-        try {
-          await playWithSpeechSynthesis(introMessage, {
-            onStart: () => {
-              introPlaybackStarted = true
-              updateMachineState('playing')
-            },
-          })
-        } catch {}
-      } finally {
-        if (!introPlaybackStarted) {
+    await ensureIntroDelay()
+    pushLog('Intro message ready → playing')
+    let introPlaybackStarted = false
+    updateMachineState('speakingPrep')
+    try {
+      await playAssistantResponse(introMessage, {
+        onPlaybackStart: () => {
+          introPlaybackStarted = true
           updateMachineState('playing')
+        },
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Unknown TTS error'
+      recordFatal('Intro playback failed.', [
+        `Reason: ${truncateForLog(reason, 160)}`,
+        'Review the text-to-speech diagnostics before retrying.',
+      ])
+      return
+    }
+
+    if (!introPlaybackStarted) {
+      updateMachineState('playing')
+    }
+
+    if (fatalErrorRef.current || startupErrorRef.current) {
+      return
+    }
+
+    if (!finishRequestedRef.current) {
+      updateMachineState('readyToContinue')
+    }
+
+    if (
+      !finishRequestedRef.current &&
+      !fatalErrorRef.current &&
+      !startupErrorRef.current &&
+      typeof window !== 'undefined'
+    ) {
+      stopAutoAdvance()
+      autoAdvanceTimeoutRef.current = window.setTimeout(() => {
+        autoAdvanceTimeoutRef.current = null
+        if (!finishRequestedRef.current && !fatalErrorRef.current && !startupErrorRef.current) {
+          runTurnLoop().catch(() => {})
         }
-      }
-    } catch {
-      await ensureIntroDelay()
-      let introFallbackStarted = false
-      updateMachineState('speakingPrep')
-      try {
-        await playWithSpeechSynthesis(INTRO_FALLBACK, {
-          onStart: () => {
-            introFallbackStarted = true
-            updateMachineState('playing')
-          },
-        })
-      } catch {}
-      if (!introFallbackStarted) {
-        updateMachineState('playing')
-      }
-    } finally {
-      if (!finishRequestedRef.current) {
-        updateMachineState('readyToContinue')
-      }
-      if (!finishRequestedRef.current && typeof window !== 'undefined') {
-        if (autoAdvanceTimeoutRef.current !== null) {
-          window.clearTimeout(autoAdvanceTimeoutRef.current)
-        }
-        autoAdvanceTimeoutRef.current = window.setTimeout(() => {
-          autoAdvanceTimeoutRef.current = null
-          if (!finishRequestedRef.current) {
-            runTurnLoop().catch(() => {})
-          }
-        }, 700)
-      }
+      }, 700)
     }
   }, [
     ensureSessionRecorder,
     hasStarted,
     manualStopRef,
     playAssistantResponse,
-    playWithSpeechSynthesis,
     pushLog,
+    recordFatal,
     runTurnLoop,
     sessionId,
+    startupErrorRef,
+    stopAutoAdvance,
+    fatalErrorRef,
     updateMachineState,
   ])
 
@@ -1692,14 +1825,16 @@ export function Home({ userHandle }: { userHandle?: string }) {
   useEffect(() => {
     if (!sessionId) return
     if (hasStarted) return
+    if (startupError || fatalError) return
     startSession().catch(() => {})
-  }, [hasStarted, sessionId, startSession])
+  }, [fatalError, hasStarted, sessionId, startSession, startupError])
 
   const handleHeroPress = useCallback(() => {
+    if (startupError || fatalError) return
     if (machineState === 'recording') {
       requestManualStop()
     }
-  }, [machineState, requestManualStop])
+  }, [fatalError, machineState, requestManualStop, startupError])
 
   const visual = STATE_VISUALS[machineState] ?? STATE_VISUALS.idle
   const isInitialState = !hasStarted && machineState === 'idle'
@@ -1748,6 +1883,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
     '--hero-accent': heroTone.accent,
     '--hero-gradient': heroTone.gradient,
   } as CSSProperties
+  const heroDisabled = Boolean(startupError || fatalError)
   const heroButtonClasses = ['hero-button']
   if (finishRequested) {
     heroButtonClasses.push('is-finishing')
@@ -1755,6 +1891,9 @@ export function Home({ userHandle }: { userHandle?: string }) {
     heroButtonClasses.push('is-stopping')
   } else if (machineState === 'recording') {
     heroButtonClasses.push('is-recording')
+  }
+  if (heroDisabled) {
+    heroButtonClasses.push('is-disabled')
   }
   const heroAriaLabel = finishRequested
     ? 'Wrapping up the session'
@@ -1768,6 +1907,12 @@ export function Home({ userHandle }: { userHandle?: string }) {
             ? 'Preparing to speak'
             : 'Session status indicator'
   const statusMessage = (() => {
+    if (startupError) {
+      return 'Startup blocked—resolve Diagnostics before beginning.'
+    }
+    if (fatalError) {
+      return 'Session halted—review Diagnostics for details.'
+    }
     if (!hasStarted) {
       return 'Let me welcome you first—I’ll begin automatically.'
     }
@@ -1798,7 +1943,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
   })()
 
   const showSkipButton =
-    !finishRequested && machineState === 'recording' && !manualStopRequested && hasStarted
+    !heroDisabled && !finishRequested && machineState === 'recording' && !manualStopRequested && hasStarted
   const statusHint = manualStopRequested
     ? 'Next queued — finishing this turn…'
     : showSkipButton
@@ -1954,12 +2099,49 @@ export function Home({ userHandle }: { userHandle?: string }) {
             )}
           </div>
         )}
+        {startupError && (
+          <div className="alert-banner alert-banner--error" role="alert">
+            <div className="alert-banner__title">🚫 Startup blocked</div>
+            <div className="alert-banner__message">{startupError}</div>
+            {startupDetails.length ? (
+              <div className="alert-banner__details">
+                {startupDetails.map((detail, index) => (
+                  <div key={`startup-detail-${index}`}>• {detail}</div>
+                ))}
+              </div>
+            ) : null}
+            <div className="alert-banner__meta">
+              <a className="link" href={diagnosticsHref}>
+                Open diagnostics
+              </a>
+            </div>
+          </div>
+        )}
+        {fatalError && (
+          <div className="alert-banner alert-banner--error" role="alert">
+            <div className="alert-banner__title">🛑 Session halted</div>
+            <div className="alert-banner__message">{fatalError}</div>
+            {fatalDetails.length ? (
+              <div className="alert-banner__details">
+                {fatalDetails.map((detail, index) => (
+                  <div key={`fatal-detail-${index}`}>• {detail}</div>
+                ))}
+              </div>
+            ) : null}
+            <div className="alert-banner__meta">
+              <a className="link" href={diagnosticsHref}>
+                Review diagnostics
+              </a>
+            </div>
+          </div>
+        )}
         <button
           type="button"
           onClick={handleHeroPress}
           className={heroButtonClasses.join(' ')}
           aria-label={heroAriaLabel}
           style={heroStyles}
+          disabled={heroDisabled}
         >
           <span className="hero-button__gradient" aria-hidden="true" />
           <span className="hero-button__pulse" aria-hidden="true" />
@@ -2014,7 +2196,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           {machineState !== 'doneSuccess' && (
             <button
               onClick={requestFinish}
-              disabled={!hasStarted || finishRequested}
+              disabled={heroDisabled || !hasStarted || finishRequested}
               className="btn-outline"
             >
               I’m finished
