@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { BLOB_PROXY_PREFIX, readBlob } from '@/lib/blob'
+import { BLOB_PROXY_PREFIX, deleteBlob, putBlobFromBuffer, readBlob } from '@/lib/blob'
 
 function extractPath(params: { path?: string[] | string }): string {
   const raw = params?.path
@@ -67,4 +67,75 @@ export async function HEAD(_req: NextRequest, { params }: { params: { path?: str
   const path = extractPath(params)
   const download = _req.nextUrl.searchParams.has('download')
   return handleBlobRequest(path, download, false)
+}
+
+export async function PUT(req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+  const path = extractPath(params)
+  if (!path) {
+    return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
+  }
+
+  const arrayBuffer = await req.arrayBuffer()
+  if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength === 0) {
+    return NextResponse.json({ ok: false, reason: 'missing body' }, { status: 400 })
+  }
+
+  const contentType = req.headers.get('content-type') || 'application/octet-stream'
+  const cacheControlHeader = req.headers.get('cache-control') || undefined
+  const explicitMaxAge = req.headers.get('x-cache-control-max-age')
+
+  let cacheControlMaxAge: number | undefined
+  if (explicitMaxAge) {
+    const parsed = Number.parseInt(explicitMaxAge, 10)
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      cacheControlMaxAge = parsed
+    }
+  } else if (cacheControlHeader) {
+    const match = /max-age\s*=\s*(\d+)/i.exec(cacheControlHeader)
+    if (match) {
+      const parsed = Number.parseInt(match[1], 10)
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        cacheControlMaxAge = parsed
+      }
+    }
+  }
+
+  const buffer = Buffer.from(arrayBuffer)
+
+  try {
+    const result = await putBlobFromBuffer(path, buffer, contentType, {
+      cacheControlMaxAge,
+    })
+    const response = NextResponse.json({ ok: true, url: result.url, downloadUrl: result.downloadUrl }, { status: 201 })
+    if (result.url) {
+      response.headers.set('Location', result.url)
+    }
+    if (cacheControlHeader) {
+      response.headers.set('Cache-Control', cacheControlHeader)
+    }
+    return response
+  } catch (error: any) {
+    const status = typeof error?.status === 'number' && error.status >= 400 ? error.status : 500
+    const message = typeof error?.message === 'string' && error.message.length ? error.message : 'failed to upload blob'
+    return NextResponse.json({ ok: false, reason: message }, { status })
+  }
+}
+
+export async function DELETE(_req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+  const path = extractPath(params)
+  if (!path) {
+    return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
+  }
+
+  try {
+    const deleted = await deleteBlob(path)
+    if (!deleted) {
+      return NextResponse.json({ ok: false, reason: 'not found' }, { status: 404 })
+    }
+    return new NextResponse(null, { status: 204 })
+  } catch (error: any) {
+    const status = typeof error?.status === 'number' && error.status >= 400 ? error.status : 500
+    const message = typeof error?.message === 'string' && error.message.length ? error.message : 'failed to delete blob'
+    return NextResponse.json({ ok: false, reason: message }, { status })
+  }
 }
