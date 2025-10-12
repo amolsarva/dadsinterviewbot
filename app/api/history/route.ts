@@ -75,21 +75,7 @@ export async function GET(request: Request) {
   }
 
   rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  // DEMO: merge client-stored demoHistory (if any) as minimal entries
-  let demo: any[] = []
-  try {
-    const raw = (globalThis as any)?.localStorage?.getItem?.('demoHistory')
-    if (raw) demo = JSON.parse(raw)
-  } catch {}
-  const demoRows = (demo || []).map((d: any) => ({
-    id: d.id,
-    created_at: d.created_at,
-    title: typeof d.title === 'string' && d.title.length ? d.title : null,
-    status: 'completed',
-    total_turns: 1,
-    artifacts: { transcript_txt: null, transcript_json: null },
-  }))
-  return NextResponse.json({ items: [...demoRows, ...rows] })
+  return NextResponse.json({ items: rows })
 }
 
 export async function DELETE(request: Request) {

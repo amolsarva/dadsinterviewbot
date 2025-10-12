@@ -5,12 +5,11 @@ import { useRouter } from 'next/navigation'
 import { useInterviewMachine } from '@/lib/machine'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
-import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
+import { SummarizableTurn } from '@/lib/session-title'
 import { detectCompletionIntent } from '@/lib/intents'
 import {
   ACTIVE_USER_HANDLE_STORAGE_KEY,
   DEFAULT_NOTIFY_EMAIL,
-  DEMO_HISTORY_BASE_KEY,
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
   KNOWN_USER_HANDLES_STORAGE_KEY,
@@ -20,7 +19,7 @@ import {
   normalizeHandle,
   scopedStorageKey,
 } from '@/lib/user-scope'
-import { getIntroClientFallback, formatSessionTitleFallback } from '@/lib/fallback-texts'
+import { getIntroClientFallback } from '@/lib/fallback-texts'
 
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
@@ -1047,18 +1046,6 @@ export function Home({ userHandle }: { userHandle?: string }) {
       }
 
       if (!memOk) throw new Error('Finalize failed')
-
-      try {
-        const historyKey = scopedStorageKey(DEMO_HISTORY_BASE_KEY, normalizedHandle)
-        const demo = JSON.parse(localStorage.getItem(historyKey) || '[]')
-        const stamp = new Date().toISOString()
-        const summaryTitle =
-          generateSessionTitle(conversationRef.current, {
-            fallback: formatSessionTitleFallback(stamp),
-          }) || null
-        demo.unshift({ id: sessionId, created_at: stamp, title: summaryTitle })
-        localStorage.setItem(historyKey, JSON.stringify(demo.slice(0, 50)))
-      } catch {}
 
       toDone()
     } catch {
