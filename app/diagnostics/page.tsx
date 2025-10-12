@@ -50,6 +50,34 @@ type DeploymentSnapshot = {
   netlifySiteUrl?: string
 }
 
+type BlobFlowStep = {
+  id: string
+  label: string
+  ok: boolean
+  optional?: boolean
+  skipped?: boolean
+  method?: string
+  url?: string
+  status?: number
+  durationMs?: number
+  message?: string
+  note?: string
+  error?: string
+  responseSnippet?: string
+}
+
+type BlobFlowDiagnostics = {
+  ok: boolean
+  probeId?: string
+  startedAt?: string
+  origin?: string
+  sdkPath?: string
+  sdkUrl?: string
+  sitePutPath?: string
+  directApiPath?: string
+  steps: BlobFlowStep[]
+}
+
 const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
 const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
@@ -367,6 +395,26 @@ function formatSummary(key: TestKey, data: any): string {
       }
       if (Array.isArray(diagnostics.missing) && diagnostics.missing.length) {
         detailParts.push(`missing: ${diagnostics.missing.join(', ')}`)
+      }
+    }
+    const flow: BlobFlowDiagnostics | undefined = Array.isArray(data?.flow?.steps)
+      ? (data.flow as BlobFlowDiagnostics)
+      : undefined
+    if (flow && Array.isArray(flow.steps) && flow.steps.length) {
+      const stepSummary = flow.steps.map(step => {
+        const status = typeof step.status === 'number' ? ` ${step.status}` : ''
+        const method = step.method ? `${step.method} ` : ''
+        const flag = step.skipped ? '⏭️' : step.ok ? '✅' : '❌'
+        return `${flag} ${method}${step.id || step.label || 'step'}${status}`
+      })
+      detailParts.push(`flow: ${stepSummary.join(' · ')}`)
+      if (!flow.ok) {
+        const failingStep = flow.steps.find(step => !step.ok && !step.optional && !step.skipped)
+        if (failingStep) {
+          const label = failingStep.label || failingStep.id || 'unknown step'
+          const status = typeof failingStep.status === 'number' ? ` (HTTP ${failingStep.status})` : ''
+          detailParts.push(`flow failure: ${label}${status}`)
+        }
       }
     }
     const healthDetails = data?.health?.details
@@ -776,6 +824,31 @@ export default function DiagnosticsPage() {
               append('***KEY NETFLIFY ITEMS***')
               diagnosticsSummary.forEach(line => append(line))
               append('***KEY NETFLIFY ITEMS***')
+            }
+            const flow = parsed?.flow as BlobFlowDiagnostics | undefined
+            if (flow && Array.isArray(flow.steps) && flow.steps.length) {
+              append('***BLOB FLOW STEPS***')
+              const contextParts: string[] = []
+              if (flow.probeId) contextParts.push(`probe=${flow.probeId}`)
+              if (flow.sdkPath) contextParts.push(`sdk_path=${flow.sdkPath}`)
+              if (flow.sitePutPath) contextParts.push(`site_put_path=${flow.sitePutPath}`)
+              if (flow.directApiPath) contextParts.push(`direct_api_path=${flow.directApiPath}`)
+              if (flow.origin) contextParts.push(`origin=${flow.origin}`)
+              if (contextParts.length) {
+                append(`[blob-flow] Context → ${contextParts.join(' · ')}`)
+              }
+              flow.steps.forEach(step => {
+                const flag = step.skipped ? '⏭️' : step.ok ? '✅' : '❌'
+                const method = step.method ? `${step.method} ` : ''
+                const status = typeof step.status === 'number' ? ` (HTTP ${step.status})` : ''
+                const url = step.url ? ` → ${step.url}` : ''
+                const duration = typeof step.durationMs === 'number' ? ` · ${step.durationMs}ms` : ''
+                const note = step.note ? ` · note: ${step.note}` : ''
+                const error = step.error ? ` · error: ${step.error}` : ''
+                const body = step.responseSnippet ? ` · body: ${step.responseSnippet}` : ''
+                append(`${flag} ${method}${step.label || step.id}${status}${url}${duration}${note}${error}${body}`)
+              })
+              append('***BLOB FLOW STEPS***')
             }
           }
         } else {
