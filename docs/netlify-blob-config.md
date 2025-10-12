@@ -1,6 +1,6 @@
 # Netlify Blob Storage Configuration Checklist
 
-Use this walkthrough to verify the blob configuration items that cause 405 errors when uploads run from the app. Complete each step in order so you know the store, token, and site wiring all match.
+Use this walkthrough to verify the blob configuration items that cause 405 errors when uploads run from the app. Complete each step in order so you know the store and site wiring all match.
 
 ## 1. Confirm the blob store exists and matches the configured name
 1. Sign in to [Netlify](https://app.netlify.com/) and open your team dashboard.
@@ -8,18 +8,16 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 3. Locate the store named `dads-interview-bot`. If it is missing, click **Create blob store**, enter `dads-interview-bot`, and finish the wizard. If you already use a different store name, note the exact value—you must copy it into `NETLIFY_BLOBS_STORE`.
 4. When the store is present, open it and copy its **Store name** and **Store ID** for reference.
 
-## 2. Generate a token with blob write scope
-1. While still in the Netlify app, click your avatar (top-right) and choose **User settings**.
-2. Go to **Applications** ➜ **Personal access tokens**, then press **New access token**.
-3. Give the token a descriptive label (for example, “Dads Interview Bot Blobs”).
-4. In the scopes list, enable **Blobs: Read and write** (or **Full access** if you prefer), then create the token.
-5. Copy the generated token immediately. In your deployment environment, set the `NETLIFY_BLOBS_TOKEN` secret to this value.
+## 2. Let Netlify inject the blob credentials automatically
+1. Delete any `NETLIFY_BLOBS_TOKEN` you previously defined in the Netlify UI. The runtime now asks Netlify to inject an internal JWT during each request, so manual tokens are no longer necessary for app-managed writes.
+2. Keep `NETLIFY_BLOBS_STORE` (if you override the default) and `NETLIFY_BLOBS_SITE_ID` configured as before. These settings still inform the runtime which store and site to target.
+3. Only generate a personal access token if you need to write to Blobs from an external script or CLI. In that case you can continue to create a token with **Blobs: Read and write** scope and use it with the Netlify REST API instead of the in-app SDK.
 
-## 3. Link the token to the correct site ID
+## 3. Link the site ID
 1. From the Netlify dashboard, open the **Sites** tab and select the site that hosts this app.
 2. On the site overview page, scroll to **Site information** and expand it to reveal the **API ID** (UUID). This is Netlify’s canonical Site ID.
 3. Copy the API ID and set it as `NETLIFY_BLOBS_SITE_ID` in your environment. Using the UUID skips the slug lookup path that requires additional REST permissions.
-4. If you can only supply a site slug, keep `NETLIFY_BLOBS_SITE_SLUG` populated *and* ensure the token from step 2 has access to the Sites API. Otherwise, the app cannot resolve the slug before writing to blobs.
+4. If you can only supply a site slug, keep `NETLIFY_BLOBS_SITE_SLUG` populated *and* temporarily define a `NETLIFY_BLOBS_TOKEN` with Sites API scope. The runtime needs it only long enough to resolve the slug to a UUID; once the diagnostics confirm the canonical Site ID you can remove the token again.
 
 ## 4. Validate optional URL overrides (if any)
 1. Only follow this step if you have provided `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_API_URL`, or similar overrides.

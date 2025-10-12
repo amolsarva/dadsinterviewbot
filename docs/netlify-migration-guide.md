@@ -20,18 +20,17 @@ This project already builds with `next build`/`next start` and exposes every ser
 
 ## 3. Provision Netlify Blobs
 1. In the site dashboard, open **Storage → Blobs** and create (or note) the store name. The repo defaults to `dads-interview-bot`; feel free to keep it.
-2. Generate an access token with write scope.
-3. Copy the **Site ID** from **Site settings → General → Site details**.
+2. Copy the **Site ID** from **Site settings → General → Site details**.
+3. (Optional) If you need to drive uploads from external tooling, generate a personal access token with Blobs write scope. The app runtime now receives a managed JWT automatically, so you can omit `NETLIFY_BLOBS_TOKEN` for server-side usage.
 
 Add these values under **Site settings → Environment variables**:
 - `NETLIFY_BLOBS_SITE_ID`
-- `NETLIFY_BLOBS_TOKEN`
 - `NETLIFY_BLOBS_STORE` (optional override; omit to use the default)
 - Optional overrides if you host the store elsewhere: `NETLIFY_BLOBS_API_URL`, `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_PUBLIC_BASE_URL`.
 
-> Tip: If you accidentally paste the site slug (for example `dadsbot`) instead of the UUID Site ID, the runtime now resolves it automatically before connecting to Netlify Blobs. You’ll still save a network round-trip by storing the actual Site ID.
+> Tip: If you accidentally paste the site slug (for example `dadsbot`) instead of the UUID Site ID, temporarily define `NETLIFY_BLOBS_TOKEN` with Sites API scope so diagnostics can resolve the slug. Once the canonical Site ID appears in the logs you can remove the token.
 
-> Without the token or site ID the runtime falls back to the in-memory store. Diagnostics will warn with `mode: "memory"` until you add the secrets and redeploy.
+> Without the site ID the runtime falls back to the in-memory store. Diagnostics will warn with `mode: "memory"` until you add the secret and redeploy.
 
 ## 4. Wire the AI + email providers
 Add any production credentials you use today:

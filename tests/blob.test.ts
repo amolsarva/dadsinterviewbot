@@ -45,6 +45,32 @@ describe('putBlobFromBuffer', () => {
     expect(result.downloadUrl).toBe(result.url)
   })
 
+  it('uploads via Netlify without a token when the site ID is canonical', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
+
+    const setSpy = vi.fn(async () => ({}))
+    const storeMock = {
+      set: setSpy,
+      list: vi.fn(async () => ({ blobs: [] })),
+      getMetadata: vi.fn(async () => null),
+      delete: vi.fn(async () => {}),
+      getWithMetadata: vi.fn(async () => null),
+    }
+
+    const getStoreSpy = vi.fn(() => storeMock)
+    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
+    const { putBlobFromBuffer } = await import('../lib/blob')
+    await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
+
+    expect(getStoreSpy).toHaveBeenCalled()
+    const call = getStoreSpy.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(call).toMatchObject({ name: 'store-name', siteID: '12345678-1234-1234-1234-1234567890ab' })
+    expect('token' in call).toBe(false)
+    expect(setSpy).toHaveBeenCalled()
+  })
+
   it('falls back to a data URL when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer } = await import('../lib/blob')
@@ -89,6 +115,31 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
   expect(getStoreSpy).toHaveBeenCalledWith(
     expect.objectContaining({ siteID: '98765432-4321-4321-4321-ba0987654321' }),
   )
+})
+
+it('throws when given a site slug without a token to resolve it', async () => {
+  process.env.NETLIFY_BLOBS_SITE_ID = 'dadsbot'
+
+  const setSpy = vi.fn(async () => ({}))
+  const storeMock = {
+    set: setSpy,
+    list: vi.fn(async () => ({ blobs: [] })),
+    getMetadata: vi.fn(async () => null),
+    delete: vi.fn(async () => {}),
+    getWithMetadata: vi.fn(async () => null),
+  }
+
+  const getStoreSpy = vi.fn(() => storeMock)
+  vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
+  const attempt = async () => {
+    const { putBlobFromBuffer } = await import('../lib/blob')
+    await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
+  }
+
+  await expect(attempt()).rejects.toThrow('NETLIFY_BLOBS_SITE_ID is set to "dadsbot"')
+
+  expect(getStoreSpy).not.toHaveBeenCalled()
 })
 
 describe('listBlobs', () => {

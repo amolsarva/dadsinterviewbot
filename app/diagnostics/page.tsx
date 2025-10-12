@@ -200,14 +200,21 @@ function summarizeNetlifyDiagnostics(raw: any, deployment?: DeploymentSnapshot |
   const summary: string[] = []
 
   const tokenPresent = raw?.token?.present === true
+  const tokenMissing = Array.isArray(raw?.missing) && raw.missing.includes('token')
   const tokenKeyCandidate = raw?.token?.selected?.key
   const tokenSource =
     typeof tokenKeyCandidate === 'string' && tokenKeyCandidate.length ? tokenKeyCandidate : undefined
   const tokenLabel = tokenPresent
     ? `present${tokenSource ? ` from ${tokenSource}` : ''}`
-    : raw?.token?.present === false
+    : raw?.token?.present === false && tokenMissing
     ? 'missing'
     : 'unknown'
+  const tokenLabelWithContext =
+    !tokenPresent && !tokenMissing
+      ? raw?.usingContext
+        ? 'not provided (Netlify context detected)'
+        : 'not provided'
+      : tokenLabel
 
   const storePreviewCandidate = raw?.store?.selected?.valuePreview ?? raw?.store?.selected?.value
   const storePreview =
@@ -257,7 +264,7 @@ function summarizeNetlifyDiagnostics(raw: any, deployment?: DeploymentSnapshot |
   }
 
   summary.push(`Store: ${storeLabel}`)
-  summary.push(`Token: ${tokenLabel}`)
+  summary.push(`Token: ${tokenLabelWithContext}`)
   summary.push(`Site ID: ${siteLabel}`)
   summary.push(`Overrides: ${overrides.length ? overrides.join(' · ') : 'none set'}`)
   if (warnings.length) {
@@ -328,9 +335,14 @@ function formatSummary(key: TestKey, data: any): string {
     const detailParts: string[] = []
     if (diagnostics) {
       const tokenSource = diagnostics.token?.selected?.key
+      const tokenMissing = Array.isArray(diagnostics.missing) && diagnostics.missing.includes('token')
       const tokenStatus = diagnostics.token?.present
         ? `token present (${tokenSource || 'source unknown'})`
-        : 'token missing'
+        : tokenMissing
+        ? 'token missing'
+        : diagnostics.usingContext
+        ? 'token not provided (Netlify context detected)'
+        : 'token not provided'
       detailParts.push(tokenStatus)
       const siteSource = diagnostics.siteId?.selected?.key
       const siteStatus = diagnostics.siteId?.present
