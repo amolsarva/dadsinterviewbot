@@ -767,7 +767,7 @@ async function getNetlifyStore(): Promise<Store | null> {
       siteID: config.siteId, // optional in Netlify runtime
     })
   }
-
+ return netlifyStore
 }
 
 
