@@ -4,9 +4,10 @@ import { clearFoxes, listFoxes } from '../lib/foxes'
 const putBlobMock = vi.fn(async (path: string, _buf: Buffer, _type: string, _options?: unknown) => ({
   url: `https://blob.test/${path}`,
 }))
-const listBlobsMock = vi.fn(async () => ({ blobs: [] }))
+const listBlobsMock = vi.fn(async () => ({ blobs: [], hasMore: false }))
 const deleteByPrefixMock = vi.fn(async () => 0)
 const deleteBlobMock = vi.fn(async () => false)
+const originalFetch = global.fetch
 vi.mock('../lib/blob', () => ({
   putBlobFromBuffer: putBlobMock,
   listBlobs: listBlobsMock,
@@ -223,5 +224,78 @@ describe('session deletion helpers', () => {
 
     const remainingDefault = await data.listSessions()
     expect(remainingDefault.map((s) => s.id)).toContain(defaultSession.id)
+  })
+})
+
+describe('memory continuity across requests', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    putBlobMock.mockClear()
+    listBlobsMock.mockClear()
+    deleteByPrefixMock.mockClear()
+    deleteBlobMock.mockClear()
+    sendEmailMock.mockReset()
+    clearFoxes()
+    const data = await import('../lib/data')
+    data.__dangerousResetMemoryState()
+    listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false }))
+    global.fetch = vi.fn(async () => new Response('not found', { status: 404 })) as any
+  })
+
+  afterEach(() => {
+    global.fetch = originalFetch
+    listBlobsMock.mockImplementation(async () => ({ blobs: [], hasMore: false }))
+  })
+
+  it('rehydrates a stored session manifest before appending turns', async () => {
+    const data = await import('../lib/data')
+    const session = await data.createSession({ email_to: '', user_handle: 'Tester' })
+    await data.appendTurn(session.id, { role: 'user', text: 'First memory shared' })
+
+    const manifestCall = [...putBlobMock.mock.calls]
+      .reverse()
+      .find(([path]) => path === `sessions/${session.id}/session-${session.id}.json`)
+    if (!manifestCall) {
+      throw new Error('Expected session manifest upload')
+    }
+    const manifestBuffer = manifestCall[1] as Buffer
+    const manifestJson = JSON.parse(manifestBuffer.toString('utf8'))
+
+    const manifestUrl = `https://blob.test/sessions/${session.id}/session-${session.id}.json`
+    const manifestEntry = {
+      pathname: `sessions/${session.id}/session-${session.id}.json`,
+      url: manifestUrl,
+      downloadUrl: manifestUrl,
+      uploadedAt: new Date().toISOString(),
+    }
+
+    data.__dangerousResetMemoryState()
+
+    listBlobsMock.mockImplementation(async (options?: { prefix?: string }) => {
+      if (!options) return { blobs: [], hasMore: false }
+      if (options.prefix === 'sessions/' || options.prefix === `sessions/${session.id}/`) {
+        return { blobs: [manifestEntry], hasMore: false }
+      }
+      return { blobs: [], hasMore: false }
+    })
+
+    global.fetch = vi.fn(async (url: string) => {
+      if (url === manifestUrl) {
+        return new Response(JSON.stringify(manifestJson), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('not found', { status: 404 })
+    }) as any
+
+    const appended = await data.appendTurn(session.id, { role: 'assistant', text: 'Glad to remember that with you.' })
+    expect(appended.text).toBe('Glad to remember that with you.')
+
+    const stored = await data.getSession(session.id)
+    expect(stored?.turns?.length).toBeGreaterThanOrEqual(2)
+
+    const foxes = listFoxes()
+    expect(foxes.some((fox) => fox.id === 'theory-1-memory-miss')).toBe(false)
   })
 })
