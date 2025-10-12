@@ -57,4 +57,4 @@ Add any production credentials you use today:
 - **Blob downloads 404** → ensure the store name matches the one you configured; wrong store names silently create a new empty store.
 - **Diagnostics missing OpenAI/Google** → Netlify hides secrets from build logs; verify they exist via the dashboard and re-run the deploy. The `/api/health` endpoint echoes which providers are active.
 
-Following this checklist keeps feature parity with the old Vercel deployment while preserving the in-memory fallback for local demos.
+Following this checklist keeps feature parity with the old Vercel deployment while ensuring Netlify storage is live from the first run.

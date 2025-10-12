@@ -1,16 +1,12 @@
-This app runs *without* any environment variables (demo mode).
-If you want real storage/email/AI later, here are the keys:
-- OPENAI_API_KEY: optional; enables real follow-up generation
-- NETLIFY_BLOBS_SITE_ID: required for Netlify blob storage access (use the UUID)
-- NETLIFY_BLOBS_TOKEN: optional; only needed to resolve a site slug or for external scripts
-- NETLIFY_BLOBS_STORE (optional): overrides the default blob store name
-- NETLIFY_BLOBS_API_URL / NETLIFY_BLOBS_EDGE_URL (optional): advanced overrides for self-managed deployments
-- NETLIFY_BLOBS_PUBLIC_BASE_URL (optional): use a custom absolute/relative URL for blob downloads
-- RESEND_API_KEY: optional; sends the summary email on finalize
-- DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co)
-- NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI
 
-Demo mode behavior without keys:
-- AI follow-ups are mocked.
-- Artifacts are generated as data: URLs (still visible in History/Session).
-- Email is skipped with a log note; no error thrown.
+Provision these environment variables for production deployments:
+- NETLIFY_BLOBS_SITE_ID: required for Netlify blob storage access (use the UUID).
+- NETLIFY_BLOBS_STORE (optional): overrides the default blob store name.
+- NETLIFY_BLOBS_TOKEN: optional; only needed to resolve a site slug or for external scripts.
+- NETLIFY_BLOBS_API_URL / NETLIFY_BLOBS_EDGE_URL (optional): advanced overrides for self-managed deployments.
+- NETLIFY_BLOBS_PUBLIC_BASE_URL (optional): use a custom absolute/relative URL for blob downloads.
+- OPENAI_API_KEY: optional; enables AI-generated follow-ups.
+- RESEND_API_KEY: optional; sends the summary email on finalize.
+- DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co).
+- NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI polish.
+
