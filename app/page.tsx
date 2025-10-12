@@ -791,9 +791,12 @@ export function Home({ userHandle }: { userHandle?: string }) {
         recorderRef.current?.cancel()
       } catch {}
       recorderRef.current = null
-      stopAutoAdvance()
+      if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
+        window.clearTimeout(autoAdvanceTimeoutRef.current)
+      }
+      autoAdvanceTimeoutRef.current = null
     }
-  }, [stopAutoAdvance])
+  }, [])
 
   const ensureSessionRecorder = useCallback(async () => {
     if (typeof window === 'undefined') return null
