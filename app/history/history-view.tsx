@@ -2,9 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ACTIVE_USER_HANDLE_STORAGE_KEY,
-  DEMO_HISTORY_BASE_KEY,
   normalizeHandle,
-  scopedStorageKey,
 } from '@/lib/user-scope'
 
 type Row = {
@@ -64,24 +62,7 @@ export function HistoryView({ userHandle }: HistoryViewProps) {
       const query = handle ? `?handle=${encodeURIComponent(handle)}` : ''
       const api = await (await fetch(`/api/history${query}`)).json()
       const serverRows: Row[] = api?.items || []
-      let demoRows: Row[] = []
-      try {
-        const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
-        const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null
-        if (raw) {
-          const list = JSON.parse(raw) as { id: string; created_at: string; title?: string | null }[]
-          demoRows = list.map((d) => ({
-            id: d.id,
-            created_at: d.created_at,
-            title: typeof d.title === 'string' && d.title.length ? d.title : null,
-            status: 'completed',
-            total_turns: 1,
-            artifacts: {},
-          }))
-        }
-      } catch {}
-      const combined = [...(demoRows || []), ...(serverRows || [])]
-      combined.sort((a, b) => {
+      const sorted = [...serverRows].sort((a, b) => {
         const aTime = new Date(a.created_at).getTime()
         const bTime = new Date(b.created_at).getTime()
         if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0
@@ -89,7 +70,7 @@ export function HistoryView({ userHandle }: HistoryViewProps) {
         if (Number.isNaN(bTime)) return 1
         return bTime - aTime
       })
-      setRows(combined)
+      setRows(sorted)
     } catch {
       setRows([])
     }
@@ -99,39 +80,19 @@ export function HistoryView({ userHandle }: HistoryViewProps) {
     loadHistory()
   }, [loadHistory])
 
-  const removeDemoEntry = useCallback(
-    (id: string) => {
-      try {
-        const handle = resolveHandle()
-        const key = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
-        const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null
-        if (!raw) return
-        const list = JSON.parse(raw) as { id: string }[]
-        const filtered = list.filter((entry) => entry.id !== id)
-        if (filtered.length) {
-          window.localStorage.setItem(key, JSON.stringify(filtered))
-        } else {
-          window.localStorage.removeItem(key)
-        }
-      } catch {}
-    },
-    [resolveHandle],
-  )
-
   const handleDelete = useCallback(
     async (id: string) => {
       setDeletingId(id)
       try {
         const resp = await fetch(`/api/history/${id}`, { method: 'DELETE' })
         if (resp.ok) {
-          removeDemoEntry(id)
           await loadHistory()
         }
       } finally {
         setDeletingId(null)
       }
     },
-    [loadHistory, removeDemoEntry],
+    [loadHistory],
   )
 
   const handleClearAll = useCallback(async () => {
@@ -141,10 +102,6 @@ export function HistoryView({ userHandle }: HistoryViewProps) {
       const query = handle ? `?handle=${encodeURIComponent(handle)}` : ''
       const resp = await fetch(`/api/history${query}`, { method: 'DELETE' })
       if (resp.ok) {
-        if (typeof window !== 'undefined') {
-          const scopedKey = scopedStorageKey(DEMO_HISTORY_BASE_KEY, handle)
-          window.localStorage.removeItem(scopedKey)
-        }
         setRows([])
       }
     } finally {
@@ -173,7 +130,7 @@ export function HistoryView({ userHandle }: HistoryViewProps) {
           <div className="history-empty">
             <p className="font-medium">No interviews yet.</p>
             <p className="mt-1">
-              Run a mock session from the home page or execute diagnostics to record a sample conversation. Your completed
+              Run a session from the home page or execute diagnostics to record a sample conversation. Your completed
               interviews will appear here once they are saved.
             </p>
           </div>

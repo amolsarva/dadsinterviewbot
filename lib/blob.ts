@@ -27,7 +27,7 @@ type NetlifyContext = {
 type NetlifyConfig = {
   storeName: string
   siteId: string
-  token: string
+  token?: string
   apiUrl?: string
   edgeUrl?: string
   uncachedEdgeUrl?: string
@@ -153,7 +153,7 @@ function defaultDiagnostics(): BlobEnvDiagnostics {
   return {
     usingContext: false,
     contextKeys: [],
-    missing: ['siteId', 'token'],
+    missing: ['siteId'],
     store: {
       present: false,
       defaulted: true,
@@ -200,7 +200,7 @@ function looksLikeSiteId(value: string): boolean {
 async function resolveSiteId(config: NetlifyConfig): Promise<SiteResolution | null> {
   const slug = config.siteId.trim()
   if (!slug.length) return null
-  const token = config.token.trim()
+  const token = config.token?.trim() ?? ''
   if (!token.length) return null
   const base = (config.apiUrl || '').trim() || NETLIFY_API_BASE_URL
   const url = new URL(`/api/v1/sites/${encodeURIComponent(slug)}`, base)
@@ -263,6 +263,12 @@ async function ensureCanonicalSiteId(config: NetlifyConfig): Promise<NetlifyConf
       return config
     }
     return { ...config }
+  }
+
+  if (!config.token?.trim()) {
+    throw new Error(
+      `NETLIFY_BLOBS_SITE_ID is set to "${config.siteId}", which looks like a site slug. Provide the Site ID (UUID) from Netlify or set NETLIFY_BLOBS_TOKEN so the slug can be resolved automatically.`,
+    )
   }
 
   if (!netlifySiteResolution || netlifySiteResolutionSlug !== config.siteId) {
@@ -702,14 +708,13 @@ function readNetlifyConfig(): { config: NetlifyConfig | null; diagnostics: BlobE
   }
 
   if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
-  if (!diagnostics.token.present) diagnostics.missing.push('token')
 
   const config: NetlifyConfig | null =
-    diagnostics.siteId.present && diagnostics.token.present
+    diagnostics.siteId.present
       ? {
           storeName: storePick?.value || storeName,
           siteId: siteIdPick!.value,
-          token: tokenPick!.value,
+          token: tokenPick?.value || undefined,
           apiUrl: apiPick?.value || undefined,
           edgeUrl: edgePick?.value || undefined,
           uncachedEdgeUrl: uncachedPick?.value || undefined,
@@ -757,15 +762,13 @@ async function getNetlifyStore(): Promise<Store | null> {
   const config = await ensureCanonicalSiteId(baseConfig)
 
   if (!netlifyStore) {
-    netlifyStore = getStore({
-      name: config.storeName,
+    const options: NonNullable<Parameters<typeof getStore>[1]> = {
       siteID: config.siteId,
-      token: config.token,
-      apiURL: config.apiUrl,
-      edgeURL: config.edgeUrl,
-      uncachedEdgeURL: config.uncachedEdgeUrl,
-      consistency: config.consistency,
-    })
+    }
+    if (config.token?.trim()) {
+      options.token = config.token.trim()
+    }
+    netlifyStore = getStore(config.storeName, options)
   }
 
   return netlifyStore
