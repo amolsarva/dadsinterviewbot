@@ -579,6 +579,11 @@ export async function createSession({
       details: { bootedAt: memBootedAt, sessionId: s.id },
     })
   }
+  try {
+    await persistSessionSnapshot(s)
+  } catch (err) {
+    console.warn('Failed to persist initial session manifest', err, (err as any)?.blobDetails)
+  }
   return s
 }
 
@@ -648,7 +653,29 @@ async function persistSessionSnapshot(session: RememberedSession) {
 }
 
 export async function appendTurn(id: string, turn: Partial<Turn>) {
-  const s = mem.sessions.get(id)
+  let s = mem.sessions.get(id)
+  if (!s) {
+    await ensureSessionMemoryHydrated().catch(() => undefined)
+    s = mem.sessions.get(id)
+  }
+
+  if (!s) {
+    const restored = (await getSession(id)) as RememberedSession | undefined
+    if (restored) {
+      const hydrated = mem.sessions.get(restored.id)
+      if (hydrated) {
+        s = hydrated
+      } else {
+        const clone: RememberedSession = {
+          ...restored,
+          turns: restored.turns ? [...restored.turns] : [],
+        }
+        mem.sessions.set(clone.id, clone)
+        s = clone
+      }
+    }
+  }
+
   if (!s) {
     flagFox({
       id: 'theory-1-memory-miss',

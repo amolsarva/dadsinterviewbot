@@ -50,6 +50,58 @@ type DeploymentSnapshot = {
   netlifySiteUrl?: string
 }
 
+type BlobFlowStep = {
+  id: string
+  label: string
+  ok: boolean
+  optional?: boolean
+  skipped?: boolean
+  method?: string
+  url?: string
+  status?: number
+  durationMs?: number
+  message?: string
+  note?: string
+  error?: string
+  responseSnippet?: string
+}
+
+type BlobFlowDiagnostics = {
+  ok: boolean
+  probeId?: string
+  startedAt?: string
+  origin?: string
+  sdkPath?: string
+  sdkUrl?: string
+  sitePutPath?: string
+  directApiPath?: string
+  steps: BlobFlowStep[]
+}
+
+type BlobInventoryEntry = {
+  pathname: string
+  url: string
+  downloadUrl?: string
+  size?: number
+  uploadedAt?: string
+}
+
+type BlobInventorySection = {
+  id: string
+  label: string
+  prefix: string
+  limit: number
+  ok: boolean
+  scanned: number
+  hasMore?: boolean
+  cursor?: string
+  durationMs?: number
+  note?: string
+  error?: string
+  details?: unknown
+  blobs?: BlobInventoryEntry[]
+}
+
 const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
 const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
@@ -369,6 +421,51 @@ function formatSummary(key: TestKey, data: any): string {
         detailParts.push(`missing: ${diagnostics.missing.join(', ')}`)
       }
     }
+    const flow: BlobFlowDiagnostics | undefined = Array.isArray(data?.flow?.steps)
+      ? (data.flow as BlobFlowDiagnostics)
+      : undefined
+    if (flow && Array.isArray(flow.steps) && flow.steps.length) {
+      const stepSummary = flow.steps.map(step => {
+        const status = typeof step.status === 'number' ? ` ${step.status}` : ''
+        const method = step.method ? `${step.method} ` : ''
+        const flag = step.skipped ? '⏭️' : step.ok ? '✅' : '❌'
+        return `${flag} ${method}${step.id || step.label || 'step'}${status}`
+      })
+      detailParts.push(`flow: ${stepSummary.join(' · ')}`)
+      if (!flow.ok) {
+        const failingStep = flow.steps.find(step => !step.ok && !step.optional && !step.skipped)
+        if (failingStep) {
+          const label = failingStep.label || failingStep.id || 'unknown step'
+          const status = typeof failingStep.status === 'number' ? ` (HTTP ${failingStep.status})` : ''
+          detailParts.push(`flow failure: ${label}${status}`)
+        }
+      }
+    }
+    const inventorySections = Array.isArray(data?.inventory?.sections)
+      ? (data.inventory.sections as BlobInventorySection[])
+      : []
+    if (inventorySections.length) {
+      const totalScanned =
+        typeof data?.inventory?.totalScanned === 'number'
+          ? data.inventory.totalScanned
+          : inventorySections.reduce((sum, section) => sum + (typeof section.scanned === 'number' ? section.scanned : 0), 0)
+      detailParts.push(
+        `inventory scanned ${totalScanned} item${totalScanned === 1 ? '' : 's'} across ${inventorySections.length} prefix${
+          inventorySections.length === 1 ? '' : 'es'
+        }`,
+      )
+      const sectionSummaries = inventorySections.map(section => {
+        const label = section.label || section.id || section.prefix || '(unknown section)'
+        const count = typeof section.scanned === 'number' ? section.scanned : 0
+        const suffix = section.hasMore ? '+' : ''
+        return `${label}: ${count}${suffix}`
+      })
+      if (sectionSummaries.length) {
+        detailParts.push(sectionSummaries.join(' · '))
+      }
+    } else if (data?.inventory && !inventorySections.length) {
+      detailParts.push('inventory scan found no blobs for tracked prefixes')
+    }
     const healthDetails = data?.health?.details
     if (healthDetails) {
       const detailSnippets = describeBlobDetails(healthDetails)
@@ -461,6 +558,7 @@ export default function DiagnosticsPage() {
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [isRunning, setIsRunning] = useState(false)
   const [foxes, setFoxes] = useState<FoxRecord[]>([])
+  const [blobInventory, setBlobInventory] = useState<BlobInventorySection[]>([])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -578,6 +676,20 @@ export default function DiagnosticsPage() {
   const formatFlag = (value: boolean | undefined) =>
     value === true ? 'yes' : value === false ? 'no' : 'unknown'
 
+  const formatSize = (value?: number) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 'size unknown'
+    if (value === 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const exponent = Math.min(Math.floor(Math.log10(value) / 3), units.length - 1)
+    const scaled = value / Math.pow(1000, exponent)
+    return `${scaled >= 100 ? scaled.toFixed(0) : scaled >= 10 ? scaled.toFixed(1) : scaled.toFixed(2)} ${units[exponent]}`
+  }
+
+  const formatTimestamp = (value?: string) => {
+    if (!value || Number.isNaN(Date.parse(value))) return 'time unknown'
+    return new Date(value).toLocaleString()
+  }
+
   const append = (line: string) =>
     setLog((l) => (l && l.length > 0 ? l + '\n' + line : line))
 
@@ -596,6 +708,7 @@ export default function DiagnosticsPage() {
     setLog('Running diagnostics...')
     setResults(initialResults())
     setFoxes([])
+    setBlobInventory([])
 
     let transcriptSnapshot: TranscriptSynopsis | null = null
     let providerSnapshot: ProviderErrorSynopsis | null = null
@@ -777,6 +890,81 @@ export default function DiagnosticsPage() {
               diagnosticsSummary.forEach(line => append(line))
               append('***KEY NETFLIFY ITEMS***')
             }
+            const flow = parsed?.flow as BlobFlowDiagnostics | undefined
+            if (flow && Array.isArray(flow.steps) && flow.steps.length) {
+              append('***BLOB FLOW STEPS***')
+              const contextParts: string[] = []
+              if (flow.probeId) contextParts.push(`probe=${flow.probeId}`)
+              if (flow.sdkPath) contextParts.push(`sdk_path=${flow.sdkPath}`)
+              if (flow.sitePutPath) contextParts.push(`site_put_path=${flow.sitePutPath}`)
+              if (flow.directApiPath) contextParts.push(`direct_api_path=${flow.directApiPath}`)
+              if (flow.origin) contextParts.push(`origin=${flow.origin}`)
+              if (contextParts.length) {
+                append(`[blob-flow] Context → ${contextParts.join(' · ')}`)
+              }
+              flow.steps.forEach(step => {
+                const flag = step.skipped ? '⏭️' : step.ok ? '✅' : '❌'
+                const method = step.method ? `${step.method} ` : ''
+                const status = typeof step.status === 'number' ? ` (HTTP ${step.status})` : ''
+                const url = step.url ? ` → ${step.url}` : ''
+                const duration = typeof step.durationMs === 'number' ? ` · ${step.durationMs}ms` : ''
+                const note = step.note ? ` · note: ${step.note}` : ''
+                const error = step.error ? ` · error: ${step.error}` : ''
+                const body = step.responseSnippet ? ` · body: ${step.responseSnippet}` : ''
+                append(`${flag} ${method}${step.label || step.id}${status}${url}${duration}${note}${error}${body}`)
+              })
+              append('***BLOB FLOW STEPS***')
+            }
+            const sections = Array.isArray(parsed?.inventory?.sections)
+              ? (parsed.inventory.sections as BlobInventorySection[])
+              : []
+            setBlobInventory(sections)
+            append('***BLOB INVENTORY***')
+            if (sections.length) {
+              sections.forEach(section => {
+                const label = section.label || section.id || section.prefix || '(unknown section)'
+                const prefixLabel = section.prefix && section.prefix.length ? section.prefix : '(root)'
+                const countLabel = `${section.scanned}${section.hasMore ? '+' : ''}`
+                const durationLabel =
+                  typeof section.durationMs === 'number' && Number.isFinite(section.durationMs)
+                    ? ` · ${section.durationMs}ms`
+                    : ''
+                append(`[inventory] ${label} · prefix=${prefixLabel} · items=${countLabel}${durationLabel}`)
+                if (section.note) {
+                  append(`[inventory]   note: ${section.note}`)
+                }
+                if (section.error) {
+                  append(`[inventory]   error: ${section.error}`)
+                }
+                if (section.details) {
+                  describeBlobDetails(section.details).forEach(detail =>
+                    append(`[inventory]   detail: ${detail}`),
+                  )
+                }
+                if (Array.isArray(section.blobs) && section.blobs.length) {
+                  const sample = section.blobs.slice(0, 5)
+                  sample.forEach(blob => {
+                    const sizeLabel =
+                      typeof blob.size === 'number' && Number.isFinite(blob.size)
+                        ? formatSize(blob.size)
+                        : 'size unknown'
+                    const whenLabel = blob.uploadedAt ? formatTimestamp(blob.uploadedAt) : 'time unknown'
+                    append(`[inventory]   ${blob.pathname} · ${sizeLabel} · ${whenLabel}`)
+                  })
+                  if (section.blobs.length > sample.length) {
+                    append(`[inventory]   … ${section.blobs.length - sample.length} more in sample (truncated).`)
+                  }
+                  if (section.hasMore) {
+                    append('[inventory]   additional blobs available via cursor pagination.')
+                  }
+                } else if (section.ok) {
+                  append('[inventory]   no blobs found for this prefix.')
+                }
+              })
+            } else {
+              append('[inventory] No blobs found for tracked prefixes.')
+            }
+            append('***BLOB INVENTORY***')
           }
         } else {
           append(rawText || '(no response body)')
@@ -910,6 +1098,70 @@ export default function DiagnosticsPage() {
               </div>
             )
           })}
+        </div>
+
+        <div className="diagnostics-inventory">
+          <h3>Blob storage inventory</h3>
+          {blobInventory.length === 0 ? (
+            <p className="status-note">Run diagnostics to capture a blob listing.</p>
+          ) : (
+            <ul className="diagnostics-blob-list">
+              {blobInventory.map((section) => {
+                const label = section.label || section.id || section.prefix || 'Unnamed section'
+                const prefixLabel = section.prefix && section.prefix.length ? section.prefix : '(root)'
+                const countLabel = `${section.scanned}${section.hasMore ? '+' : ''}`
+                const detailSnippets = describeBlobDetails(section.details)
+                return (
+                  <li key={section.id} className="diagnostic-card">
+                    <div className="diagnostic-card-head">
+                      <span className="diagnostic-label">{label}</span>
+                    </div>
+                    <div className="diagnostic-message">
+                      Prefix: {prefixLabel} · Items scanned: {countLabel} · Limit: {section.limit}
+                    </div>
+                    {section.note && <div className="diagnostic-meta">Note: {section.note}</div>}
+                    {section.error && <div className="diagnostic-meta">Error: {section.error}</div>}
+                    {!section.ok && !section.error && (
+                      <div className="diagnostic-meta">Inventory query failed for this prefix.</div>
+                    )}
+                    {detailSnippets.length > 0 && (
+                      <div className="diagnostic-meta">Details: {detailSnippets.join(' · ')}</div>
+                    )}
+                    {Array.isArray(section.blobs) && section.blobs.length > 0 ? (
+                      <ul className="diagnostics-blob-entries">
+                        {section.blobs.map((blob) => {
+                          const href = blob.downloadUrl || blob.url
+                          return (
+                            <li key={blob.pathname}>
+                              <a
+                                href={href}
+                                className="diagnostics-link"
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {blob.pathname}
+                              </a>
+                              <span className="diagnostic-meta">
+                                {' '}
+                                {formatSize(blob.size)} · {formatTimestamp(blob.uploadedAt)}
+                              </span>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    ) : section.ok ? (
+                      <p className="status-note">No blobs found for this prefix.</p>
+                    ) : null}
+                    {section.hasMore && (
+                      <p className="status-note">
+                        Additional blobs available via cursor{section.cursor ? ` (${section.cursor})` : ''}.
+                      </p>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </div>
 
         <textarea value={log} readOnly rows={12} className="diagnostics-log" />

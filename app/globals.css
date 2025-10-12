@@ -673,6 +673,42 @@ textarea.diagnostics-log {
   gap: 16px;
 }
 
+.diagnostics-inventory {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.diagnostics-inventory h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.diagnostics-blob-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.diagnostics-blob-entries {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnostics-blob-entries li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .diagnostic-card {
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(243, 203, 165, 0.7);

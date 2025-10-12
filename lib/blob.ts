@@ -139,6 +139,7 @@ let netlifyConfig: NetlifyConfig | null | undefined
 let netlifyStore: Store | null | undefined
 let netlifyWarningIssued = false
 let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
+let netlifyContextSignature: string | undefined
 let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
@@ -605,7 +606,11 @@ function parseNetlifyContext(): NetlifyContext | null {
   return null
 }
 
-function readNetlifyConfig(): { config: NetlifyConfig | null; diagnostics: BlobEnvDiagnostics } {
+function readNetlifyConfig(): {
+  config: NetlifyConfig | null
+  diagnostics: BlobEnvDiagnostics
+  signature: string
+} {
   const context = parseNetlifyContext()
 
   const storeName =
@@ -722,15 +727,21 @@ function readNetlifyConfig(): { config: NetlifyConfig | null; diagnostics: BlobE
         }
       : null
 
-  return { config, diagnostics }
+  const signature = JSON.stringify({
+    store: storeCandidates.map((candidate) => candidate.value),
+    siteId: siteIdCandidates.map((candidate) => candidate.value),
+    token: tokenCandidates.map((candidate) => candidate.value),
+    edgeUrl: edgeUrlCandidates.map((candidate) => candidate.value),
+    apiUrl: apiUrlCandidates.map((candidate) => candidate.value),
+    uncachedEdgeUrl: uncachedEdgeCandidates.map((candidate) => candidate.value),
+    consistency,
+  })
+
+  return { config, diagnostics, signature }
 }
 
 function getNetlifyConfig(): NetlifyConfig | null {
-  if (typeof netlifyConfig === 'undefined' || typeof netlifyDiagnostics === 'undefined') {
-    const result = readNetlifyConfig()
-    netlifyConfig = result.config
-    netlifyDiagnostics = result.diagnostics
-  }
+  refreshNetlifyEnvironment()
 
   if (!netlifyConfig && !netlifyWarningIssued) {
     netlifyWarningIssued = true
@@ -746,11 +757,7 @@ function getNetlifyConfig(): NetlifyConfig | null {
 }
 
 function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
-  if (typeof netlifyConfig === 'undefined' || typeof netlifyDiagnostics === 'undefined') {
-    const result = readNetlifyConfig()
-    netlifyConfig = result.config
-    netlifyDiagnostics = result.diagnostics
-  }
+  refreshNetlifyEnvironment()
 
   return netlifyDiagnostics ?? defaultDiagnostics()
 }
@@ -765,14 +772,50 @@ async function getNetlifyStore(): Promise<Store | null> {
     netlifyStore = getStore({
       name: config.storeName,
       siteID: config.siteId,
-       token: config.token,
+      token: config.token,
     })
   }
 
   return netlifyStore
 }
 
+function refreshNetlifyEnvironment() {
+  const result = readNetlifyConfig()
+  const signatureChanged =
+    typeof netlifyContextSignature === 'undefined' || result.signature !== netlifyContextSignature
 
+  if (typeof netlifyConfig === 'undefined' || signatureChanged) {
+    netlifyConfig = result.config
+    netlifyContextSignature = result.signature
+    netlifyStore = undefined
+  }
+
+  netlifyDiagnostics = result.diagnostics
+}
+
+function invalidateNetlifyStoreCache() {
+  netlifyStore = undefined
+}
+
+function shouldInvalidateNetlifyStore(error: any): boolean {
+  const status = extractStatusCode(error)
+  if (status === 401 || status === 403) {
+    return true
+  }
+  const code = extractErrorCode(error)
+  if (typeof code === 'string') {
+    const normalized = code.toLowerCase()
+    if (
+      normalized === 'unauthorized' ||
+      normalized === 'forbidden' ||
+      normalized.includes('auth') ||
+      normalized.includes('token')
+    ) {
+      return true
+    }
+  }
+  return false
+}
 
 function buildProxyUrl(path: string): string {
   const base = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
@@ -911,6 +954,9 @@ export async function putBlobFromBuffer(
       },
     })
   } catch (error) {
+    if (shouldInvalidateNetlifyStore(error)) {
+      invalidateNetlifyStoreCache()
+    }
     const wrapped = await buildBlobError(error, {
       action: 'upload blob',
       target: targetPath,
@@ -964,6 +1010,9 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
   try {
     listResult = await store.list({ prefix, directories: false })
   } catch (error) {
+    if (shouldInvalidateNetlifyStore(error)) {
+      invalidateNetlifyStoreCache()
+    }
     const wrapped = await buildBlobError(error, {
       action: 'list blobs',
       target: prefix || '(all)',
@@ -1031,6 +1080,9 @@ export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
   try {
     listResult = await store.list({ prefix: sanitizedPrefix, directories: false })
   } catch (error) {
+    if (shouldInvalidateNetlifyStore(error)) {
+      invalidateNetlifyStoreCache()
+    }
     const wrapped = await buildBlobError(error, {
       action: 'list blobs for deletion',
       target: sanitizedPrefix || '(all)',
@@ -1047,6 +1099,9 @@ export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
     try {
       await store.delete(key)
     } catch (error) {
+      if (shouldInvalidateNetlifyStore(error)) {
+        invalidateNetlifyStoreCache()
+      }
       const wrapped = await buildBlobError(error, {
         action: 'delete blob',
         target: key,
@@ -1085,6 +1140,9 @@ export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
   try {
     await store.delete(targetPath)
   } catch (error) {
+    if (shouldInvalidateNetlifyStore(error)) {
+      invalidateNetlifyStoreCache()
+    }
     const wrapped = await buildBlobError(error, {
       action: 'delete blob',
       target: targetPath,
@@ -1133,6 +1191,9 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
   try {
     result = await store.getWithMetadata(targetPath, { type: 'arrayBuffer' })
   } catch (error) {
+    if (shouldInvalidateNetlifyStore(error)) {
+      invalidateNetlifyStoreCache()
+    }
     const wrapped = await buildBlobError(error, {
       action: 'read blob',
       target: targetPath,
@@ -1183,6 +1244,9 @@ export async function blobHealth() {
     await store.list({ prefix: '', directories: false })
     return { ok: true, mode: 'netlify', store: config.storeName }
   } catch (error: any) {
+    if (shouldInvalidateNetlifyStore(error)) {
+      invalidateNetlifyStoreCache()
+    }
     const wrapped = await buildBlobError(error, {
       action: 'validate blob store health',
       config,
