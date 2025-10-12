@@ -762,13 +762,15 @@ async function getNetlifyStore(): Promise<Store | null> {
   const config = await ensureCanonicalSiteId(baseConfig)
 
   if (!netlifyStore) {
-    // ✅ clean, type-safe initialization — no redundant import
-    netlifyStore = getStore(config.storeName, {
-      siteID: config.siteId, // optional in Netlify runtime
+    netlifyStore = getStore({
+      name: config.storeName,
+      siteID: config.siteId,
     })
   }
- return netlifyStore
+
+  return netlifyStore
 }
+
 
 
 function buildProxyUrl(path: string): string {
