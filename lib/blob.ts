@@ -762,19 +762,15 @@ async function getNetlifyStore(): Promise<Store | null> {
   const config = await ensureCanonicalSiteId(baseConfig)
 
   if (!netlifyStore) {
-    const options: Extract<Parameters<typeof getStore>[0], Record<string, unknown>> = {
-      name: config.storeName,
-      siteID: config.siteId,
-    }
-    const trimmedToken = config.token?.trim()
-    if (trimmedToken) {
-      options.token = trimmedToken
-    }
-    netlifyStore = getStore(options)
+    // ✅ clean, type-safe initialization — no redundant import
+    netlifyStore = getStore(config.storeName, {
+      siteID: config.siteId, // optional in Netlify runtime
+    })
   }
 
   return netlifyStore
 }
+
 
 function buildProxyUrl(path: string): string {
   const base = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
