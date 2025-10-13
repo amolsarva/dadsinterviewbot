@@ -37,3 +37,9 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 
 ## After completing the checklist
 Redeploy the site (or trigger the failing tests again) to confirm blob uploads now succeed. If 405 errors persist, recheck the store name, token scope, and site ID for typographical errors, then contact Netlify support with the failing request ID shown in the diagnostics.
+
+### Troubleshooting initialization failures
+
+- If a fresh deploy reports `Internal Server Error` responses from `/api/blob`, open `/api/health` or `/api/diagnostics/storage` on the deployment URL. Both endpoints now echo a `storageError` payload with the initialization failure message and the masked site/store identifiers Netlify attempted to use.
+- Errors such as `NETLIFY_BLOBS_SITE_ID is set to "example-site"...` indicate the runtime only received a site slug. Update `NETLIFY_BLOBS_SITE_ID` to the UUID from **Site information** or temporarily supply `NETLIFY_BLOBS_TOKEN` so the slug can be resolved automatically (step 3 above).
+- Authentication errors (HTTP 401/403) usually mean the Netlify runtime skipped injecting blob credentials. Confirm the site is running on Netlify Functions (step 5) and that no stale `NETLIFY_BLOBS_TOKEN` or `NETLIFY_API_TOKEN` values linger in your environment variables.

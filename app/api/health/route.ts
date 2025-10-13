@@ -14,6 +14,7 @@ export async function GET(request: Request) {
     storageProvider: storageEnv.provider,
     storageStore: (storageEnv as any).store ?? null,
     storageSiteId: (storageEnv as any).siteId ?? null,
+    storageError: storageEnv.error ?? null,
     hasResend: Boolean(process.env.RESEND_API_KEY),
     emailsEnabled: areSummaryEmailsEnabled(),
     defaultEmail: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co',
