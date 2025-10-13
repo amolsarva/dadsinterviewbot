@@ -469,6 +469,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const accountSwitcherRef = useRef<HTMLDivElement | null>(null)
   const newUserInputRef = useRef<HTMLInputElement | null>(null)
 
+  const stopAutoAdvance = useCallback(() => {
+    if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimeoutRef.current)
+    }
+    autoAdvanceTimeoutRef.current = null
+  }, [])
+
   useEffect(() => {
     if (typeof window === 'undefined') {
       setKnownHandles(normalizedHandle ? [normalizedHandle] : [])
@@ -1078,13 +1085,6 @@ export function Home({ userHandle }: { userHandle?: string }) {
     } catch {}
   }, [])
 
-  const stopAutoAdvance = useCallback(() => {
-    if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimeoutRef.current)
-    }
-    autoAdvanceTimeoutRef.current = null
-  }, [])
-
   const recordFatal = useCallback(
     (message: string, details: string[] = []) => {
       const normalized = details.filter((detail) => typeof detail === 'string' && detail.trim().length)
@@ -1666,7 +1666,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           details.push(`Body: ${snippet}`)
         }
         recordFatal('Intro prompt request failed.', [
-          *details,
+          ...details,
           'Run Diagnostics and resolve the failure before starting again.',
         ])
         return

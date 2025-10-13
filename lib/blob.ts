@@ -714,11 +714,12 @@ function readNetlifyConfig(): {
 
   if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
 
+  const siteIdValue = siteIdPick?.value
   const config: NetlifyConfig | null =
-    diagnostics.siteId.present
+    diagnostics.siteId.present && siteIdValue
       ? {
           storeName: storePick?.value || storeName,
-          siteId: siteIdPick!.value,
+          siteId: siteIdValue,
           token: tokenPick?.value || undefined,
           apiUrl: apiPick?.value || undefined,
           edgeUrl: edgePick?.value || undefined,
