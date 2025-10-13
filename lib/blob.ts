@@ -24,6 +24,16 @@ type NetlifyContext = {
   uncachedEdgeURL?: string
 }
 
+export type NetlifyBlobContext = NetlifyContext
+
+type HeaderLike =
+  | {
+      get(name: string): string | null
+    }
+  | Record<string, string | string[] | undefined>
+  | null
+  | undefined
+
 type NetlifyConfig = {
   storeName: string
   siteId: string
@@ -604,6 +614,148 @@ function parseNetlifyContext(): NetlifyContext | null {
     return context as NetlifyContext
   }
   return null
+}
+
+function getHeaderValue(headers: HeaderLike, name: string): string | undefined {
+  if (!headers) return undefined
+  const target = name.toLowerCase()
+  if (typeof (headers as any).get === 'function') {
+    try {
+      const direct = (headers as any).get(name)
+      if (typeof direct === 'string') return direct
+      if (direct && typeof direct === 'object' && typeof direct.toString === 'function') {
+        return direct.toString()
+      }
+      const lowered = (headers as any).get(target)
+      if (typeof lowered === 'string') return lowered
+      if (Array.isArray(lowered) && lowered.length) {
+        const candidate = lowered[0]
+        return typeof candidate === 'string' ? candidate : undefined
+      }
+    } catch {
+      // ignore header access errors
+    }
+  }
+  if (typeof headers === 'object') {
+    for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+      if (key.toLowerCase() !== target) continue
+      if (typeof value === 'string') return value
+      if (Array.isArray(value) && value.length) {
+        const candidate = value[0]
+        return typeof candidate === 'string' ? candidate : undefined
+      }
+      if (value != null) {
+        return String(value)
+      }
+    }
+  }
+  return undefined
+}
+
+function sanitizeContextInput(context: Partial<NetlifyContext> | null | undefined): NetlifyContext | null {
+  if (!context || typeof context !== 'object') return null
+  const cleaned: NetlifyContext = {}
+  const keys: Array<keyof NetlifyContext> = ['apiURL', 'edgeURL', 'token', 'siteID', 'uncachedEdgeURL']
+  for (const key of keys) {
+    const raw = (context as any)[key]
+    if (typeof raw !== 'string') continue
+    const trimmed = raw.trim()
+    if (!trimmed.length) continue
+    ;(cleaned as any)[key] = trimmed
+  }
+  return Object.keys(cleaned).length ? cleaned : null
+}
+
+export function setNetlifyBlobContext(
+  contextInput: Partial<NetlifyContext> | null | undefined,
+): boolean {
+  const sanitized = sanitizeContextInput(contextInput)
+  if (!sanitized) return false
+  const globalContext = (globalThis as any).netlifyBlobsContext
+  const existing =
+    globalContext && typeof globalContext === 'object' ? (globalContext as NetlifyContext) : ({} as NetlifyContext)
+  const merged: NetlifyContext = { ...existing, ...sanitized }
+  const changed = JSON.stringify(existing) !== JSON.stringify(merged)
+  if (!changed) return true
+  ;(globalThis as any).netlifyBlobsContext = merged
+  try {
+    const encoded = Buffer.from(JSON.stringify(merged)).toString('base64')
+    process.env.NETLIFY_BLOBS_CONTEXT = encoded
+  } catch {
+    // ignore failures to serialize context
+  }
+  netlifyConfig = undefined
+  netlifyContextSignature = undefined
+  netlifyDiagnostics = undefined
+  netlifyStore = undefined
+  return true
+}
+
+function parseContextPayload(raw: string | undefined | null): Partial<NetlifyContext> | null {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (!trimmed.length) return null
+  const attempts: string[] = [trimmed]
+  try {
+    const decoded = Buffer.from(trimmed, 'base64').toString('utf8')
+    if (decoded && decoded !== trimmed) {
+      attempts.push(decoded)
+    }
+  } catch {
+    // ignore invalid base64 payloads
+  }
+  for (const candidate of attempts) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed && typeof parsed === 'object') {
+        return parsed as Partial<NetlifyContext>
+      }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+function extractNetlifyContextFromHeaders(headers: HeaderLike): Partial<NetlifyContext> | null {
+  const headerCandidates = [
+    'x-nf-context',
+    'x-nf-blobs-context',
+    'x-netlify-context',
+    'x-netlify-blobs-context',
+  ]
+  for (const candidate of headerCandidates) {
+    const raw = getHeaderValue(headers, candidate)
+    const parsed = parseContextPayload(raw)
+    if (parsed) return parsed
+  }
+
+  const fieldMap: Array<[keyof NetlifyContext, string[]]> = [
+    ['siteID', ['x-nf-site-id', 'x-netlify-site-id', 'x-nf-blobs-site-id']],
+    ['token', ['x-nf-token', 'x-nf-blobs-token', 'x-netlify-blobs-token']],
+    ['edgeURL', ['x-nf-edge-url', 'x-netlify-edge-url']],
+    ['uncachedEdgeURL', ['x-nf-uncached-edge-url', 'x-netlify-uncached-edge-url']],
+    ['apiURL', ['x-nf-api-url', 'x-netlify-api-url']],
+  ]
+
+  const assembled: Partial<NetlifyContext> = {}
+  for (const [key, names] of fieldMap) {
+    for (const name of names) {
+      const value = getHeaderValue(headers, name)
+      if (value && value.trim().length) {
+        ;(assembled as any)[key] = value.trim()
+        break
+      }
+    }
+  }
+
+  return Object.keys(assembled).length ? assembled : null
+}
+
+export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean {
+  const extracted = extractNetlifyContextFromHeaders(headers)
+  if (!extracted) return false
+  return setNetlifyBlobContext(extracted)
 }
 
 function readNetlifyConfig(): {

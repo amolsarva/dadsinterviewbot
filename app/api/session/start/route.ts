@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSession } from '@/lib/data'
+import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 
 export const runtime = 'nodejs'
 
 export async function POST(req: NextRequest) {
+  primeNetlifyBlobContextFromHeaders(req.headers)
   let payload: any = {}
   try {
     const raw = await req.text()

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-import { getBlobToken, listBlobs, putBlobFromBuffer } from '@/lib/blob'
+import { getBlobToken, listBlobs, primeNetlifyBlobContextFromHeaders, putBlobFromBuffer } from '@/lib/blob'
 import { sendSummaryEmail } from '@/lib/email'
 import { getSession, mergeSessionArtifacts, rememberSessionManifest } from '@/lib/data'
 import { flagFox, listFoxes } from '@/lib/foxes'
@@ -35,6 +35,7 @@ const schema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  primeNetlifyBlobContextFromHeaders(req.headers)
   try {
     const body = await req.json()
     const { sessionId, email, sessionAudioUrl, sessionAudioDurationMs, emailsEnabled } = schema.parse(body)

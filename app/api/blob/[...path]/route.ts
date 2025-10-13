@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { BLOB_PROXY_PREFIX, deleteBlob, putBlobFromBuffer, readBlob } from '@/lib/blob'
+import {
+  BLOB_PROXY_PREFIX,
+  deleteBlob,
+  primeNetlifyBlobContextFromHeaders,
+  putBlobFromBuffer,
+  readBlob,
+} from '@/lib/blob'
 
 function extractPath(params: { path?: string[] | string }): string {
   const raw = params?.path
@@ -57,19 +63,30 @@ async function handleBlobRequest(path: string, download: boolean, includeBody: b
   return response
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+function primeContext(req: Request | NextRequest) {
+  try {
+    primeNetlifyBlobContextFromHeaders(req.headers)
+  } catch {
+    // ignore header parsing failures
+  }
+}
+
+export async function GET(req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+  primeContext(req)
   const path = extractPath(params)
-  const download = _req.nextUrl.searchParams.has('download')
+  const download = req.nextUrl.searchParams.has('download')
   return handleBlobRequest(path, download, true)
 }
 
-export async function HEAD(_req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+export async function HEAD(req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+  primeContext(req)
   const path = extractPath(params)
-  const download = _req.nextUrl.searchParams.has('download')
+  const download = req.nextUrl.searchParams.has('download')
   return handleBlobRequest(path, download, false)
 }
 
 export async function PUT(req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+  primeContext(req)
   const path = extractPath(params)
   if (!path) {
     return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
@@ -122,6 +139,7 @@ export async function PUT(req: NextRequest, { params }: { params: { path?: strin
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { path?: string[] | string } }) {
+  primeContext(_req)
   const path = extractPath(params)
   if (!path) {
     return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })

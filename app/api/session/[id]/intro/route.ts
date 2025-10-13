@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
+import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 import {
   formatIntroGreeting,
@@ -71,7 +72,8 @@ function buildHistorySummary(
   return { historyText, questionText: questionLines.join('\n') }
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  primeNetlifyBlobContextFromHeaders(req.headers)
   const sessionId = params.id
   await ensureSessionMemoryHydrated().catch(() => undefined)
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
