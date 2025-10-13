@@ -117,7 +117,7 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
   )
 })
 
-it('throws when given a site slug without a token to resolve it', async () => {
+it('falls back to memory when given a site slug without a token to resolve it', async () => {
   process.env.NETLIFY_BLOBS_SITE_ID = 'dadsbot'
 
   const setSpy = vi.fn(async () => ({}))
@@ -132,14 +132,12 @@ it('throws when given a site slug without a token to resolve it', async () => {
   const getStoreSpy = vi.fn(() => storeMock)
   vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
-  const attempt = async () => {
-    const { putBlobFromBuffer } = await import('../lib/blob')
-    await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
-  }
-
-  await expect(attempt()).rejects.toThrow('NETLIFY_BLOBS_SITE_ID is set to "dadsbot"')
+  const { putBlobFromBuffer } = await import('../lib/blob')
+  const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
   expect(getStoreSpy).not.toHaveBeenCalled()
+  expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
+  expect(result.downloadUrl).toBe(result.url)
 })
 
 describe('listBlobs', () => {

@@ -56,14 +56,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     dateStyle: 'medium',
     timeStyle: 'short',
   })
-  const fallbackEasternTime = `${easternFormatter.format(new Date())} Eastern Time`
+  const formatEasternLabel = (date: Date) => `${easternFormatter.format(date)} ET`
+  const fallbackEasternTime = formatEasternLabel(new Date())
   let formattedTime = fallbackEasternTime
   if (commitTimestamp) {
     const parsed = new Date(commitTimestamp)
     if (!Number.isNaN(parsed.valueOf())) {
-      formattedTime = `${easternFormatter.format(parsed)} Eastern Time`
+      formattedTime = formatEasternLabel(parsed)
     }
   }
+  const buildTimestampLabel = `This build is from ${formattedTime}`
 
   return (
     <html lang="en">
@@ -84,7 +86,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 {shortSha} — {commitMessage}
               </span>
             )}{' '}
-            · {formattedTime}
+            · {buildTimestampLabel}
           </footer>
         </div>
       </body>

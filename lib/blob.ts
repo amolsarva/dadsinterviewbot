@@ -1,4 +1,4 @@
-import { getStore, type Store } from '@netlify/blobs'
+import { getStore, type GetStoreOptions, type Store } from '@netlify/blobs'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -153,6 +153,7 @@ let netlifyContextSignature: string | undefined
 let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
+let netlifyStoreInitError: BlobErrorDetails | null = null
 
 type SiteResolution = {
   slug: string
@@ -916,20 +917,45 @@ function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
 }
 
 async function getNetlifyStore(): Promise<Store | null> {
+  if (netlifyStore === null) {
+    return null
+  }
+
   const baseConfig = getNetlifyConfig()
   if (!baseConfig) return null
 
-  const config = await ensureCanonicalSiteId(baseConfig)
+  try {
+    const config = await ensureCanonicalSiteId(baseConfig)
 
-  if (!netlifyStore) {
-    netlifyStore = getStore({
-      name: config.storeName,
-      siteID: config.siteId,
-      token: config.token,
+    if (!netlifyStore) {
+      const storeOptions: GetStoreOptions = {
+        name: config.storeName,
+        siteID: config.siteId,
+      }
+      if (config.token) storeOptions.token = config.token
+      if (config.apiUrl) storeOptions.apiURL = config.apiUrl
+      if (config.edgeUrl) storeOptions.edgeURL = config.edgeUrl
+      if (config.uncachedEdgeUrl) storeOptions.uncachedEdgeURL = config.uncachedEdgeUrl
+      if (config.consistency) storeOptions.consistency = config.consistency
+
+      netlifyStore = getStore(storeOptions)
+    }
+
+    netlifyStoreInitError = null
+    return netlifyStore
+  } catch (error) {
+    const wrapped = await buildBlobError(error, {
+      action: 'initialize blob store',
+      config: baseConfig,
     })
+    netlifyStore = null
+    netlifyStoreInitError = (wrapped as any).blobDetails ?? {
+      action: 'initialize blob store',
+      originalMessage: wrapped.message,
+    }
+    console.error(wrapped)
+    return null
   }
-
-  return netlifyStore
 }
 
 function refreshNetlifyEnvironment() {
@@ -941,6 +967,7 @@ function refreshNetlifyEnvironment() {
     netlifyConfig = result.config
     netlifyContextSignature = result.signature
     netlifyStore = undefined
+    netlifyStoreInitError = null
   }
 
   netlifyDiagnostics = result.diagnostics
@@ -948,6 +975,7 @@ function refreshNetlifyEnvironment() {
 
 function invalidateNetlifyStoreCache() {
   netlifyStore = undefined
+  netlifyStoreInitError = null
 }
 
 function shouldInvalidateNetlifyStore(error: any): boolean {
@@ -1392,7 +1420,12 @@ export async function blobHealth() {
   try {
     const store = await getNetlifyStore()
     if (!store) {
-      return { ok: false, mode: 'netlify', reason: 'failed to initialize store' }
+      return {
+        ok: false,
+        mode: 'netlify',
+        reason: netlifyStoreInitError?.originalMessage || 'failed to initialize store',
+        details: netlifyStoreInitError || undefined,
+      }
     }
     await store.list({ prefix: '', directories: false })
     return { ok: true, mode: 'netlify', store: config.storeName }
@@ -1417,16 +1450,17 @@ export function getBlobEnvironment() {
   const diagnostics = getBlobEnvDiagnostics()
   const config = getNetlifyConfig()
   if (!config) {
-    return { provider: 'memory', configured: false as const, diagnostics }
+    return { provider: 'memory', configured: false as const, diagnostics, error: null }
   }
   return {
     provider: 'netlify',
-    configured: true as const,
+    configured: netlifyStoreInitError ? false : (true as const),
     store: config.storeName,
     siteId: config.siteId,
     siteSlug: config.siteSlug,
     siteName: config.siteName,
     diagnostics,
+    error: netlifyStoreInitError,
   }
 }
 
