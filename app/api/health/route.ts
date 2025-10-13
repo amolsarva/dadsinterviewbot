@@ -4,7 +4,7 @@ import { dbHealth } from '@/lib/data'
 import { areSummaryEmailsEnabled } from '@/lib/email'
 
 export async function GET(request: Request) {
-  primeNetlifyBlobContextFromHeaders(request.headers)
+  primeNetlifyBlobContextFromHeaders((request as Request | undefined)?.headers)
   const blob = await blobHealth()
   const db = await dbHealth()
   const storageEnv = getBlobEnvironment()

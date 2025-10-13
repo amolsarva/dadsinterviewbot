@@ -91,14 +91,27 @@ async function captureResponseSnippet(res: Response): Promise<string | undefined
 }
 
 export async function GET(req: NextRequest) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  const request = req as NextRequest | undefined
+  primeNetlifyBlobContextFromHeaders(request?.headers)
   const env = getBlobEnvironment()
   const health = await blobHealth()
   const flowSteps: FlowStep[] = []
 
   const probeId = randomUUID()
   const startedAt = new Date().toISOString()
-  const origin = req.nextUrl?.origin
+  const origin = (() => {
+    const nextUrl = request?.nextUrl
+    if (nextUrl) return nextUrl.origin
+    const rawUrl = (request as Request | undefined)?.url
+    if (typeof rawUrl === 'string' && rawUrl.length) {
+      try {
+        return new URL(rawUrl).origin
+      } catch {
+        return undefined
+      }
+    }
+    return undefined
+  })()
   const context: FlowDiagnostics = {
     ok: false,
     probeId,

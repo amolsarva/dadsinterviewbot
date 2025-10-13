@@ -4,7 +4,7 @@ import type { CSSProperties, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useInterviewMachine } from '@/lib/machine'
 
-const BUILD_TIMESTAMP_LABEL = 'This build is from October 13, 2025 at 07:29 AM ET'
+const BUILD_TIMESTAMP_LABEL = 'This build is from October 13, 2025 at 08:07 AM ET'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 import { SummarizableTurn } from '@/lib/session-title'

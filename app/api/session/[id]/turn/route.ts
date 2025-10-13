@@ -4,7 +4,7 @@ import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { z } from 'zod'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string }}) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  primeNetlifyBlobContextFromHeaders((req as NextRequest | undefined)?.headers)
   try {
     const body = await req.json()
     const schema = z.object({

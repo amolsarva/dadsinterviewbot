@@ -31,8 +31,7 @@ type HeaderLike =
       get(name: string): string | null
     }
   | Record<string, string | string[] | undefined>
-  | null
-  | undefined
+
 
 type NetlifyConfig = {
   storeName: string
@@ -664,7 +663,7 @@ function parseNetlifyContext(): NetlifyContext | null {
   return null
 }
 
-function getHeaderValue(headers: HeaderLike, name: string): string | undefined {
+function getHeaderValue(headers: HeaderLike | null | undefined, name: string): string | undefined {
   if (!headers) return undefined
   const target = name.toLowerCase()
   if (typeof (headers as any).get === 'function') {
@@ -763,7 +762,8 @@ function parseContextPayload(raw: string | undefined | null): Partial<NetlifyCon
   return null
 }
 
-function extractNetlifyContextFromHeaders(headers: HeaderLike): Partial<NetlifyContext> | null {
+function extractNetlifyContextFromHeaders(headers?: HeaderLike | null): Partial<NetlifyContext> | null {
+  if (!headers) return null
   const headerCandidates = [
     'x-nf-context',
     'x-nf-blobs-context',
@@ -798,7 +798,8 @@ function extractNetlifyContextFromHeaders(headers: HeaderLike): Partial<NetlifyC
   return Object.keys(assembled).length ? assembled : null
 }
 
-export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean {
+export function primeNetlifyBlobContextFromHeaders(headers?: HeaderLike | null): boolean {
+  if (!headers) return false
   const extracted = extractNetlifyContextFromHeaders(headers)
   if (!extracted) return false
   return setNetlifyBlobContext(extracted)

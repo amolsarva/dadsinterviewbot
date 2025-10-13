@@ -6,7 +6,7 @@ import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 import { formatSessionTitleFallback } from '@/lib/fallback-texts'
 
 export async function GET(request: Request) {
-  primeNetlifyBlobContextFromHeaders(request.headers)
+  primeNetlifyBlobContextFromHeaders((request as Request | undefined)?.headers)
   const url = new URL(request.url)
   const handle = url.searchParams.get('handle')
   const items = await listSessions(handle)
@@ -81,7 +81,7 @@ export async function GET(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  primeNetlifyBlobContextFromHeaders(request.headers)
+  primeNetlifyBlobContextFromHeaders((request as Request | undefined)?.headers)
   const url = new URL(request.url)
   const handle = url.searchParams.get('handle')
   if (handle) {

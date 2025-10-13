@@ -12,7 +12,7 @@ function parseLimit(raw: string | null): number | undefined {
 }
 
 export async function GET(request: Request) {
-  primeNetlifyBlobContextFromHeaders(request.headers)
+  primeNetlifyBlobContextFromHeaders((request as Request | undefined)?.headers)
   const url = new URL(request.url)
   const limit = parseLimit(url.searchParams.get('limit'))
   const handles = await listUserHandles({ limit })

@@ -5,7 +5,7 @@ import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 export const runtime = 'nodejs'
 
 export async function POST(req: NextRequest) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  primeNetlifyBlobContextFromHeaders((req as NextRequest | undefined)?.headers)
   let payload: any = {}
   try {
     const raw = await req.text()

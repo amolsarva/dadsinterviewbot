@@ -17,7 +17,7 @@ const schema = z.object({
 })
 
 export async function POST(req: NextRequest) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  primeNetlifyBlobContextFromHeaders((req as NextRequest | undefined)?.headers)
   try {
     const body = await req.json()
     const parsed = schema.parse(body)

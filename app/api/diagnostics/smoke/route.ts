@@ -20,7 +20,7 @@ function wrapStage<T>(stage: Stage, task: () => Promise<T>): Promise<T> {
 }
 
 export async function POST(request: Request) {
-  primeNetlifyBlobContextFromHeaders(request.headers)
+  primeNetlifyBlobContextFromHeaders((request as Request | undefined)?.headers)
   try {
     const session = await wrapStage('create_session', () =>
       createSession({ email_to: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co' })

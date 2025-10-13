@@ -9,7 +9,7 @@ const schema = z.object({
 })
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  primeNetlifyBlobContextFromHeaders((req as NextRequest | undefined)?.headers)
   let payload: unknown
   try {
     payload = await req.json()

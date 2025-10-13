@@ -73,7 +73,7 @@ function buildHistorySummary(
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  primeNetlifyBlobContextFromHeaders((req as NextRequest | undefined)?.headers)
   const sessionId = params.id
   await ensureSessionMemoryHydrated().catch(() => undefined)
   const { current, sessions } = getSessionMemorySnapshot(sessionId)

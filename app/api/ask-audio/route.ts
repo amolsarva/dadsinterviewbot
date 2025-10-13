@@ -202,7 +202,7 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
 }
 
 export async function POST(req: NextRequest) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  primeNetlifyBlobContextFromHeaders((req as NextRequest | undefined)?.headers)
   const url = new URL(req.url)
   const provider = url.searchParams.get('provider') || process.env.PROVIDER || 'google'
   let requestTurn: number | null = null

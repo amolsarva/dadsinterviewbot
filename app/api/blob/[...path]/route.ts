@@ -63,9 +63,9 @@ async function handleBlobRequest(path: string, download: boolean, includeBody: b
   return response
 }
 
-function primeContext(req: Request | NextRequest) {
+function primeContext(req: Request | NextRequest | null | undefined) {
   try {
-    primeNetlifyBlobContextFromHeaders(req.headers)
+    primeNetlifyBlobContextFromHeaders((req as Request | NextRequest | undefined)?.headers)
   } catch {
     // ignore header parsing failures
   }
