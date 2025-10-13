@@ -4,6 +4,7 @@ import {
   BLOB_PROXY_PREFIX,
   blobHealth,
   getBlobEnvironment,
+  primeNetlifyBlobContextFromHeaders,
   putBlobFromBuffer,
   readBlob,
 } from '@/lib/blob'
@@ -90,6 +91,7 @@ async function captureResponseSnippet(res: Response): Promise<string | undefined
 }
 
 export async function GET(req: NextRequest) {
+  primeNetlifyBlobContextFromHeaders(req.headers)
   const env = getBlobEnvironment()
   const health = await blobHealth()
   const flowSteps: FlowStep[] = []

@@ -216,6 +216,14 @@ a:hover {
   outline-offset: 2px;
 }
 
+.hero-build-stamp {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .account-switcher__label {
   font-weight: 500;
   color: var(--muted);

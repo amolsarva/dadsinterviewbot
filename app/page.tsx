@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useInterviewMachine } from '@/lib/machine'
+
+const BUILD_TIMESTAMP_LABEL = 'This build is from October 13, 2025 at 07:29 AM ET'
 import { calibrateRMS, recordUntilSilence, blobToBase64 } from '@/lib/audio-bridge'
 import { createSessionRecorder, SessionRecorder } from '@/lib/session-recorder'
 import { SummarizableTurn } from '@/lib/session-title'
@@ -468,6 +470,13 @@ export function Home({ userHandle }: { userHandle?: string }) {
   const startupErrorRef = useRef<string | null>(null)
   const accountSwitcherRef = useRef<HTMLDivElement | null>(null)
   const newUserInputRef = useRef<HTMLInputElement | null>(null)
+
+  const stopAutoAdvance = useCallback(() => {
+    if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimeoutRef.current)
+    }
+    autoAdvanceTimeoutRef.current = null
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1078,13 +1087,6 @@ export function Home({ userHandle }: { userHandle?: string }) {
     } catch {}
   }, [])
 
-  const stopAutoAdvance = useCallback(() => {
-    if (typeof window !== 'undefined' && autoAdvanceTimeoutRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimeoutRef.current)
-    }
-    autoAdvanceTimeoutRef.current = null
-  }, [])
-
   const recordFatal = useCallback(
     (message: string, details: string[] = []) => {
       const normalized = details.filter((detail) => typeof detail === 'string' && detail.trim().length)
@@ -1666,7 +1668,7 @@ export function Home({ userHandle }: { userHandle?: string }) {
           details.push(`Body: ${snippet}`)
         }
         recordFatal('Intro prompt request failed.', [
-          *details,
+          ...details,
           'Run Diagnostics and resolve the failure before starting again.',
         ])
         return
@@ -2079,6 +2081,9 @@ export function Home({ userHandle }: { userHandle?: string }) {
               ) : null}
             </div>
           ) : null}
+        </div>
+        <div className="hero-build-stamp" aria-label="Build timestamp">
+          {BUILD_TIMESTAMP_LABEL}
         </div>
         {providerError && (
           <div className="alert-banner alert-banner--error" role="alert">

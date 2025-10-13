@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { putBlobFromBuffer } from '@/lib/blob'
+import { primeNetlifyBlobContextFromHeaders, putBlobFromBuffer } from '@/lib/blob'
 import { mergeSessionArtifacts } from '@/lib/data'
 
 const schema = z.object({
@@ -11,6 +11,7 @@ const schema = z.object({
 })
 
 export async function POST(request: NextRequest) {
+  primeNetlifyBlobContextFromHeaders(request.headers)
   try {
     const body = await request.json()
     const { sessionId, audio, mime, duration_ms } = schema.parse(body)

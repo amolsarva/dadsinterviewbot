@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createSession, appendTurn, finalizeSession } from '@/lib/data'
+import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { listFoxes } from '@/lib/foxes'
 
 export const runtime = 'nodejs'
@@ -18,7 +19,8 @@ function wrapStage<T>(stage: Stage, task: () => Promise<T>): Promise<T> {
   })
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  primeNetlifyBlobContextFromHeaders(request.headers)
   try {
     const session = await wrapStage('create_session', () =>
       createSession({ email_to: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co' })

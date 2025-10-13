@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
+import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import {
   collectAskedQuestions,
   extractAskedQuestions,
@@ -201,6 +202,7 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
 }
 
 export async function POST(req: NextRequest) {
+  primeNetlifyBlobContextFromHeaders(req.headers)
   const url = new URL(req.url)
   const provider = url.searchParams.get('provider') || process.env.PROVIDER || 'google'
   let requestTurn: number | null = null

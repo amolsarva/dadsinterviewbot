@@ -1,9 +1,14 @@
 import 'server-only'
+import { headers } from 'next/headers'
 import { getSession } from '@/lib/data'
+import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 
 export default async function SessionPage({ params }: { params: { id: string } }) {
+  primeNetlifyBlobContextFromHeaders(headers())
   const s = await getSession(params.id)
   if (!s) return <main>Not found.</main>
+  const sessionManifestHref =
+    s.artifacts?.manifest ?? s.artifacts?.session_manifest ?? undefined
   return (
     <main>
       <div className="panel-card session-card">
@@ -46,8 +51,8 @@ export default async function SessionPage({ params }: { params: { id: string } }
               Transcript (json)
             </a>
           )}
-          {(s.artifacts?.manifest || s.artifacts?.session_manifest) && (
-            <a className="link" href={(s.artifacts.manifest || s.artifacts.session_manifest)!}>
+          {sessionManifestHref && (
+            <a className="link" href={sessionManifestHref}>
               Session manifest
             </a>
           )}
