@@ -1,30 +1,11 @@
+// NO FALLBACK: This module crashes if Netlify Blob is unavailable.
 import { getStore, type GetStoreOptions, type Store } from '@netlify/blobs'
-import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
   access?: 'public'
   addRandomSuffix?: boolean
   cacheControlMaxAge?: number
 }
-
-type MemoryBlobRecord = {
-  buffer: Buffer
-  contentType: string
-  uploadedAt: Date
-  size: number
-  dataUrl: string
-  cacheControl?: string
-}
-
-type NetlifyContext = {
-  apiURL?: string
-  edgeURL?: string
-  token?: string
-  siteID?: string
-  uncachedEdgeURL?: string
-}
-
-export type NetlifyBlobContext = NetlifyContext
 
 type HeaderLike =
   | {
@@ -34,77 +15,37 @@ type HeaderLike =
   | null
   | undefined
 
-type NetlifyConfig = {
+type BlobPhase = 'init' | 'upload' | 'read' | 'delete' | 'list'
+
+type BlobConfig = {
   storeName: string
   siteId: string
-  token?: string
-  apiUrl?: string
-  edgeUrl?: string
-  uncachedEdgeUrl?: string
+  token: string
+  apiURL?: string
+  edgeURL?: string
+  uncachedEdgeURL?: string
   consistency?: 'strong' | 'eventual'
-  siteSlug?: string
-  siteName?: string
 }
 
-type CandidateSource = 'env' | 'context' | 'default'
-
-type CandidateSummary = {
-  key: string
-  source: CandidateSource
-  present: boolean
-  valuePreview?: string
-  note?: string
-}
-
-type FieldDiagnostics = {
-  present: boolean
-  selected?: CandidateSummary
-  candidates: CandidateSummary[]
-}
-
-type StoreDiagnostics = FieldDiagnostics & {
-  defaulted: boolean
-}
-
-type TokenDiagnostics = FieldDiagnostics & {
-  length?: number
-}
-
-type BlobEnvDiagnostics = {
-  usingContext: boolean
-  contextKeys: string[]
-  missing: string[]
-  store: StoreDiagnostics
-  siteId: FieldDiagnostics
-  token: TokenDiagnostics
-  optional: {
-    apiUrl: FieldDiagnostics
-    edgeUrl: FieldDiagnostics
-    uncachedEdgeUrl: FieldDiagnostics
-    consistency?: string
-  }
-}
-
-type BlobErrorDetails = {
-  action: string
-  target?: string
-  store?: string
-  siteId?: string
-  siteSlug?: string
-  siteName?: string
-  tokenSource?: string
-  tokenLength?: number
-  usingContext?: boolean
-  contextKeys?: string[]
-  missing?: string[]
+type BlobErrorReport = {
+  phase: BlobPhase
   status?: number
   code?: string
-  requestId?: string
-  responseBodySnippet?: string
-  originalMessage?: string
+  message: string
+  siteId: string
+  storeName: string
+  target?: string
+  timestamp: string
+  attempts?: number
 }
 
-export type ListedBlob = {
+type ListCommandOptions = {
+  prefix?: string
+  limit?: number
+  cursor?: string
+}
+
+type ListedBlob = {
   pathname: string
   url: string
   downloadUrl: string
@@ -112,15 +53,9 @@ export type ListedBlob = {
   size?: number
 }
 
-export type ListBlobResult = {
+type ListBlobResult = {
   blobs: ListedBlob[]
   hasMore: boolean
-  cursor?: string
-}
-
-export type ListCommandOptions = {
-  prefix?: string
-  limit?: number
   cursor?: string
 }
 
@@ -133,432 +68,443 @@ type ReadBlobResult = {
   size?: number
 }
 
-const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
-const BLOB_PROXY_PREFIX = '/api/blob/'
-const NETLIFY_API_BASE_URL = 'https://api.netlify.com'
-const CANONICAL_SITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-const globalAny = globalThis as any
-if (!globalAny[GLOBAL_STORE_KEY]) {
-  globalAny[GLOBAL_STORE_KEY] = new Map<string, MemoryBlobRecord>()
+type NetlifyContext = {
+  apiURL?: string
+  edgeURL?: string
+  token?: string
+  siteID?: string
+  uncachedEdgeURL?: string
+  consistency?: 'strong' | 'eventual'
 }
 
-const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
-
-let netlifyConfig: NetlifyConfig | null | undefined
-let netlifyStore: Store | null | undefined
-let netlifyWarningIssued = false
-let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
-let netlifyContextSignature: string | undefined
-let netlifySiteResolution: Promise<SiteResolution | null> | null = null
-let netlifySiteResolutionSlug: string | null = null
-let netlifySiteResolutionNotified = false
-let netlifyStoreInitError: BlobErrorDetails | null = null
-
-type SiteResolution = {
-  slug: string
+type BlobEnvironment = {
+  provider: 'netlify'
+  configured: true
+  store: string
   siteId: string
-  siteName?: string
+  diagnostics: {
+    tokenLength: number
+    storeProvided: boolean
+    debug: boolean
+  }
+  error: BlobErrorReport | null
+  lastSuccessAt?: string
 }
 
-function defaultDiagnostics(): BlobEnvDiagnostics {
+const BLOB_PROXY_PREFIX = '/api/blob/'
+const DEFAULT_STORE_NAME = 'dads-interview-bot'
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const debugEnabled = String(process.env.DEBUG_BLOBS).toLowerCase() === 'true'
+
+let contextOverrides: NetlifyContext = {}
+let cachedStore: Store | null = null
+let readinessPromise: Promise<void> | null = null
+let lastErrorReport: BlobErrorReport | null = null
+let lastSuccessTimestamp: string | undefined
+
+const validatedConfig = validateEnvironment()
+
+logEnvironmentDiagnostics(validatedConfig)
+
+function validateEnvironment(): BlobConfig {
+  const rawSiteId = (process.env.NETLIFY_BLOBS_SITE_ID || '').trim()
+  if (!rawSiteId) {
+    throw new Error('Fatal: NETLIFY_BLOBS_SITE_ID is required for Netlify blob storage.')
+  }
+  if (!UUID_REGEX.test(rawSiteId)) {
+    throw new Error('Fatal: Netlify configuration invalid - NETLIFY_BLOBS_SITE_ID must be a UUID.')
+  }
+
+  const rawToken = (process.env.NETLIFY_BLOBS_TOKEN || '').trim()
+  if (!rawToken || rawToken.length <= 20) {
+    throw new Error('Fatal: Netlify configuration invalid - NETLIFY_BLOBS_TOKEN is missing or too short.')
+  }
+
+  const rawStore = (process.env.NETLIFY_BLOBS_STORE || '').trim()
+  const storeName = rawStore.length ? rawStore : DEFAULT_STORE_NAME
+  if (!rawStore.length) {
+    console.warn(
+      '[Blob Init] NETLIFY_BLOBS_STORE missing. Defaulting to "dads-interview-bot". Update your environment to silence this warning.',
+    )
+  }
+
+  const apiURL = (process.env.NETLIFY_BLOBS_API_URL || '').trim() || undefined
+  const edgeURL = (process.env.NETLIFY_BLOBS_EDGE_URL || '').trim() || undefined
+  const uncachedEdgeURL = (process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL || '').trim() || undefined
+  const consistency = (process.env.NETLIFY_BLOBS_CONSISTENCY || '').trim() || undefined
+
   return {
-    usingContext: false,
-    contextKeys: [],
-    missing: ['siteId'],
-    store: {
-      present: false,
-      defaulted: true,
-      selected: undefined,
-      candidates: [],
-    },
-    siteId: {
-      present: false,
-      selected: undefined,
-      candidates: [],
-    },
-    token: {
-      present: false,
-      selected: undefined,
-      candidates: [],
-      length: undefined,
-    },
-    optional: {
-      apiUrl: { present: false, selected: undefined, candidates: [] },
-      edgeUrl: { present: false, selected: undefined, candidates: [] },
-      uncachedEdgeUrl: { present: false, selected: undefined, candidates: [] },
-      consistency: undefined,
-    },
+    storeName,
+    siteId: rawSiteId,
+    token: rawToken,
+    apiURL,
+    edgeURL,
+    uncachedEdgeURL,
+    consistency: isValidConsistency(consistency) ? (consistency as 'strong' | 'eventual') : undefined,
   }
 }
 
-function maskValue(value: string): string {
-  if (!value) return ''
-  if (value.length <= 8) return value
-  return `${value.slice(0, 4)}…${value.slice(-4)}`
+function isValidConsistency(value: string | undefined): value is 'strong' | 'eventual' {
+  return value === 'strong' || value === 'eventual'
 }
 
-function truncateForDiagnostics(value: string, limit = 240) {
-  const cleaned = value.replace(/\s+/g, ' ').trim()
-  if (!cleaned.length) return ''
-  if (cleaned.length <= limit) return cleaned
-  return `${cleaned.slice(0, limit - 1)}…`
+function logEnvironmentDiagnostics(config: BlobConfig) {
+  const storeProvided = Boolean((process.env.NETLIFY_BLOBS_STORE || '').trim().length)
+  const lines = [
+    '[Blob Init]',
+    `NETLIFY_BLOBS_SITE_ID: \u2713 valid UUID (${maskSiteId(config.siteId)})`,
+    `NETLIFY_BLOBS_TOKEN: \u2713 present (length ${config.token.length})`,
+    `NETLIFY_BLOBS_STORE: ${storeProvided ? '\u2713 ' + config.storeName : `! defaulting to ${config.storeName}`}`,
+  ]
+  console.info(lines.join('\n'))
+  if (debugEnabled) {
+    console.debug('[Blob Init] DEBUG_BLOBS mode enabled; verbose Netlify blob logging active.')
+  }
 }
 
-function looksLikeSiteId(value: string): boolean {
-  return CANONICAL_SITE_ID.test(value.trim())
+function maskSiteId(siteId: string): string {
+  if (!siteId || siteId.length < 4) return siteId
+  return `****${siteId.slice(-4)}`
 }
 
-async function resolveSiteId(config: NetlifyConfig): Promise<SiteResolution | null> {
-  const slug = config.siteId.trim()
-  if (!slug.length) return null
-  const token = config.token?.trim() ?? ''
-  if (!token.length) return null
-  const base = (config.apiUrl || '').trim() || NETLIFY_API_BASE_URL
-  const url = new URL(`/api/v1/sites/${encodeURIComponent(slug)}`, base)
+function maskToken(token: string): string {
+  if (!token) return ''
+  if (token.length <= 8) return `${token.slice(0, 2)}**`
+  return `${token.slice(0, 4)}…${token.slice(-4)}`
+}
 
-  if (typeof fetch !== 'function') {
-    throw new Error('Global fetch implementation is required to resolve Netlify site slugs.')
+function getActiveConfig(): BlobConfig {
+  const merged: BlobConfig = {
+    ...validatedConfig,
+    ...contextOverrides,
+    token: validatedConfig.token,
+    siteId: validatedConfig.siteId,
+    storeName: validatedConfig.storeName,
+  }
+  return merged
+}
+
+function resetStore(reason: string) {
+  if (cachedStore) {
+    console.info(`[Blob init] Resetting cached store due to: ${reason}`)
+  }
+  cachedStore = null
+  readinessPromise = null
+}
+
+function sanitizeContext(input: Partial<NetlifyContext> | null | undefined): NetlifyContext | null {
+  if (!input || typeof input !== 'object') return null
+  const cleaned: NetlifyContext = {}
+  const keys: (keyof NetlifyContext)[] = [
+    'apiURL',
+    'edgeURL',
+    'token',
+    'siteID',
+    'uncachedEdgeURL',
+    'consistency',
+  ]
+  for (const key of keys) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim().length > 0) {
+      cleaned[key] = value.trim()
+    }
+  }
+  if (cleaned.consistency && !isValidConsistency(cleaned.consistency)) {
+    delete cleaned.consistency
+  }
+  return Object.keys(cleaned).length ? cleaned : null
+}
+
+export function setNetlifyBlobContext(context: Partial<NetlifyContext> | null | undefined): boolean {
+  const sanitized = sanitizeContext(context)
+  if (!sanitized) return false
+
+  if (sanitized.siteID && sanitized.siteID !== validatedConfig.siteId) {
+    throw new Error(
+      `Fatal: Netlify configuration invalid - header site ID ${sanitized.siteID} does not match NETLIFY_BLOBS_SITE_ID ${validatedConfig.siteId}.`,
+    )
+  }
+  if (sanitized.token && sanitized.token !== validatedConfig.token) {
+    throw new Error('Fatal: Netlify configuration invalid - request token differs from configured token.')
   }
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'user-agent': 'dads-interview-bot/slug-resolver',
-    },
-  })
-
-  if (response.status === 404) {
-    return null
+  const nextContext: NetlifyContext = { ...contextOverrides }
+  let changed = false
+  for (const [key, value] of Object.entries(sanitized) as [keyof NetlifyContext, string][]) {
+    if (value && nextContext[key] !== value) {
+      nextContext[key] = value
+      changed = true
+    }
   }
+  if (!changed) return true
+  contextOverrides = nextContext
+  resetStore('updated Netlify context overrides')
+  return true
+}
 
-  if (!response.ok) {
-    let snippet: string | undefined
+export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean {
+  if (!headers) return false
+  const candidates: NetlifyContext = {}
+  const siteIdHeader = pickFirstHeader(headers, [
+    'x-nf-site-id',
+    'x-netlify-site-id',
+    'x-nf-blobs-site-id',
+    'x-netlify-blobs-site-id',
+  ])
+  if (siteIdHeader) candidates.siteID = siteIdHeader
+
+  const tokenHeader = pickFirstHeader(headers, [
+    'x-nf-token',
+    'x-netlify-token',
+    'x-nf-blobs-token',
+    'x-netlify-blobs-token',
+  ])
+  if (tokenHeader) candidates.token = tokenHeader
+
+  const apiUrlHeader = pickFirstHeader(headers, ['x-nf-blobs-api-url', 'x-netlify-blobs-api-url'])
+  if (apiUrlHeader) candidates.apiURL = apiUrlHeader
+
+  const edgeUrlHeader = pickFirstHeader(headers, ['x-nf-blobs-edge-url', 'x-netlify-blobs-edge-url'])
+  if (edgeUrlHeader) candidates.edgeURL = edgeUrlHeader
+
+  const uncachedEdgeUrlHeader = pickFirstHeader(headers, [
+    'x-nf-blobs-uncached-edge-url',
+    'x-netlify-blobs-uncached-edge-url',
+  ])
+  if (uncachedEdgeUrlHeader) candidates.uncachedEdgeURL = uncachedEdgeUrlHeader
+
+  const consistencyHeader = pickFirstHeader(headers, ['x-nf-blobs-consistency'])
+  if (consistencyHeader) candidates.consistency = consistencyHeader as 'strong' | 'eventual'
+
+  return setNetlifyBlobContext(candidates)
+}
+
+function pickFirstHeader(headers: HeaderLike, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = getHeaderValue(headers, name)
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+  return undefined
+}
+
+function getHeaderValue(headers: HeaderLike, name: string): string | undefined {
+  if (!headers) return undefined
+  if (typeof (headers as any).get === 'function') {
     try {
-      const text = await response.text()
-      if (text && text.trim().length) {
-        snippet = truncateForDiagnostics(text, 160)
-      }
-    } catch {}
-    const summary = snippet ? `: ${snippet}` : ''
-    throw new Error(`Failed to resolve Netlify site slug "${slug}" (status ${response.status})${summary}`)
+      const value = (headers as any).get(name)
+      if (typeof value === 'string') return value
+    } catch {
+      // ignore header read errors
+    }
   }
+  if (typeof headers === 'object' && !Array.isArray(headers)) {
+    const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase())
+    if (!entry) return undefined
+    const value = entry[1]
+    if (typeof value === 'string') return value
+    if (Array.isArray(value)) {
+      const candidate = value.find((item) => typeof item === 'string')
+      return candidate
+    }
+    if (value != null) return String(value)
+  }
+  return undefined
+}
 
-  let payload: any
+function ensureStore(): Store {
+  if (cachedStore) return cachedStore
+  const config = getActiveConfig()
+  logStoreConfiguration(config)
   try {
-    payload = await response.json()
+    const options: GetStoreOptions = {
+      name: config.storeName,
+      siteID: config.siteId,
+      token: config.token,
+    }
+    if (config.apiURL) options.apiURL = config.apiURL
+    if (config.edgeURL) options.edgeURL = config.edgeURL
+    if (config.uncachedEdgeURL) options.uncachedEdgeURL = config.uncachedEdgeURL
+    if (config.consistency) options.consistency = config.consistency
+
+    cachedStore = getStore(options)
+    console.info(`[Blob init] Connected to Netlify blob store "${config.storeName}" for site ${maskSiteId(config.siteId)}.`)
+    return cachedStore
   } catch (error) {
-    throw new Error(`Resolved Netlify site slug "${slug}" but failed to parse response JSON: ${(error as Error).message}`)
+    const report = logStructuredError('init', error, config)
+    throw fatalError(report, error)
   }
-
-  const rawId = typeof payload?.id === 'string' ? payload.id.trim() : ''
-  if (!looksLikeSiteId(rawId)) {
-    throw new Error(
-      `Netlify site lookup for slug "${slug}" returned an unexpected site identifier. Expected a UUID but received "${rawId}".`,
-    )
-  }
-
-  const siteName =
-    typeof payload?.name === 'string' && payload.name.trim().length
-      ? payload.name.trim()
-      : typeof payload?.site_name === 'string' && payload.site_name.trim().length
-      ? payload.site_name.trim()
-      : undefined
-
-  return { slug, siteId: rawId, siteName }
 }
 
-async function ensureCanonicalSiteId(config: NetlifyConfig): Promise<NetlifyConfig> {
-  if (looksLikeSiteId(config.siteId)) {
-    if (!config.siteSlug) {
-      return config
-    }
-    return { ...config }
-  }
-
-  if (!config.token?.trim()) {
-    throw new Error(
-      `NETLIFY_BLOBS_SITE_ID is set to "${config.siteId}", which looks like a site slug. Provide the Site ID (UUID) from Netlify or set NETLIFY_BLOBS_TOKEN so the slug can be resolved automatically.`,
-    )
-  }
-
-  if (!netlifySiteResolution || netlifySiteResolutionSlug !== config.siteId) {
-    netlifySiteResolutionSlug = config.siteId
-    netlifySiteResolution = resolveSiteId(config).catch((error) => {
-      netlifySiteResolution = null
-      throw error
-    })
-  }
-
-  const resolution = await netlifySiteResolution
-  if (!resolution) {
-    throw new Error(
-      `NETLIFY_BLOBS_SITE_ID is set to "${config.siteId}", which looks like a site slug. Provide the Site ID (UUID) from Netlify or ensure the slug is accessible to this token.`,
-    )
-  }
-
-  const updated: NetlifyConfig = {
-    ...config,
-    siteId: resolution.siteId,
-    siteSlug: resolution.slug,
-    siteName: resolution.siteName,
-  }
-
-  netlifyConfig = updated
-  updateDiagnosticsForResolution(resolution)
-  notifySiteResolution(resolution)
-
-  return updated
-}
-
-function updateDiagnosticsForResolution(resolution: SiteResolution) {
-  if (!netlifyDiagnostics) return
-  const noteParts = [`resolved slug "${resolution.slug}" to site ID ${maskValue(resolution.siteId)}`]
-  if (resolution.siteName && resolution.siteName !== resolution.slug) {
-    noteParts.push(`(${resolution.siteName})`)
-  }
-  const note = noteParts.join(' ')
-  if (netlifyDiagnostics.siteId.selected) {
-    netlifyDiagnostics.siteId.selected = {
-      ...netlifyDiagnostics.siteId.selected,
-      valuePreview: maskValue(resolution.siteId),
-      note: netlifyDiagnostics.siteId.selected.note
-        ? `${netlifyDiagnostics.siteId.selected.note}; ${note}`
-        : note,
-    }
-  }
-  netlifyDiagnostics.siteId.present = true
-  netlifyDiagnostics.missing = netlifyDiagnostics.missing.filter((entry) => entry !== 'siteId')
-}
-
-function notifySiteResolution(resolution: SiteResolution) {
-  if (netlifySiteResolutionNotified) return
-  netlifySiteResolutionNotified = true
-  flagFox({
-    id: 'netlify-site-slug-resolved',
-    theory: 2,
-    level: 'info',
-    message: `Resolved Netlify site slug "${resolution.slug}" to site ID ${maskValue(resolution.siteId)} for blob storage.`,
-    details: {
-      siteSlug: resolution.slug,
-      siteId: maskValue(resolution.siteId),
-      siteName: resolution.siteName,
-    },
+function logStoreConfiguration(config: BlobConfig) {
+  console.info('[Blob init] Using Netlify configuration', {
+    storeName: config.storeName,
+    siteId: maskSiteId(config.siteId),
+    token: maskToken(config.token),
+    apiURL: config.apiURL || null,
+    edgeURL: config.edgeURL || null,
+    uncachedEdgeURL: config.uncachedEdgeURL || null,
+    consistency: config.consistency || null,
   })
 }
 
-function extractStatusCode(error: any): number | undefined {
-  const status =
-    typeof error?.status === 'number'
-      ? error.status
-      : typeof error?.statusCode === 'number'
-      ? error.statusCode
-      : typeof error?.response?.status === 'number'
-      ? error.response.status
-      : typeof error?.response?.statusCode === 'number'
-      ? error.response.statusCode
-      : undefined
-  if (typeof status === 'number' && Number.isFinite(status)) return status
-  return undefined
+function fatalError(report: BlobErrorReport, error: unknown): Error {
+  const message = `Fatal: Netlify blob ${report.phase} failed - ${report.message}`
+  const err = new Error(message, { cause: error }) as Error & {
+    status?: number
+    code?: string
+    blobDetails?: BlobErrorReport
+  }
+  err.status = report.status
+  err.code = report.code
+  err.blobDetails = report
+  return err
 }
 
-function extractErrorCode(error: any): string | undefined {
-  const code =
-    typeof error?.code === 'string'
-      ? error.code
-      : typeof error?.error?.code === 'string'
-      ? error.error.code
-      : typeof error?.response?.code === 'string'
-      ? error.response.code
-      : undefined
-  return code && code.trim().length ? code.trim() : undefined
-}
-
-function extractRequestId(error: any): string | undefined {
-  const headerValue = (() => {
-    const headers = error?.response?.headers
-    if (!headers) return undefined
-    if (typeof headers.get === 'function') {
-      try {
-        const value = headers.get('x-nf-request-id')
-        if (typeof value === 'string' && value.trim().length) return value.trim()
-      } catch {}
+async function executeWithRetries<T>(
+  phase: BlobPhase,
+  target: string | undefined,
+  operation: () => Promise<T>,
+  onSuccess?: (result: T) => void,
+): Promise<T> {
+  const config = getActiveConfig()
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (debugEnabled) {
+        console.debug(`[Blob ${phase}] Attempt ${attempt}${target ? ` for ${target}` : ''}`)
+      }
+      const result = await operation()
+      lastErrorReport = null
+      lastSuccessTimestamp = new Date().toISOString()
+      console.info(
+        `[Blob ${phase}] Success${target ? ` (${target})` : ''}${attempt > 1 ? ` after ${attempt} attempts` : ''}.`,
+      )
+      if (onSuccess) onSuccess(result)
+      return result
+    } catch (error) {
+      const report = logStructuredError(phase, error, config, target, attempt)
+      if (report.status === 401 || report.status === 403) {
+        throw new Error('Fatal: Netlify configuration invalid.', { cause: error })
+      }
+      if (report.status === 429 || report.status === 500) {
+        if (attempt < maxAttempts) {
+          const delayMs = 250 * attempt
+          if (debugEnabled) {
+            console.debug(`[Blob ${phase}] Retrying after ${delayMs}ms due to status ${report.status}.`)
+          }
+          await delay(delayMs)
+          continue
+        }
+      }
+      throw fatalError(report, error)
     }
-    const raw = (headers as any)['x-nf-request-id'] || (headers as any)['X-Nf-Request-Id']
-    if (typeof raw === 'string' && raw.trim().length) return raw.trim()
-    return undefined
-  })()
-  const direct =
-    typeof error?.requestId === 'string'
-      ? error.requestId
-      : typeof error?.response?.requestId === 'string'
-      ? error.response.requestId
-      : undefined
-  const value = headerValue || direct
-  return value && value.trim().length ? value.trim() : undefined
+  }
+  throw new Error('Fatal: unexpected blob retry exhaustion.')
 }
 
-async function extractResponseBodySnippet(error: any): Promise<string | undefined> {
-  const direct =
-    typeof error?.body === 'string'
-      ? error.body
-      : typeof error?.responseBody === 'string'
-      ? error.responseBody
-      : typeof error?.response?.body === 'string'
-      ? error.response.body
-      : undefined
-  if (typeof direct === 'string' && direct.trim().length) {
-    return truncateForDiagnostics(direct)
-  }
-
-  const data =
-    typeof error?.data === 'string'
-      ? error.data
-      : typeof error?.response?.data === 'string'
-      ? error.response.data
-      : undefined
-  if (typeof data === 'string' && data.trim().length) {
-    return truncateForDiagnostics(data)
-  }
-
-  const jsonData = error?.response?.data
-  if (jsonData && typeof jsonData === 'object') {
-    try {
-      const serialized = JSON.stringify(jsonData)
-      if (serialized) return truncateForDiagnostics(serialized)
-    } catch {}
-  }
-
-  const response = error?.response
-  if (response && typeof response.text === 'function') {
-    try {
-      const text = await response.text()
-      if (typeof text === 'string' && text.trim().length) {
-        return truncateForDiagnostics(text)
-      }
-    } catch {}
-  }
-  if (response && typeof response.json === 'function') {
-    try {
-      const json = await response.json()
-      if (json) {
-        const serialized = JSON.stringify(json)
-        if (serialized) return truncateForDiagnostics(serialized)
-      }
-    } catch {}
-  }
-
-  return undefined
-}
-
-async function buildBlobError(
-  error: any,
-  context: { action: string; target?: string; config?: NetlifyConfig | null },
-): Promise<Error> {
-  const diagnostics = getBlobEnvDiagnostics()
-  const config = context.config ?? getNetlifyConfig()
-
-  const status = extractStatusCode(error)
-  const code = extractErrorCode(error)
-  const requestId = extractRequestId(error)
-  const bodySnippet = await extractResponseBodySnippet(error)
-  const originalMessage = typeof error?.message === 'string' ? error.message : undefined
-
-  const details: BlobErrorDetails = {
-    action: context.action,
-    target: context.target,
-    store: config?.storeName,
-    siteId: config?.siteId,
-    siteSlug: config?.siteSlug,
-    siteName: config?.siteName,
-    tokenSource: diagnostics.token.selected?.key,
-    tokenLength: diagnostics.token.length,
-    usingContext: diagnostics.usingContext,
-    contextKeys: diagnostics.contextKeys,
-    missing: diagnostics.missing,
+function logStructuredError(
+  phase: BlobPhase,
+  error: unknown,
+  config: BlobConfig,
+  target?: string,
+  attempt?: number,
+): BlobErrorReport {
+  const status = extractStatus(error)
+  const code = extractCode(error)
+  const message = extractMessage(error) || 'Unknown Netlify blob error'
+  const report: BlobErrorReport = {
+    phase,
     status,
     code,
-    requestId,
-    responseBodySnippet: bodySnippet,
-    originalMessage,
+    message,
+    siteId: maskSiteId(config.siteId),
+    storeName: config.storeName,
+    target,
+    timestamp: new Date().toISOString(),
+    attempts: attempt,
   }
+  lastErrorReport = report
 
-  const summaryParts: string[] = []
-  if (typeof status === 'number') summaryParts.push(`status ${status}`)
-  if (code) summaryParts.push(`code ${code}`)
-  if (requestId) summaryParts.push(`request ${requestId}`)
-  const maskedSite = config?.siteId ? maskValue(config.siteId) : undefined
-  const location =
-    config?.storeName && maskedSite
-      ? `Netlify store "${config.storeName}" (site ${maskedSite})`
-      : config?.storeName
-      ? `Netlify store "${config.storeName}"`
-      : 'Netlify blob store'
-  const summary = summaryParts.length ? ` (${summaryParts.join(', ')})` : ''
-
-  const message = `Failed to ${context.action}${
-    context.target ? ` "${context.target}"` : ''
-  } in ${location}${summary}. See attached blob error details for more context.`
-
-  const wrapped = new Error(message)
-  ;(wrapped as any).blobDetails = details
-  if (error && typeof error === 'object') {
-    ;(wrapped as any).cause = error
-  }
-  return wrapped
-}
-
-type CandidateInternal = {
-  key: string
-  source: CandidateSource
-  value: string
-  note?: string
-}
-
-function makeCandidate(
-  key: string,
-  raw: unknown,
-  source: CandidateSource,
-  note?: string,
-): CandidateInternal {
-  return {
-    key,
-    source,
-    value: typeof raw === 'string' ? raw.trim() : '',
-    note,
-  }
-}
-
-function summarizeCandidate(
-  candidate: CandidateInternal,
-  previewMode: 'store' | 'site' | 'token' | 'url',
-): CandidateSummary {
-  let valuePreview: string | undefined
-  if (candidate.value.length) {
-    switch (previewMode) {
-      case 'token':
-        valuePreview = `${candidate.value.length} chars`
-        break
-      case 'site':
-        valuePreview = maskValue(candidate.value)
-        break
-      default:
-        valuePreview = candidate.value
-        break
+  if (debugEnabled) {
+    const responseHeaders = extractResponseHeaders(error)
+    const responseBody = extractResponseBodySnippet(error)
+    const debugPayload = {
+      ...report,
+      debug: {
+        responseHeaders,
+        responseBody,
+      },
     }
+    console.error(JSON.stringify(debugPayload))
+  } else {
+    console.error(JSON.stringify(report))
   }
-  return {
-    key: candidate.key,
-    source: candidate.source,
-    present: candidate.value.length > 0,
-    valuePreview,
-    note: candidate.note,
-  }
+  return report
 }
 
-function pickFirstPresent(candidates: CandidateInternal[]): CandidateInternal | undefined {
-  return candidates.find((candidate) => candidate.value.length > 0)
+function extractStatus(error: any): number | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  return [error.status, error.statusCode, error.statusText, error.response?.status]
+    .map((candidate) => {
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate
+      if (typeof candidate === 'string') {
+        const parsed = Number.parseInt(candidate, 10)
+        if (Number.isFinite(parsed)) return parsed
+      }
+      return undefined
+    })
+    .find((value) => typeof value === 'number')
+}
+
+function extractCode(error: any): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const code = error.code || error.name
+  return typeof code === 'string' && code.length ? code : undefined
+}
+
+function extractMessage(error: any): string | undefined {
+  if (!error) return undefined
+  if (typeof error === 'string') return error
+  if (typeof error.message === 'string') return error.message
+  if (typeof error.toString === 'function') return error.toString()
+  return undefined
+}
+
+function extractResponseHeaders(error: any): Record<string, string> | undefined {
+  try {
+    const headers = error?.response?.headers
+    if (!headers) return undefined
+    if (typeof headers.forEach === 'function') {
+      const result: Record<string, string> = {}
+      headers.forEach((value: string, key: string) => {
+        result[key] = value
+      })
+      return result
+    }
+    if (typeof headers === 'object') {
+      return Object.fromEntries(
+        Object.entries(headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : String(value)]),
+      )
+    }
+  } catch {
+    // ignore header extraction failures
+  }
+  return undefined
+}
+
+function extractResponseBodySnippet(error: any): string | undefined {
+  const body = error?.response?.body || error?.responseBody || error?.body
+  if (!body) return undefined
+  if (typeof body === 'string') return body.slice(0, 500)
+  if (body instanceof Buffer) return body.toString('utf8', 0, 500)
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer).toString('utf8', 0, 500)
+  return undefined
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function normalizePath(path: string): string {
@@ -569,433 +515,29 @@ function normalizePath(path: string): string {
 function encodePathForUrl(path: string): string {
   return normalizePath(path)
     .split('/')
+    .filter((segment) => segment.length > 0)
     .map((segment) => encodeURIComponent(segment))
     .join('/')
 }
 
-function buildInlineDataUrl(contentType: string, buffer: Buffer): string {
-  const safeType = contentType && contentType.length ? contentType : 'application/octet-stream'
-  const base64 = buffer.toString('base64')
-  return `data:${safeType};base64,${base64}`
-}
-
-function randomSuffix(): string {
-  return Math.random().toString(36).slice(2, 10)
-}
-
 function applyRandomSuffix(path: string): string {
-  if (!path) return path
   const normalized = normalizePath(path)
+  if (!normalized) return normalized
   const lastSlash = normalized.lastIndexOf('/')
-  const directory = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : ''
+  const directory = lastSlash >= 0 ? `${normalized.slice(0, lastSlash + 1)}` : ''
   const filename = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized
   const dotIndex = filename.lastIndexOf('.')
-  const suffix = `-${randomSuffix()}`
+  const suffix = `-${Math.random().toString(36).slice(2, 10)}`
   if (dotIndex > 0) {
     return `${directory}${filename.slice(0, dotIndex)}${suffix}${filename.slice(dotIndex)}`
   }
   return `${directory}${filename}${suffix}`
 }
 
-function parseNetlifyContext(): NetlifyContext | null {
-  try {
-    const rawEnv = process.env.NETLIFY_BLOBS_CONTEXT || process.env.BLOBS_CONTEXT
-    if (rawEnv && rawEnv.trim().length) {
-      const decoded = Buffer.from(rawEnv.trim(), 'base64').toString('utf8')
-      const parsed = JSON.parse(decoded)
-      if (parsed && typeof parsed === 'object') {
-        return parsed as NetlifyContext
-      }
-    }
-  } catch {
-    // ignore malformed context payloads
-  }
-  const context = (globalThis as any).netlifyBlobsContext
-  if (context && typeof context === 'object') {
-    return context as NetlifyContext
-  }
-  return null
-}
-
-function getHeaderValue(headers: HeaderLike, name: string): string | undefined {
-  if (!headers) return undefined
-  const target = name.toLowerCase()
-  if (typeof (headers as any).get === 'function') {
-    try {
-      const direct = (headers as any).get(name)
-      if (typeof direct === 'string') return direct
-      if (direct && typeof direct === 'object' && typeof direct.toString === 'function') {
-        return direct.toString()
-      }
-      const lowered = (headers as any).get(target)
-      if (typeof lowered === 'string') return lowered
-      if (Array.isArray(lowered) && lowered.length) {
-        const candidate = lowered[0]
-        return typeof candidate === 'string' ? candidate : undefined
-      }
-    } catch {
-      // ignore header access errors
-    }
-  }
-  if (typeof headers === 'object') {
-    for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
-      if (key.toLowerCase() !== target) continue
-      if (typeof value === 'string') return value
-      if (Array.isArray(value) && value.length) {
-        const candidate = value[0]
-        return typeof candidate === 'string' ? candidate : undefined
-      }
-      if (value != null) {
-        return String(value)
-      }
-    }
-  }
-  return undefined
-}
-
-function sanitizeContextInput(context: Partial<NetlifyContext> | null | undefined): NetlifyContext | null {
-  if (!context || typeof context !== 'object') return null
-  const cleaned: NetlifyContext = {}
-  const keys: Array<keyof NetlifyContext> = ['apiURL', 'edgeURL', 'token', 'siteID', 'uncachedEdgeURL']
-  for (const key of keys) {
-    const raw = (context as any)[key]
-    if (typeof raw !== 'string') continue
-    const trimmed = raw.trim()
-    if (!trimmed.length) continue
-    ;(cleaned as any)[key] = trimmed
-  }
-  return Object.keys(cleaned).length ? cleaned : null
-}
-
-export function setNetlifyBlobContext(
-  contextInput: Partial<NetlifyContext> | null | undefined,
-): boolean {
-  const sanitized = sanitizeContextInput(contextInput)
-  if (!sanitized) return false
-  const globalContext = (globalThis as any).netlifyBlobsContext
-  const existing =
-    globalContext && typeof globalContext === 'object' ? (globalContext as NetlifyContext) : ({} as NetlifyContext)
-  const merged: NetlifyContext = { ...existing, ...sanitized }
-  const changed = JSON.stringify(existing) !== JSON.stringify(merged)
-  if (!changed) return true
-  ;(globalThis as any).netlifyBlobsContext = merged
-  try {
-    const encoded = Buffer.from(JSON.stringify(merged)).toString('base64')
-    process.env.NETLIFY_BLOBS_CONTEXT = encoded
-  } catch {
-    // ignore failures to serialize context
-  }
-  netlifyConfig = undefined
-  netlifyContextSignature = undefined
-  netlifyDiagnostics = undefined
-  netlifyStore = undefined
-  return true
-}
-
-function parseContextPayload(raw: string | undefined | null): Partial<NetlifyContext> | null {
-  if (!raw) return null
-  const trimmed = raw.trim()
-  if (!trimmed.length) return null
-  const attempts: string[] = [trimmed]
-  try {
-    const decoded = Buffer.from(trimmed, 'base64').toString('utf8')
-    if (decoded && decoded !== trimmed) {
-      attempts.push(decoded)
-    }
-  } catch {
-    // ignore invalid base64 payloads
-  }
-  for (const candidate of attempts) {
-    try {
-      const parsed = JSON.parse(candidate)
-      if (parsed && typeof parsed === 'object') {
-        return parsed as Partial<NetlifyContext>
-      }
-    } catch {
-      continue
-    }
-  }
-  return null
-}
-
-function extractNetlifyContextFromHeaders(headers: HeaderLike): Partial<NetlifyContext> | null {
-  const headerCandidates = [
-    'x-nf-context',
-    'x-nf-blobs-context',
-    'x-netlify-context',
-    'x-netlify-blobs-context',
-  ]
-  for (const candidate of headerCandidates) {
-    const raw = getHeaderValue(headers, candidate)
-    const parsed = parseContextPayload(raw)
-    if (parsed) return parsed
-  }
-
-  const fieldMap: Array<[keyof NetlifyContext, string[]]> = [
-    ['siteID', ['x-nf-site-id', 'x-netlify-site-id', 'x-nf-blobs-site-id']],
-    ['token', ['x-nf-token', 'x-nf-blobs-token', 'x-netlify-blobs-token']],
-    ['edgeURL', ['x-nf-edge-url', 'x-netlify-edge-url']],
-    ['uncachedEdgeURL', ['x-nf-uncached-edge-url', 'x-netlify-uncached-edge-url']],
-    ['apiURL', ['x-nf-api-url', 'x-netlify-api-url']],
-  ]
-
-  const assembled: Partial<NetlifyContext> = {}
-  for (const [key, names] of fieldMap) {
-    for (const name of names) {
-      const value = getHeaderValue(headers, name)
-      if (value && value.trim().length) {
-        ;(assembled as any)[key] = value.trim()
-        break
-      }
-    }
-  }
-
-  return Object.keys(assembled).length ? assembled : null
-}
-
-export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean {
-  const extracted = extractNetlifyContextFromHeaders(headers)
-  if (!extracted) return false
-  return setNetlifyBlobContext(extracted)
-}
-
-function readNetlifyConfig(): {
-  config: NetlifyConfig | null
-  diagnostics: BlobEnvDiagnostics
-  signature: string
-} {
-  const context = parseNetlifyContext()
-
-  const storeName =
-    (process.env.NETLIFY_BLOBS_STORE || '').trim() ||
-    (process.env.NETLIFY_BLOBS_STORE_NAME || '').trim() ||
-    'dads-interview-bot'
-
-  const storeCandidates: CandidateInternal[] = [
-    makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
-    makeCandidate('NETLIFY_BLOBS_STORE_NAME', process.env.NETLIFY_BLOBS_STORE_NAME, 'env'),
-    makeCandidate('default', storeName, 'default', 'fallback store name'),
-  ]
-
-  const siteIdCandidates: CandidateInternal[] = [
-    makeCandidate('NETLIFY_BLOBS_SITE_ID', process.env.NETLIFY_BLOBS_SITE_ID, 'env'),
-    makeCandidate('BLOBS_SITE_ID', process.env.BLOBS_SITE_ID, 'env'),
-    makeCandidate('NETLIFY_SITE_ID', process.env.NETLIFY_SITE_ID, 'env'),
-    makeCandidate('context.siteID', context?.siteID, 'context'),
-  ]
-
-  const tokenCandidates: CandidateInternal[] = [
-    makeCandidate('NETLIFY_BLOBS_TOKEN', process.env.NETLIFY_BLOBS_TOKEN, 'env'),
-    makeCandidate('BLOBS_TOKEN', process.env.BLOBS_TOKEN, 'env'),
-    makeCandidate('NETLIFY_API_TOKEN', process.env.NETLIFY_API_TOKEN, 'env'),
-    makeCandidate('context.token', context?.token, 'context'),
-  ]
-
-  const edgeUrlCandidates: CandidateInternal[] = [
-    makeCandidate('NETLIFY_BLOBS_EDGE_URL', process.env.NETLIFY_BLOBS_EDGE_URL, 'env'),
-    makeCandidate('context.edgeURL', context?.edgeURL, 'context'),
-  ]
-
-  const apiUrlCandidates: CandidateInternal[] = [
-    makeCandidate('NETLIFY_BLOBS_API_URL', process.env.NETLIFY_BLOBS_API_URL, 'env'),
-    makeCandidate('context.apiURL', context?.apiURL, 'context'),
-  ]
-
-  const uncachedEdgeCandidates: CandidateInternal[] = [
-    makeCandidate(
-      'NETLIFY_BLOBS_UNCACHED_EDGE_URL',
-      process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL,
-      'env',
-    ),
-    makeCandidate('context.uncachedEdgeURL', context?.uncachedEdgeURL, 'context'),
-  ]
-
-  const storePick = pickFirstPresent(storeCandidates) || storeCandidates[storeCandidates.length - 1]
-  const siteIdPick = pickFirstPresent(siteIdCandidates)
-  const tokenPick = pickFirstPresent(tokenCandidates)
-  const edgePick = pickFirstPresent(edgeUrlCandidates)
-  const apiPick = pickFirstPresent(apiUrlCandidates)
-  const uncachedPick = pickFirstPresent(uncachedEdgeCandidates)
-
-  const consistency =
-    (process.env.NETLIFY_BLOBS_CONSISTENCY as 'strong' | 'eventual' | undefined) || undefined
-
-  const diagnostics: BlobEnvDiagnostics = {
-    usingContext: Boolean(context),
-    contextKeys: context
-      ? Object.entries(context)
-          .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
-          .map(([key]) => key)
-      : [],
-    missing: [],
-    store: {
-      present: Boolean(storePick?.value.length),
-      defaulted: storePick?.source === 'default',
-      selected: storePick ? summarizeCandidate(storePick, 'store') : undefined,
-      candidates: storeCandidates.map((candidate) => summarizeCandidate(candidate, 'store')),
-    },
-    siteId: {
-      present: Boolean(siteIdPick?.value.length),
-      selected: siteIdPick ? summarizeCandidate(siteIdPick, 'site') : undefined,
-      candidates: siteIdCandidates.map((candidate) => summarizeCandidate(candidate, 'site')),
-    },
-    token: {
-      present: Boolean(tokenPick?.value.length),
-      selected: tokenPick ? summarizeCandidate(tokenPick, 'token') : undefined,
-      candidates: tokenCandidates.map((candidate) => summarizeCandidate(candidate, 'token')),
-      length: tokenPick?.value.length || undefined,
-    },
-    optional: {
-      apiUrl: {
-        present: Boolean(apiPick?.value.length),
-        selected: apiPick ? summarizeCandidate(apiPick, 'url') : undefined,
-        candidates: apiUrlCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
-      },
-      edgeUrl: {
-        present: Boolean(edgePick?.value.length),
-        selected: edgePick ? summarizeCandidate(edgePick, 'url') : undefined,
-        candidates: edgeUrlCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
-      },
-      uncachedEdgeUrl: {
-        present: Boolean(uncachedPick?.value.length),
-        selected: uncachedPick ? summarizeCandidate(uncachedPick, 'url') : undefined,
-        candidates: uncachedEdgeCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
-      },
-      consistency,
-    },
-  }
-
-  if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
-
-  const siteIdValue = siteIdPick?.value
-  const config: NetlifyConfig | null =
-    diagnostics.siteId.present && siteIdValue
-      ? {
-          storeName: storePick?.value || storeName,
-          siteId: siteIdValue,
-          token: tokenPick?.value || undefined,
-          apiUrl: apiPick?.value || undefined,
-          edgeUrl: edgePick?.value || undefined,
-          uncachedEdgeUrl: uncachedPick?.value || undefined,
-          consistency,
-        }
-      : null
-
-  const signature = JSON.stringify({
-    store: storeCandidates.map((candidate) => candidate.value),
-    siteId: siteIdCandidates.map((candidate) => candidate.value),
-    token: tokenCandidates.map((candidate) => candidate.value),
-    edgeUrl: edgeUrlCandidates.map((candidate) => candidate.value),
-    apiUrl: apiUrlCandidates.map((candidate) => candidate.value),
-    uncachedEdgeUrl: uncachedEdgeCandidates.map((candidate) => candidate.value),
-    consistency,
-  })
-
-  return { config, diagnostics, signature }
-}
-
-function getNetlifyConfig(): NetlifyConfig | null {
-  refreshNetlifyEnvironment()
-
-  if (!netlifyConfig && !netlifyWarningIssued) {
-    netlifyWarningIssued = true
-    flagFox({
-      id: 'theory-2-storage-missing',
-      theory: 2,
-      level: 'warn',
-      message: 'Netlify blob storage is not configured; falling back to in-memory blob storage.',
-    })
-  }
-
-  return netlifyConfig ?? null
-}
-
-function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
-  refreshNetlifyEnvironment()
-
-  return netlifyDiagnostics ?? defaultDiagnostics()
-}
-
-async function getNetlifyStore(): Promise<Store | null> {
-  if (netlifyStore === null) {
-    return null
-  }
-
-  const baseConfig = getNetlifyConfig()
-  if (!baseConfig) return null
-
-  try {
-    const config = await ensureCanonicalSiteId(baseConfig)
-
-    if (!netlifyStore) {
-      const storeOptions: GetStoreOptions = {
-        name: config.storeName,
-        siteID: config.siteId,
-      }
-      if (config.token) storeOptions.token = config.token
-      if (config.apiUrl) storeOptions.apiURL = config.apiUrl
-      if (config.edgeUrl) storeOptions.edgeURL = config.edgeUrl
-      if (config.uncachedEdgeUrl) storeOptions.uncachedEdgeURL = config.uncachedEdgeUrl
-      if (config.consistency) storeOptions.consistency = config.consistency
-
-      netlifyStore = getStore(storeOptions)
-    }
-
-    netlifyStoreInitError = null
-    return netlifyStore
-  } catch (error) {
-    const wrapped = await buildBlobError(error, {
-      action: 'initialize blob store',
-      config: baseConfig,
-    })
-    netlifyStore = null
-    netlifyStoreInitError = (wrapped as any).blobDetails ?? {
-      action: 'initialize blob store',
-      originalMessage: wrapped.message,
-    }
-    console.error(wrapped)
-    return null
-  }
-}
-
-function refreshNetlifyEnvironment() {
-  const result = readNetlifyConfig()
-  const signatureChanged =
-    typeof netlifyContextSignature === 'undefined' || result.signature !== netlifyContextSignature
-
-  if (typeof netlifyConfig === 'undefined' || signatureChanged) {
-    netlifyConfig = result.config
-    netlifyContextSignature = result.signature
-    netlifyStore = undefined
-    netlifyStoreInitError = null
-  }
-
-  netlifyDiagnostics = result.diagnostics
-}
-
-function invalidateNetlifyStoreCache() {
-  netlifyStore = undefined
-  netlifyStoreInitError = null
-}
-
-function shouldInvalidateNetlifyStore(error: any): boolean {
-  const status = extractStatusCode(error)
-  if (status === 401 || status === 403) {
-    return true
-  }
-  const code = extractErrorCode(error)
-  if (typeof code === 'string') {
-    const normalized = code.toLowerCase()
-    if (
-      normalized === 'unauthorized' ||
-      normalized === 'forbidden' ||
-      normalized.includes('auth') ||
-      normalized.includes('token')
-    ) {
-      return true
-    }
-  }
-  return false
+function cacheControlFromSeconds(seconds?: number): string | undefined {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return undefined
+  const safeSeconds = Math.max(0, Math.trunc(seconds))
+  return `public, max-age=${safeSeconds}`
 }
 
 function buildProxyUrl(path: string): string {
@@ -1007,34 +549,6 @@ function buildProxyUrl(path: string): string {
   return `${BLOB_PROXY_PREFIX}${encoded}`
 }
 
-function cacheControlFromSeconds(seconds?: number): string | undefined {
-  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return undefined
-  const safeSeconds = Math.max(0, Math.trunc(seconds))
-  return `public, max-age=${safeSeconds}`
-}
-
-function deleteFallbackByPrefix(prefix: string) {
-  let removed = 0
-  for (const key of Array.from(memoryStore.keys())) {
-    if (!prefix || key.startsWith(prefix)) {
-      memoryStore.delete(key)
-      removed += 1
-    }
-  }
-  return removed
-}
-
-function deleteFallbackByUrl(url: string) {
-  for (const key of Array.from(memoryStore.keys())) {
-    const record = memoryStore.get(key)
-    if (record && record.dataUrl === url) {
-      memoryStore.delete(key)
-      return true
-    }
-  }
-  return false
-}
-
 function extractPathFromUrl(input: string): string | null {
   if (!input) return null
   if (input.startsWith('data:')) return null
@@ -1044,7 +558,6 @@ function extractPathFromUrl(input: string): string | null {
     }
     return normalizePath(input)
   }
-
   try {
     const url = new URL(input)
     const base = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
@@ -1075,20 +588,32 @@ function extractPathFromUrl(input: string): string | null {
   }
 }
 
+async function ensureReadiness(): Promise<void> {
+  const store = ensureStore()
+  await executeWithRetries('init', 'readiness', async () => {
+    await store.list({ limit: 1, directories: false })
+    return true
+  })
+}
+
 export function getBlobToken(): string | undefined {
-  const config = getNetlifyConfig()
-  if (!config) return undefined
-  return 'netlify'
+  return validatedConfig.token
 }
 
-export function getFallbackBlob(path: string): (MemoryBlobRecord & { pathname: string }) | undefined {
-  const record = memoryStore.get(path) ?? memoryStore.get(normalizePath(path))
-  if (!record) return undefined
-  return { ...record, pathname: normalizePath(path) }
+export async function assertBlobReady(): Promise<void> {
+  if (!readinessPromise) {
+    readinessPromise = ensureReadiness()
+  }
+  await readinessPromise
 }
 
-export function clearFallbackBlobs() {
-  memoryStore.clear()
+if (typeof process !== 'undefined') {
+  assertBlobReady().catch((error) => {
+    console.error('Fatal: Cannot initialize Netlify blob store during startup.', error)
+    setImmediate(() => {
+      throw error
+    })
+  })
 }
 
 export async function putBlobFromBuffer(
@@ -1097,34 +622,18 @@ export async function putBlobFromBuffer(
   contentType: string,
   options: PutBlobOptions = {},
 ) {
-  const store = await getNetlifyStore()
+  const store = ensureStore()
   let targetPath = normalizePath(path)
   if (options.addRandomSuffix) {
     targetPath = applyRandomSuffix(targetPath)
   }
 
   const cacheControl = cacheControlFromSeconds(options.cacheControlMaxAge)
-
-  if (!store) {
-    const bufferCopy = Buffer.from(buf)
-    const dataUrl = buildInlineDataUrl(contentType, bufferCopy)
-    const record: MemoryBlobRecord = {
-      buffer: bufferCopy,
-      contentType,
-      uploadedAt: new Date(),
-      size: bufferCopy.byteLength,
-      dataUrl,
-      cacheControl,
-    }
-    memoryStore.set(targetPath, record)
-    return {
-      url: dataUrl,
-      downloadUrl: dataUrl,
-    }
-  }
-
   const uploadedAt = new Date().toISOString()
-  try {
+
+  await assertBlobReady()
+
+  await executeWithRetries('upload', targetPath, async () => {
     await store.set(targetPath, buf, {
       metadata: {
         contentType,
@@ -1134,17 +643,8 @@ export async function putBlobFromBuffer(
         cacheControlMaxAge: options.cacheControlMaxAge,
       },
     })
-  } catch (error) {
-    if (shouldInvalidateNetlifyStore(error)) {
-      invalidateNetlifyStoreCache()
-    }
-    const wrapped = await buildBlobError(error, {
-      action: 'upload blob',
-      target: targetPath,
-      config: getNetlifyConfig(),
-    })
-    throw wrapped
-  }
+    return true
+  })
 
   const proxyUrl = buildProxyUrl(targetPath)
   return {
@@ -1153,253 +653,98 @@ export async function putBlobFromBuffer(
   }
 }
 
-async function listFallbackBlobs({ prefix }: { prefix: string }): Promise<ListedBlob[]> {
-  const normalizedPrefix = normalizePath(prefix)
-  const results: ListedBlob[] = []
-  for (const [pathname, record] of memoryStore.entries()) {
-    if (normalizedPrefix && !pathname.startsWith(normalizedPrefix)) continue
-    results.push({
-      pathname,
-      url: record.dataUrl,
-      downloadUrl: record.dataUrl,
-      uploadedAt: record.uploadedAt,
-      size: record.size,
-    })
-  }
-  results.sort((a, b) => a.pathname.localeCompare(b.pathname))
-  return results
-}
-
 export async function listBlobs(options: ListCommandOptions = {}): Promise<ListBlobResult> {
-  const prefix = options?.prefix ? normalizePath(options.prefix) : ''
-  const limit = typeof options?.limit === 'number' ? Math.max(1, options.limit) : 100
-  const offset = options?.cursor ? Number.parseInt(options.cursor, 10) || 0 : 0
+  const store = ensureStore()
+  await assertBlobReady()
+  const prefix = options.prefix ? normalizePath(options.prefix) : ''
+  const limit = typeof options.limit === 'number' && Number.isFinite(options.limit) ? Math.max(1, options.limit) : 100
+  const cursor = options.cursor
 
-  const store = await getNetlifyStore()
-  if (!store) {
-    const fallback = await listFallbackBlobs({ prefix })
-    const sliced = fallback.slice(offset, offset + limit)
-    const hasMore = offset + limit < fallback.length
+  const listResult = await executeWithRetries('list', prefix || undefined, async () => {
+    return store.list({ prefix, limit, cursor, directories: false })
+  })
+
+  const blobs = (listResult?.blobs || []).map((entry: any) => {
+    const pathname = typeof entry.key === 'string' && entry.key.length ? entry.key : normalizePath(entry.pathname || '')
+    const uploadedAt = entry.uploadedAt ? new Date(entry.uploadedAt) : undefined
+    const size = typeof entry.size === 'number' ? entry.size : undefined
+    const proxyUrl = buildProxyUrl(pathname)
     return {
-      blobs: sliced,
-      hasMore,
-      cursor: hasMore ? String(offset + limit) : undefined,
+      pathname,
+      url: proxyUrl,
+      downloadUrl: proxyUrl,
+      uploadedAt,
+      size,
     }
-  }
-
-  let listResult
-  try {
-    listResult = await store.list({ prefix, directories: false })
-  } catch (error) {
-    if (shouldInvalidateNetlifyStore(error)) {
-      invalidateNetlifyStoreCache()
-    }
-    const wrapped = await buildBlobError(error, {
-      action: 'list blobs',
-      target: prefix || '(all)',
-      config: getNetlifyConfig(),
-    })
-    throw wrapped
-  }
-  const keys = (listResult?.blobs || [])
-    .map((entry) => entry.key)
-    .filter((key): key is string => typeof key === 'string' && key.length > 0)
-    .sort()
-
-  const slice = keys.slice(offset, offset + limit)
-
-  const blobs: ListedBlob[] = []
-  await Promise.all(
-    slice.map(async (key) => {
-      try {
-        const metadataResult = await store.getMetadata(key)
-        const metadata = metadataResult?.metadata || {}
-        const uploadedRaw = (metadata as any).uploadedAt
-        const uploadedAt =
-          typeof uploadedRaw === 'string' && uploadedRaw.length
-            ? new Date(uploadedRaw)
-            : undefined
-        const size = Number((metadata as any).size)
-        const proxyUrl = buildProxyUrl(key)
-        blobs.push({
-          pathname: key,
-          url: proxyUrl,
-          downloadUrl: proxyUrl,
-          uploadedAt,
-          size: Number.isFinite(size) ? size : undefined,
-        })
-      } catch (err) {
-        console.warn(`Failed to load metadata for blob ${key}`, err)
-        if (err && typeof err === 'object' && (err as any).blobDetails) {
-          console.warn('Blob metadata error details', (err as any).blobDetails)
-        }
-        const proxyUrl = buildProxyUrl(key)
-        blobs.push({ pathname: key, url: proxyUrl, downloadUrl: proxyUrl })
-      }
-    }),
-  )
-
-  blobs.sort((a, b) => a.pathname.localeCompare(b.pathname))
-  const hasMore = offset + limit < keys.length
+  })
 
   return {
     blobs,
-    hasMore,
-    cursor: hasMore ? String(offset + limit) : undefined,
+    hasMore: Boolean(listResult?.hasMore),
+    cursor: listResult?.cursor,
   }
 }
 
 export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
-  const store = await getNetlifyStore()
+  const store = ensureStore()
+  await assertBlobReady()
   const sanitizedPrefix = normalizePath(prefix)
-
-  if (!store) {
-    return deleteFallbackByPrefix(sanitizedPrefix)
-  }
-
-  let listResult
-  try {
-    listResult = await store.list({ prefix: sanitizedPrefix, directories: false })
-  } catch (error) {
-    if (shouldInvalidateNetlifyStore(error)) {
-      invalidateNetlifyStoreCache()
-    }
-    const wrapped = await buildBlobError(error, {
-      action: 'list blobs for deletion',
-      target: sanitizedPrefix || '(all)',
-      config: getNetlifyConfig(),
-    })
-    throw wrapped
-  }
+  const listResult = await executeWithRetries('list', sanitizedPrefix || undefined, async () => {
+    return store.list({ prefix: sanitizedPrefix, directories: false })
+  })
   const keys = (listResult?.blobs || [])
-    .map((entry) => entry.key)
+    .map((entry: any) => entry.key as string)
     .filter((key): key is string => typeof key === 'string' && key.length > 0)
 
-  let removed = 0
+  let deleted = 0
   for (const key of keys) {
-    try {
+    await executeWithRetries('delete', key, async () => {
       await store.delete(key)
-    } catch (error) {
-      if (shouldInvalidateNetlifyStore(error)) {
-        invalidateNetlifyStoreCache()
-      }
-      const wrapped = await buildBlobError(error, {
-        action: 'delete blob',
-        target: key,
-        config: getNetlifyConfig(),
-      })
-      throw wrapped
-    }
-    removed += 1
+      return true
+    })
+    deleted += 1
   }
-
-  return removed
+  return deleted
 }
 
 export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
   if (!pathOrUrl) return false
-
-  const store = await getNetlifyStore()
-
-  if (!store) {
-    if (memoryStore.delete(pathOrUrl) || memoryStore.delete(normalizePath(pathOrUrl))) {
-      return true
-    }
-    if (pathOrUrl.startsWith('data:')) {
-      return deleteFallbackByUrl(pathOrUrl)
-    }
-    return false
-  }
-
-  if (pathOrUrl.startsWith('data:')) {
-    return deleteFallbackByUrl(pathOrUrl)
-  }
-
-  const targetPath = extractPathFromUrl(pathOrUrl) || normalizePath(pathOrUrl)
+  const store = ensureStore()
+  await assertBlobReady()
+  const targetPath = extractPathFromUrl(pathOrUrl)
   if (!targetPath) return false
-
-  try {
+  await executeWithRetries('delete', targetPath, async () => {
     await store.delete(targetPath)
-  } catch (error) {
-    if (shouldInvalidateNetlifyStore(error)) {
-      invalidateNetlifyStoreCache()
-    }
-    const wrapped = await buildBlobError(error, {
-      action: 'delete blob',
-      target: targetPath,
-      config: getNetlifyConfig(),
-    })
-    throw wrapped
-  }
+    return true
+  })
   return true
 }
 
 export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null> {
   if (!pathOrUrl) return null
-
-  if (pathOrUrl.startsWith('data:')) {
-    for (const [pathname, record] of memoryStore.entries()) {
-      if (record.dataUrl === pathOrUrl) {
-        return {
-          buffer: Buffer.from(record.buffer),
-          contentType: record.contentType,
-          cacheControl: record.cacheControl,
-          uploadedAt: record.uploadedAt.toISOString(),
-          size: record.size,
-        }
-      }
-    }
-    return null
-  }
-
-  const store = await getNetlifyStore()
-  if (!store) {
-    const record = memoryStore.get(pathOrUrl) || memoryStore.get(normalizePath(pathOrUrl))
-    if (!record) return null
-    return {
-      buffer: Buffer.from(record.buffer),
-      contentType: record.contentType,
-      cacheControl: record.cacheControl,
-      uploadedAt: record.uploadedAt.toISOString(),
-      size: record.size,
-    }
-  }
-
-  const targetPath = extractPathFromUrl(pathOrUrl) || normalizePath(pathOrUrl)
+  const store = ensureStore()
+  await assertBlobReady()
+  const targetPath = extractPathFromUrl(pathOrUrl)
   if (!targetPath) return null
 
-  let result
-  try {
-    result = await store.getWithMetadata(targetPath, { type: 'arrayBuffer' })
-  } catch (error) {
-    if (shouldInvalidateNetlifyStore(error)) {
-      invalidateNetlifyStoreCache()
-    }
-    const wrapped = await buildBlobError(error, {
-      action: 'read blob',
-      target: targetPath,
-      config: getNetlifyConfig(),
-    })
-    throw wrapped
+  const result = await executeWithRetries('read', targetPath, async () => {
+    return store.getWithMetadata(targetPath, { type: 'arrayBuffer' })
+  })
+
+  if (!result) {
+    console.info(`[Blob read] ${targetPath} not found.`)
+    return null
   }
-  if (!result) return null
 
   const metadata = result.metadata || {}
   const contentType =
     typeof (metadata as any).contentType === 'string' && (metadata as any).contentType.length
       ? ((metadata as any).contentType as string)
       : 'application/octet-stream'
-  const cacheControl =
-    typeof (metadata as any).cacheControl === 'string'
-      ? ((metadata as any).cacheControl as string)
-      : typeof (metadata as any).cacheControlMaxAge === 'number'
-      ? cacheControlFromSeconds(Number((metadata as any).cacheControlMaxAge))
-      : typeof (metadata as any).cacheControlMaxAge === 'string'
-      ? cacheControlFromSeconds(Number((metadata as any).cacheControlMaxAge))
-      : undefined
-  const uploadedAt =
-    typeof (metadata as any).uploadedAt === 'string' ? ((metadata as any).uploadedAt as string) : undefined
-  const size = Number((metadata as any).size)
+  const cacheControl = typeof (metadata as any).cacheControl === 'string' ? ((metadata as any).cacheControl as string) : undefined
+  const uploadedAt = typeof (metadata as any).uploadedAt === 'string' ? ((metadata as any).uploadedAt as string) : undefined
+  const sizeValue = Number((metadata as any).size)
+  const size = Number.isFinite(sizeValue) ? sizeValue : undefined
 
   return {
     buffer: Buffer.from(result.data as ArrayBuffer),
@@ -1407,62 +752,53 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
     etag: result.etag,
     cacheControl,
     uploadedAt,
-    size: Number.isFinite(size) ? size : undefined,
+    size,
   }
 }
 
 export async function blobHealth() {
-  const config = getNetlifyConfig()
-  if (!config) {
-    return { ok: true, mode: 'memory', reason: 'no netlify blob config' }
-  }
-
   try {
-    const store = await getNetlifyStore()
-    if (!store) {
-      return {
-        ok: false,
-        mode: 'netlify',
-        reason: netlifyStoreInitError?.originalMessage || 'failed to initialize store',
-        details: netlifyStoreInitError || undefined,
-      }
+    await assertBlobReady()
+    const config = getActiveConfig()
+    return {
+      ok: true,
+      store: config.storeName,
+      siteId: maskSiteId(config.siteId),
+      timestamp: new Date().toISOString(),
     }
-    await store.list({ prefix: '', directories: false })
-    return { ok: true, mode: 'netlify', store: config.storeName }
-  } catch (error: any) {
-    if (shouldInvalidateNetlifyStore(error)) {
-      invalidateNetlifyStoreCache()
+  } catch (error) {
+    const details = lastErrorReport || {
+      phase: 'init',
+      status: undefined,
+      code: undefined,
+      message: extractMessage(error) || 'Cannot initialize Netlify blob store',
+      siteId: maskSiteId(validatedConfig.siteId),
+      storeName: validatedConfig.storeName,
+      timestamp: new Date().toISOString(),
     }
-    const wrapped = await buildBlobError(error, {
-      action: 'validate blob store health',
-      config,
-    })
     return {
       ok: false,
-      mode: 'netlify',
-      reason: wrapped.message,
-      details: (wrapped as any).blobDetails,
+      error: 'Cannot initialize Netlify blob store',
+      details,
     }
   }
 }
 
-export function getBlobEnvironment() {
-  const diagnostics = getBlobEnvDiagnostics()
-  const config = getNetlifyConfig()
-  if (!config) {
-    return { provider: 'memory', configured: false as const, diagnostics, error: null }
-  }
+export function getBlobEnvironment(): BlobEnvironment {
   return {
     provider: 'netlify',
-    configured: netlifyStoreInitError ? false : (true as const),
-    store: config.storeName,
-    siteId: config.siteId,
-    siteSlug: config.siteSlug,
-    siteName: config.siteName,
-    diagnostics,
-    error: netlifyStoreInitError,
+    configured: true,
+    store: validatedConfig.storeName,
+    siteId: validatedConfig.siteId,
+    diagnostics: {
+      tokenLength: validatedConfig.token.length,
+      storeProvided: Boolean((process.env.NETLIFY_BLOBS_STORE || '').trim().length),
+      debug: debugEnabled,
+    },
+    error: lastErrorReport,
+    lastSuccessAt: lastSuccessTimestamp,
   }
 }
 
+export type { ListBlobResult, ListCommandOptions, ListedBlob, ReadBlobResult }
 export { BLOB_PROXY_PREFIX }
-export type { BlobEnvDiagnostics, CandidateSummary, BlobErrorDetails }
