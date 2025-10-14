@@ -490,8 +490,7 @@ async function buildBlobError(
   const bodySnippet = await extractResponseBodySnippet(error)
   const originalMessage = typeof error?.message === 'string' ? error.message : undefined
   const maskedSite = config?.siteId ? maskValue(config.siteId) : undefined
-  const storeName =
-    config?.storeName || diagnostics.store.selected?.value || diagnostics.store.selected?.valuePreview
+  const storeName = config?.storeName || diagnostics.store.selected?.valuePreview
 
   const details: BlobErrorDetails = {
     action: context.action,

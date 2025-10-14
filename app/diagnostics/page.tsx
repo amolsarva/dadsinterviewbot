@@ -64,6 +64,9 @@ type BlobFlowStep = {
   note?: string
   error?: string
   responseSnippet?: string
+  responseBodySnippet?: string
+  requestId?: string
+  functionRegion?: string
 }
 
 type BlobFlowDiagnostics = {
@@ -300,7 +303,9 @@ function StorageDiagnosticsExtras({ result, onNuke, running }: StorageExtrasProp
     }
 
     const contextKeys = Array.isArray(diag.contextKeys)
-      ? diag.contextKeys.filter((entry: unknown): entry is string => typeof entry === 'string' && entry.length)
+      ? diag.contextKeys.filter(
+          (entry: unknown): entry is string => typeof entry === 'string' && entry.length > 0,
+        )
       : []
     pushRow({
       key: 'context',
@@ -312,7 +317,7 @@ function StorageDiagnosticsExtras({ result, onNuke, running }: StorageExtrasProp
     })
 
     const missing = Array.isArray(diag.missing)
-      ? diag.missing.filter((entry: unknown): entry is string => typeof entry === 'string' && entry.length)
+      ? diag.missing.filter((entry: unknown): entry is string => typeof entry === 'string' && entry.length > 0)
       : []
     if (missing.length) {
       pushRow({

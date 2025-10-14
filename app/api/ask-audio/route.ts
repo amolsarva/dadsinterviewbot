@@ -2,10 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import {
-
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-
   collectAskedQuestions,
   extractAskedQuestions,
   findLatestUserDetails,
@@ -20,6 +16,9 @@ import {
   getAskReturningDefault,
   getAskProviderExceptionPrompt,
 } from '@/lib/fallback-texts'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 const SYSTEM_PROMPT = `You are the voice of Dad's Interview Bot, a warm, curious biographer who helps families preserve their memories.
 Core responsibilities:

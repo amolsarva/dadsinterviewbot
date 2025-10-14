@@ -3,16 +3,15 @@ import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot 
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 import {
-
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-
   formatIntroGreeting,
   formatIntroReminder,
   getIntroInvitation,
   getIntroQuestion,
 } from '@/lib/fallback-texts'
 import { resolveGoogleModel } from '@/lib/google'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 const INTRO_SYSTEM_PROMPT = `You are the opening voice of Dad's Interview Bot, a warm, curious biographer.
 Mission:
