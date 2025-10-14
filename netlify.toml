@@ -8,3 +8,9 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+[context.deploy-preview.environment]
+  FORCE_PROD_BLOBS = "true"
+
+[context.branch-deploy.environment]
+  FORCE_PROD_BLOBS = "true"

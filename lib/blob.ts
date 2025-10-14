@@ -145,6 +145,45 @@ if (!globalAny[GLOBAL_STORE_KEY]) {
 
 const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
 
+const deployContext = process.env.CONTEXT || process.env.DEPLOY_CONTEXT || 'unknown'
+const branch = process.env.BRANCH || process.env.HEAD || 'unknown'
+const isPreviewContext = ['deploy-preview', 'branch-deploy', 'staging'].includes(deployContext)
+const forceProdBlobs = isPreviewContext || process.env.FORCE_PROD_BLOBS === 'true'
+const strictPreviewMode = isPreviewContext && process.env.BLOBS_STRICT_MODE === 'true'
+
+if (isPreviewContext) {
+  console.warn(
+    `[BLOBS] Running in preview mode (${deployContext}/${branch}) – forcing production blob configuration.`,
+  )
+}
+if (!isPreviewContext && process.env.FORCE_PROD_BLOBS === 'true') {
+  console.warn(
+    `[BLOBS] FORCE_PROD_BLOBS is enabled in ${deployContext}/${branch} – using production blob configuration.`,
+  )
+}
+if (strictPreviewMode) {
+  console.warn('[BLOBS] Strict mode: using production store from preview deploy.')
+}
+
+const canonicalStoreName =
+  resolveEnvValue(
+    ['PROD_NETLIFY_BLOBS_STORE', 'NETLIFY_BLOBS_STORE', 'NETLIFY_BLOBS_STORE_NAME'],
+    'dads-interview-bot',
+  ) || 'dads-interview-bot'
+const canonicalSiteId = resolveEnvValue([
+  'PROD_NETLIFY_BLOBS_SITE_ID',
+  'NETLIFY_BLOBS_SITE_ID',
+  'BLOBS_SITE_ID',
+  'NETLIFY_SITE_ID',
+])
+const canonicalToken = resolveEnvValue([
+  'PROD_NETLIFY_BLOBS_TOKEN',
+  'NETLIFY_BLOBS_TOKEN',
+  'BLOBS_TOKEN',
+  'NETLIFY_API_TOKEN',
+])
+const canonicalMode = isPreviewContext ? 'preview→prod' : 'production'
+
 let netlifyConfig: NetlifyConfig | null | undefined
 let netlifyStore: Store | null | undefined
 let netlifyWarningIssued = false
@@ -154,11 +193,23 @@ let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyStoreInitError: BlobErrorDetails | null = null
+let blobStartupLogged = false
+let missingCredentialWarningIssued = false
 
 type SiteResolution = {
   slug: string
   siteId: string
   siteName?: string
+}
+
+function resolveEnvValue(keys: string[], fallback = ''): string {
+  for (const key of keys) {
+    const value = process.env[key]
+    if (typeof value === 'string' && value.trim().length) {
+      return value.trim()
+    }
+  }
+  return fallback
 }
 
 function defaultDiagnostics(): BlobEnvDiagnostics {
@@ -196,6 +247,15 @@ function maskValue(value: string): string {
   if (!value) return ''
   if (value.length <= 8) return value
   return `${value.slice(0, 4)}…${value.slice(-4)}`
+}
+
+function logBlobConfiguration(config: NetlifyConfig) {
+  if (blobStartupLogged) return
+  console.log(`[BLOBS] Configured store: ${config.storeName}`)
+  console.log(`[BLOBS] Site ID: ${maskValue(config.siteId)}`)
+  console.log(`[BLOBS] Context: ${deployContext} (branch: ${branch})`)
+  console.log(`[BLOBS] Mode: ${canonicalMode}`)
+  blobStartupLogged = true
 }
 
 function truncateForDiagnostics(value: string, limit = 240) {
@@ -766,30 +826,32 @@ function readNetlifyConfig(): {
 } {
   const context = parseNetlifyContext()
 
-  const storeName =
-    (process.env.NETLIFY_BLOBS_STORE || '').trim() ||
-    (process.env.NETLIFY_BLOBS_STORE_NAME || '').trim() ||
-    'dads-interview-bot'
-
   const storeCandidates: CandidateInternal[] = [
+    makeCandidate('PROD_NETLIFY_BLOBS_STORE', process.env.PROD_NETLIFY_BLOBS_STORE, 'env'),
     makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
     makeCandidate('NETLIFY_BLOBS_STORE_NAME', process.env.NETLIFY_BLOBS_STORE_NAME, 'env'),
-    makeCandidate('default', storeName, 'default', 'fallback store name'),
+    makeCandidate('default', canonicalStoreName, 'default', 'canonical store name'),
   ]
 
   const siteIdCandidates: CandidateInternal[] = [
+    makeCandidate('PROD_NETLIFY_BLOBS_SITE_ID', process.env.PROD_NETLIFY_BLOBS_SITE_ID, 'env'),
     makeCandidate('NETLIFY_BLOBS_SITE_ID', process.env.NETLIFY_BLOBS_SITE_ID, 'env'),
     makeCandidate('BLOBS_SITE_ID', process.env.BLOBS_SITE_ID, 'env'),
     makeCandidate('NETLIFY_SITE_ID', process.env.NETLIFY_SITE_ID, 'env'),
-    makeCandidate('context.siteID', context?.siteID, 'context'),
   ]
+  if (!forceProdBlobs) {
+    siteIdCandidates.push(makeCandidate('context.siteID', context?.siteID, 'context'))
+  }
 
   const tokenCandidates: CandidateInternal[] = [
+    makeCandidate('PROD_NETLIFY_BLOBS_TOKEN', process.env.PROD_NETLIFY_BLOBS_TOKEN, 'env'),
     makeCandidate('NETLIFY_BLOBS_TOKEN', process.env.NETLIFY_BLOBS_TOKEN, 'env'),
     makeCandidate('BLOBS_TOKEN', process.env.BLOBS_TOKEN, 'env'),
     makeCandidate('NETLIFY_API_TOKEN', process.env.NETLIFY_API_TOKEN, 'env'),
-    makeCandidate('context.token', context?.token, 'context'),
   ]
+  if (!forceProdBlobs) {
+    tokenCandidates.push(makeCandidate('context.token', context?.token, 'context'))
+  }
 
   const edgeUrlCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_EDGE_URL', process.env.NETLIFY_BLOBS_EDGE_URL, 'env'),
@@ -866,14 +928,37 @@ function readNetlifyConfig(): {
   }
 
   if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
+  if (!diagnostics.token.present) diagnostics.missing.push('token')
 
-  const siteIdValue = siteIdPick?.value
+  const siteIdValue = siteIdPick?.value || canonicalSiteId
+  const tokenValue = tokenPick?.value || canonicalToken
+
+  const missingRequiredCredentials = !siteIdValue || !tokenValue
+  const requireCredentials = forceProdBlobs || process.env.BLOBS_STRICT_MODE === 'true'
+  if (missingRequiredCredentials) {
+    const message = `[BLOBS] Missing SITE_ID or TOKEN – cannot initialize Netlify store in ${deployContext}`
+    if (requireCredentials) {
+      throw new Error(message)
+    }
+    if (!missingCredentialWarningIssued) {
+      console.warn(message)
+      missingCredentialWarningIssued = true
+    }
+  }
+
+  if (forceProdBlobs && context?.siteID && siteIdValue && context.siteID.trim() !== siteIdValue) {
+    throw new Error(
+      `[BLOBS] Netlify context site ID ${context.siteID} does not match canonical production site ID ${siteIdValue}. Set PROD_NETLIFY_BLOBS_SITE_ID/PROD_NETLIFY_BLOBS_TOKEN to align previews with production.`,
+    )
+  }
+
+  const storeName = storePick?.value || canonicalStoreName
   const config: NetlifyConfig | null =
-    diagnostics.siteId.present && siteIdValue
+    siteIdValue && (tokenValue || !requireCredentials)
       ? {
-          storeName: storePick?.value || storeName,
+          storeName,
           siteId: siteIdValue,
-          token: tokenPick?.value || undefined,
+          token: tokenValue || undefined,
           apiUrl: apiPick?.value || undefined,
           edgeUrl: edgePick?.value || undefined,
           uncachedEdgeUrl: uncachedPick?.value || undefined,
@@ -926,6 +1011,8 @@ async function getNetlifyStore(): Promise<Store | null> {
 
   try {
     const config = await ensureCanonicalSiteId(baseConfig)
+
+    logBlobConfiguration(config)
 
     if (!netlifyStore) {
       const storeOptions: GetStoreOptions = {
@@ -1461,6 +1548,19 @@ export function getBlobEnvironment() {
     siteName: config.siteName,
     diagnostics,
     error: netlifyStoreInitError,
+  }
+}
+
+export async function blobDiagnostics() {
+  const config = getNetlifyConfig()
+  const siteId = config?.siteId || canonicalSiteId
+  return {
+    context: deployContext,
+    branch,
+    store: config?.storeName || canonicalStoreName,
+    siteId: siteId || null,
+    mode: canonicalMode,
+    timestamp: new Date().toISOString(),
   }
 }
 
