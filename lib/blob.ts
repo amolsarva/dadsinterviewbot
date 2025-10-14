@@ -3,6 +3,7 @@ import {
   assertBlobEnv,
   describeBlobEnvSnapshot,
   isForceProdBlobsEnabled,
+  logBlobDiagnostic,
   snapshotRequiredBlobEnv,
 } from '../utils/blob-env'
 import { flagFox } from './foxes'
@@ -175,7 +176,7 @@ function defaultDiagnostics(): BlobEnvDiagnostics {
     missing: ['siteId'],
     store: {
       present: false,
-      defaulted: true,
+      defaulted: false,
       selected: undefined,
       candidates: [],
     },
@@ -209,7 +210,7 @@ function logBlobEnvironmentOnce() {
   if (blobEnvLogged) return
   blobEnvLogged = true
   const snapshot = snapshotRequiredBlobEnv()
-  console.log('[BLOBS INIT]', describeBlobEnvSnapshot(snapshot))
+  logBlobDiagnostic('log', 'blob-env-init', { env: describeBlobEnvSnapshot(snapshot) })
 }
 
 function truncateForDiagnostics(value: string, limit = 240) {
@@ -789,15 +790,9 @@ function readNetlifyConfig(): {
 } {
   const context = parseNetlifyContext()
 
-  const storeName =
-    (process.env.NETLIFY_BLOBS_STORE || '').trim() ||
-    (process.env.NETLIFY_BLOBS_STORE_NAME || '').trim() ||
-    'dads-interview-bot'
-
   const storeCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
     makeCandidate('NETLIFY_BLOBS_STORE_NAME', process.env.NETLIFY_BLOBS_STORE_NAME, 'env'),
-    makeCandidate('default', storeName, 'default', 'fallback store name'),
   ]
 
   const siteIdCandidates: CandidateInternal[] = [
@@ -833,7 +828,7 @@ function readNetlifyConfig(): {
     makeCandidate('context.uncachedEdgeURL', context?.uncachedEdgeURL, 'context'),
   ]
 
-  const storePick = pickFirstPresent(storeCandidates) || storeCandidates[storeCandidates.length - 1]
+  const storePick = pickFirstPresent(storeCandidates)
   const siteIdPick = pickFirstPresent(siteIdCandidates)
   const tokenPick = pickFirstPresent(tokenCandidates)
   const edgePick = pickFirstPresent(edgeUrlCandidates)
@@ -853,7 +848,7 @@ function readNetlifyConfig(): {
     missing: [],
     store: {
       present: Boolean(storePick?.value.length),
-      defaulted: storePick?.source === 'default',
+      defaulted: false,
       selected: storePick ? summarizeCandidate(storePick, 'store') : undefined,
       candidates: storeCandidates.map((candidate) => summarizeCandidate(candidate, 'store')),
     },
@@ -888,13 +883,17 @@ function readNetlifyConfig(): {
     },
   }
 
+  if (!diagnostics.store.present) diagnostics.missing.push('store')
   if (!diagnostics.siteId.present) diagnostics.missing.push('siteId')
 
   const siteIdValue = siteIdPick?.value
   const config: NetlifyConfig | null =
-    diagnostics.siteId.present && siteIdValue
+    diagnostics.siteId.present &&
+    diagnostics.store.present &&
+    siteIdValue &&
+    storePick?.value
       ? {
-          storeName: storePick?.value || storeName,
+          storeName: storePick.value,
           siteId: siteIdValue,
           token: tokenPick?.value || undefined,
           apiUrl: apiPick?.value || undefined,
@@ -977,7 +976,10 @@ async function getNetlifyStore(): Promise<Store | null> {
       action: 'initialize blob store',
       originalMessage: wrapped.message,
     }
-    console.error(wrapped)
+    logBlobDiagnostic('error', 'blob-store-init-failed', {
+      error: wrapped instanceof Error ? { message: wrapped.message, stack: wrapped.stack } : wrapped,
+      details: (wrapped as any).blobDetails ?? null,
+    })
     return null
   }
 }

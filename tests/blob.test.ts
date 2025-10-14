@@ -4,10 +4,52 @@ afterEach(() => {
   delete process.env.NETLIFY_BLOBS_SITE_ID
   delete process.env.NETLIFY_BLOBS_TOKEN
   delete process.env.NETLIFY_BLOBS_STORE
+  delete process.env.NETLIFY_BLOBS_API_URL
   delete process.env.NETLIFY_BLOBS_CONTEXT
+  delete process.env.NETLIFY_DEPLOY_ID
   vi.resetModules()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+describe('safeBlobStore', () => {
+  it('initializes a Netlify store when all configuration is present', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
+    process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
+    process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
+    process.env.NETLIFY_DEPLOY_ID = 'deploy-1234'
+
+    const storeMock = { ready: true }
+    const getStoreSpy = vi.fn(() => storeMock)
+    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
+    const { safeBlobStore } = await import('../utils/blob-env')
+    const store = await safeBlobStore()
+
+    expect(store).toBe(storeMock)
+    expect(getStoreSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'store-name',
+        siteID: '12345678-1234-1234-1234-1234567890ab',
+        token: 'api-token',
+        apiURL: 'https://api.netlify.com/api/v1/blobs',
+        deployID: 'deploy-1234',
+      }),
+    )
+  })
+
+  it('throws when configuration is incomplete', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
+    process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
+
+    vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
+
+    const { safeBlobStore } = await import('../utils/blob-env')
+
+    await expect(safeBlobStore()).rejects.toThrow(/Missing blob env: NETLIFY_BLOBS_TOKEN/i)
+  })
 })
 
 describe('putBlobFromBuffer', () => {
@@ -15,6 +57,7 @@ describe('putBlobFromBuffer', () => {
     process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
     process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
+    process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
 
     const setSpy = vi.fn(async () => ({}))
     const storeMock = {
@@ -31,15 +74,19 @@ describe('putBlobFromBuffer', () => {
     const { putBlobFromBuffer } = await import('../lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
-    expect(getStoreSpy).toHaveBeenCalledWith({
+    const firstCall = getStoreSpy.mock.calls.at(0)
+    const callArgs = Array.isArray(firstCall) ? (firstCall as unknown[]) : []
+    const configArg = (callArgs[0] ?? null) as Record<string, unknown> | null
+
+    expect(configArg).toMatchObject({
       name: 'store-name',
       siteID: '12345678-1234-1234-1234-1234567890ab',
       token: 'api-token',
-      apiURL: undefined,
-      edgeURL: undefined,
-      uncachedEdgeURL: undefined,
-      consistency: undefined,
+      apiURL: 'https://api.netlify.com/api/v1/blobs',
     })
+    expect(configArg?.edgeURL).toBeUndefined()
+    expect(configArg?.uncachedEdgeURL).toBeUndefined()
+    expect(configArg?.consistency).toBeUndefined()
     expect(setSpy).toHaveBeenCalled()
     expect(result.url).toBe('/api/blob/path/file.txt')
     expect(result.downloadUrl).toBe(result.url)
@@ -48,6 +95,7 @@ describe('putBlobFromBuffer', () => {
   it('uploads via Netlify without a token when the site ID is canonical', async () => {
     process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
+    process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
 
     const setSpy = vi.fn(async () => ({}))
     const storeMock = {
@@ -87,6 +135,8 @@ describe('putBlobFromBuffer', () => {
 it('resolves a site slug to the canonical Netlify site ID', async () => {
   process.env.NETLIFY_BLOBS_SITE_ID = 'dadsbot'
   process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
+  process.env.NETLIFY_BLOBS_STORE = 'store-name'
+  process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
 
   const setSpy = vi.fn(async () => ({}))
   const storeMock = {
@@ -122,6 +172,7 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
 
 it('falls back to memory when given a site slug without a token to resolve it', async () => {
   process.env.NETLIFY_BLOBS_SITE_ID = 'dadsbot'
+  process.env.NETLIFY_BLOBS_STORE = 'store-name'
 
   const setSpy = vi.fn(async () => ({}))
   const storeMock = {

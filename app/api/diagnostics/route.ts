@@ -16,6 +16,12 @@ const ENDPOINTS: EndpointSummary[] = [
     description: 'Overall service health, storage configuration, and email defaults.',
   },
   {
+    key: 'env',
+    method: 'GET',
+    path: '/api/diagnostics/env',
+    description: 'Full environment inspection and validation for required variables.',
+  },
+  {
     key: 'storage',
     method: 'GET',
     path: '/api/diagnostics/storage',
