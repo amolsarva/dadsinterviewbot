@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createSession, appendTurn, finalizeSession } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { listFoxes } from '@/lib/foxes'
+import { jsonErrorResponse } from '@/lib/api-error'
 
 export const runtime = 'nodejs'
 
@@ -20,8 +21,8 @@ function wrapStage<T>(stage: Stage, task: () => Promise<T>): Promise<T> {
 }
 
 export async function POST(request: Request) {
-  primeNetlifyBlobContextFromHeaders(request.headers)
   try {
+    primeNetlifyBlobContextFromHeaders(request.headers)
     const session = await wrapStage('create_session', () =>
       createSession({ email_to: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co' })
     )
@@ -49,26 +50,31 @@ export async function POST(request: Request) {
       emailed: result.emailed,
       foxes: listFoxes(),
     })
-  } catch (error: any) {
+  } catch (error) {
     const blobDetails =
       error && typeof error === 'object'
-        ? error.blobDetails ||
-          (error.cause && typeof error.cause === 'object' ? (error.cause as any).blobDetails : undefined)
+        ? (error as any).blobDetails ||
+          ((error as any).cause && typeof (error as any).cause === 'object'
+            ? (error as any).cause.blobDetails
+            : undefined)
         : undefined
     const causeMessage =
-      error && typeof error === 'object' && error.cause && typeof error.cause === 'object'
-        ? (error.cause as any).message
+      error && typeof error === 'object' && (error as any).cause && typeof (error as any).cause === 'object'
+        ? (error as any).cause.message
         : undefined
-    return NextResponse.json(
-      {
-        ok: false,
-        error: error?.message || 'smoke_failed',
-        stage: error?.diagnosticStage || 'unknown',
-        details: blobDetails,
-        cause: causeMessage,
-        foxes: listFoxes(),
-      },
-      { status: 500 }
-    )
+    const stage =
+      error && typeof error === 'object' && typeof (error as any).diagnosticStage === 'string'
+        ? (error as any).diagnosticStage
+        : 'unknown'
+    const fallbackMessage =
+      error && typeof error === 'object' && typeof (error as any).message === 'string' && (error as any).message.trim().length
+        ? (error as any).message
+        : 'smoke_failed'
+    return jsonErrorResponse(error, fallbackMessage, 500, {
+      stage,
+      details: blobDetails,
+      cause: causeMessage,
+      foxes: listFoxes(),
+    })
   }
 }

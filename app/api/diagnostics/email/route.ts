@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { jsonErrorResponse } from '@/lib/api-error'
 import { sendSummaryEmail } from '@/lib/email'
 
 export async function POST() {
@@ -17,8 +18,8 @@ export async function POST() {
     }
 
     return NextResponse.json({ ok: false, status, error: status?.error || 'email_failed' }, { status: 502 })
-  } catch (e:any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'email_failed' }, { status: 500 })
+  } catch (error) {
+    return jsonErrorResponse(error, 'Email diagnostics failed')
   }
 }
 
