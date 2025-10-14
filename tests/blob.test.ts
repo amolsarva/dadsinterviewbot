@@ -65,7 +65,10 @@ describe('putBlobFromBuffer', () => {
     await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
     expect(getStoreSpy).toHaveBeenCalled()
-    const call = getStoreSpy.mock.calls[0]?.[0] as Record<string, unknown>
+    const firstCall = getStoreSpy.mock.calls.at(0)
+    const callArgs = Array.isArray(firstCall) ? (firstCall as unknown[]) : []
+    const configArg = callArgs[0] ?? null
+    const call = (configArg && typeof configArg === 'object' ? configArg : {}) as Record<string, unknown>
     expect(call).toMatchObject({ name: 'store-name', siteID: '12345678-1234-1234-1234-1234567890ab' })
     expect('token' in call).toBe(false)
     expect(setSpy).toHaveBeenCalled()
