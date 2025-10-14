@@ -30,6 +30,7 @@ type UploadResult = {
   downloadUrl?: string | null
   status?: number
   message?: string
+  reason?: string
 }
 
 type HistoryClearResult = {
@@ -115,6 +116,36 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
     if (!userHandle) return '/history'
     return buildScopedPath('/history', userHandle)
   }, [userHandle])
+
+  const envDiagnostics = status?.env?.diagnostics as
+    | {
+        usingContext?: boolean
+        contextKeys?: string[]
+        missing?: string[]
+        forceProdBlobs?: boolean
+      }
+    | undefined
+  const contextSourceLabel = envDiagnostics
+    ? envDiagnostics.usingContext
+      ? 'Netlify runtime headers'
+      : 'Environment variables'
+    : status
+    ? 'unknown'
+    : '—'
+  const contextKeysLabel =
+    envDiagnostics && Array.isArray(envDiagnostics.contextKeys) && envDiagnostics.contextKeys.length > 0
+      ? envDiagnostics.contextKeys.join(', ')
+      : '—'
+  const missingFieldsLabel =
+    envDiagnostics && Array.isArray(envDiagnostics.missing) && envDiagnostics.missing.length > 0
+      ? envDiagnostics.missing.join(', ')
+      : '—'
+  const forceProdLabel =
+    typeof status?.env?.forceProdBlobs === 'boolean'
+      ? status.env.forceProdBlobs
+        ? 'true'
+        : 'false'
+      : 'false'
 
   useEffect(() => {
     let cancelled = false
@@ -401,6 +432,22 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
             <div>
               <strong>Site ID</strong>
               <div>{status.env?.siteId || '—'}</div>
+            </div>
+            <div>
+              <strong>Context source</strong>
+              <div>{contextSourceLabel}</div>
+            </div>
+            <div>
+              <strong>Context keys</strong>
+              <div>{contextKeysLabel}</div>
+            </div>
+            <div>
+              <strong>FORCE_PROD_BLOBS</strong>
+              <div>{forceProdLabel}</div>
+            </div>
+            <div>
+              <strong>Missing fields</strong>
+              <div>{missingFieldsLabel}</div>
             </div>
             <div>
               <strong>Health</strong>

@@ -7,13 +7,36 @@ export type PutBlobOptions = {
   cacheControlMaxAge?: number
 }
 
-type MemoryBlobRecord = {
-  buffer: Buffer
-  contentType: string
-  uploadedAt: Date
-  size: number
-  dataUrl: string
-  cacheControl?: string
+function parseBooleanFlag(value: string | undefined | null): boolean {
+  if (!value) return false
+  const normalized = value.trim().toLowerCase()
+  if (!normalized.length) return false
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
+function detectNetlifyContext(): {
+  context: string
+  isPreview: boolean
+} {
+  const context = (process.env.CONTEXT || '').trim().toLowerCase()
+  const isPreview = context === 'deploy-preview' || context === 'branch-deploy'
+  return { context, isPreview }
+}
+
+function shouldForceProductionBlobs(): boolean {
+  const forceFlag = parseBooleanFlag(process.env.FORCE_PROD_BLOBS)
+  if (!forceFlag) return false
+  const { isPreview } = detectNetlifyContext()
+  return isPreview
+}
+
+function debugLog(message: string, data?: Record<string, unknown>) {
+  if (!parseBooleanFlag(process.env.DEBUG_BLOBS)) return
+  if (data && Object.keys(data).length > 0) {
+    console.info(`[blobs] ${message}`, data)
+  } else {
+    console.info(`[blobs] ${message}`)
+  }
 }
 
 type NetlifyContext = {
@@ -73,6 +96,7 @@ type TokenDiagnostics = FieldDiagnostics & {
 type BlobEnvDiagnostics = {
   usingContext: boolean
   contextKeys: string[]
+  forceProdBlobs: boolean
   missing: string[]
   store: StoreDiagnostics
   siteId: FieldDiagnostics
@@ -133,27 +157,19 @@ type ReadBlobResult = {
   size?: number
 }
 
-const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
 const BLOB_PROXY_PREFIX = '/api/blob/'
 const NETLIFY_API_BASE_URL = 'https://api.netlify.com'
 const CANONICAL_SITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-const globalAny = globalThis as any
-if (!globalAny[GLOBAL_STORE_KEY]) {
-  globalAny[GLOBAL_STORE_KEY] = new Map<string, MemoryBlobRecord>()
-}
-
-const memoryStore: Map<string, MemoryBlobRecord> = globalAny[GLOBAL_STORE_KEY]
-
 let netlifyConfig: NetlifyConfig | null | undefined
-let netlifyStore: Store | null | undefined
-let netlifyWarningIssued = false
+let netlifyStore: Store | undefined
 let netlifyDiagnostics: BlobEnvDiagnostics | null | undefined
 let netlifyContextSignature: string | undefined
 let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyStoreInitError: BlobErrorDetails | null = null
+let netlifyForceProdActive = false
 
 type SiteResolution = {
   slug: string
@@ -165,6 +181,7 @@ function defaultDiagnostics(): BlobEnvDiagnostics {
   return {
     usingContext: false,
     contextKeys: [],
+    forceProdBlobs: false,
     missing: ['siteId'],
     store: {
       present: false,
@@ -207,6 +224,67 @@ function truncateForDiagnostics(value: string, limit = 240) {
 
 function looksLikeSiteId(value: string): boolean {
   return CANONICAL_SITE_ID.test(value.trim())
+}
+
+export function validateBlobEnv(): void {
+  const rawContext = parseNetlifyContext()
+  const { context: netlifyContext } = detectNetlifyContext()
+  const forceProd = shouldForceProductionBlobs()
+
+  const envSiteIdCandidates = [
+    process.env.NETLIFY_BLOBS_SITE_ID,
+    process.env.BLOBS_SITE_ID,
+    process.env.NETLIFY_SITE_ID,
+  ]
+  const envSiteId = envSiteIdCandidates
+    .find((value) => typeof value === 'string' && value.trim().length > 0)
+    ?.trim()
+  const contextSiteId =
+    typeof rawContext?.siteID === 'string' && rawContext.siteID.trim().length > 0
+      ? rawContext.siteID.trim()
+      : undefined
+
+  if (forceProd && !envSiteId) {
+    throw new Error(
+      'FORCE_PROD_BLOBS is enabled for this deploy context but NETLIFY_BLOBS_SITE_ID is not defined. Provide production blob credentials so previews can reuse the production store.',
+    )
+  }
+
+  if (!envSiteId && !contextSiteId) {
+    throw new Error(
+      'Netlify blob storage credentials are missing. Define NETLIFY_BLOBS_SITE_ID or ensure Netlify injects the blobs context headers.',
+    )
+  }
+
+  const envTokenCandidates = [
+    process.env.NETLIFY_BLOBS_TOKEN,
+    process.env.BLOBS_TOKEN,
+    process.env.NETLIFY_API_TOKEN,
+  ]
+  const envToken = envTokenCandidates
+    .find((value) => typeof value === 'string' && value.trim().length > 0)
+    ?.trim()
+  const contextToken =
+    typeof rawContext?.token === 'string' && rawContext.token.trim().length > 0
+      ? rawContext.token.trim()
+      : undefined
+
+  const candidateSiteId = envSiteId || contextSiteId
+  const availableToken = envToken || (!forceProd ? contextToken : undefined)
+
+  if (candidateSiteId && !looksLikeSiteId(candidateSiteId) && !availableToken) {
+    throw new Error(
+      `NETLIFY_BLOBS_SITE_ID is set to "${candidateSiteId}" but does not look like a Netlify site ID. Provide a Netlify API token so the slug can be resolved automatically.`,
+    )
+  }
+
+  debugLog('validated blob environment', {
+    forceProd,
+    netlifyContext,
+    usingEnvSiteId: Boolean(envSiteId),
+    usingContextSiteId: Boolean(contextSiteId && !envSiteId && !forceProd),
+    hasToken: Boolean(availableToken),
+  })
 }
 
 async function resolveSiteId(config: NetlifyConfig): Promise<SiteResolution | null> {
@@ -573,12 +651,6 @@ function encodePathForUrl(path: string): string {
     .join('/')
 }
 
-function buildInlineDataUrl(contentType: string, buffer: Buffer): string {
-  const safeType = contentType && contentType.length ? contentType : 'application/octet-stream'
-  const base64 = buffer.toString('base64')
-  return `data:${safeType};base64,${base64}`
-}
-
 function randomSuffix(): string {
   return Math.random().toString(36).slice(2, 10)
 }
@@ -763,13 +835,18 @@ function readNetlifyConfig(): {
   config: NetlifyConfig | null
   diagnostics: BlobEnvDiagnostics
   signature: string
+  forceProd: boolean
 } {
-  const context = parseNetlifyContext()
+  const rawContext = parseNetlifyContext()
+  const forceProd = shouldForceProductionBlobs()
+  const context = forceProd ? null : rawContext
 
   const storeName =
     (process.env.NETLIFY_BLOBS_STORE || '').trim() ||
     (process.env.NETLIFY_BLOBS_STORE_NAME || '').trim() ||
     'dads-interview-bot'
+
+  const contextIgnoredNote = forceProd ? 'ignored (FORCE_PROD_BLOBS active)' : undefined
 
   const storeCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
@@ -781,24 +858,24 @@ function readNetlifyConfig(): {
     makeCandidate('NETLIFY_BLOBS_SITE_ID', process.env.NETLIFY_BLOBS_SITE_ID, 'env'),
     makeCandidate('BLOBS_SITE_ID', process.env.BLOBS_SITE_ID, 'env'),
     makeCandidate('NETLIFY_SITE_ID', process.env.NETLIFY_SITE_ID, 'env'),
-    makeCandidate('context.siteID', context?.siteID, 'context'),
+    makeCandidate('context.siteID', rawContext?.siteID, 'context', contextIgnoredNote),
   ]
 
   const tokenCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_TOKEN', process.env.NETLIFY_BLOBS_TOKEN, 'env'),
     makeCandidate('BLOBS_TOKEN', process.env.BLOBS_TOKEN, 'env'),
     makeCandidate('NETLIFY_API_TOKEN', process.env.NETLIFY_API_TOKEN, 'env'),
-    makeCandidate('context.token', context?.token, 'context'),
+    makeCandidate('context.token', rawContext?.token, 'context', contextIgnoredNote),
   ]
 
   const edgeUrlCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_EDGE_URL', process.env.NETLIFY_BLOBS_EDGE_URL, 'env'),
-    makeCandidate('context.edgeURL', context?.edgeURL, 'context'),
+    makeCandidate('context.edgeURL', rawContext?.edgeURL, 'context', contextIgnoredNote),
   ]
 
   const apiUrlCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_API_URL', process.env.NETLIFY_BLOBS_API_URL, 'env'),
-    makeCandidate('context.apiURL', context?.apiURL, 'context'),
+    makeCandidate('context.apiURL', rawContext?.apiURL, 'context', contextIgnoredNote),
   ]
 
   const uncachedEdgeCandidates: CandidateInternal[] = [
@@ -807,26 +884,42 @@ function readNetlifyConfig(): {
       process.env.NETLIFY_BLOBS_UNCACHED_EDGE_URL,
       'env',
     ),
-    makeCandidate('context.uncachedEdgeURL', context?.uncachedEdgeURL, 'context'),
+    makeCandidate('context.uncachedEdgeURL', rawContext?.uncachedEdgeURL, 'context', contextIgnoredNote),
   ]
 
   const storePick = pickFirstPresent(storeCandidates) || storeCandidates[storeCandidates.length - 1]
-  const siteIdPick = pickFirstPresent(siteIdCandidates)
-  const tokenPick = pickFirstPresent(tokenCandidates)
-  const edgePick = pickFirstPresent(edgeUrlCandidates)
-  const apiPick = pickFirstPresent(apiUrlCandidates)
-  const uncachedPick = pickFirstPresent(uncachedEdgeCandidates)
+  const siteIdSelection = forceProd
+    ? siteIdCandidates.filter((candidate) => candidate.source !== 'context')
+    : siteIdCandidates
+  const siteIdPick = pickFirstPresent(siteIdSelection)
+  const tokenSelection = forceProd
+    ? tokenCandidates.filter((candidate) => candidate.source !== 'context')
+    : tokenCandidates
+  const tokenPick = pickFirstPresent(tokenSelection)
+  const edgeSelection = forceProd
+    ? edgeUrlCandidates.filter((candidate) => candidate.source !== 'context')
+    : edgeUrlCandidates
+  const edgePick = pickFirstPresent(edgeSelection)
+  const apiSelection = forceProd
+    ? apiUrlCandidates.filter((candidate) => candidate.source !== 'context')
+    : apiUrlCandidates
+  const apiPick = pickFirstPresent(apiSelection)
+  const uncachedSelection = forceProd
+    ? uncachedEdgeCandidates.filter((candidate) => candidate.source !== 'context')
+    : uncachedEdgeCandidates
+  const uncachedPick = pickFirstPresent(uncachedSelection)
 
   const consistency =
     (process.env.NETLIFY_BLOBS_CONSISTENCY as 'strong' | 'eventual' | undefined) || undefined
 
   const diagnostics: BlobEnvDiagnostics = {
     usingContext: Boolean(context),
-    contextKeys: context
-      ? Object.entries(context)
+    contextKeys: rawContext
+      ? Object.entries(rawContext)
           .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
           .map(([key]) => key)
       : [],
+    forceProdBlobs: forceProd,
     missing: [],
     store: {
       present: Boolean(storePick?.value.length),
@@ -889,24 +982,21 @@ function readNetlifyConfig(): {
     apiUrl: apiUrlCandidates.map((candidate) => candidate.value),
     uncachedEdgeUrl: uncachedEdgeCandidates.map((candidate) => candidate.value),
     consistency,
+    forceProd,
   })
 
-  return { config, diagnostics, signature }
+  debugLog('readNetlifyConfig', {
+    forceProd,
+    contextUsed: diagnostics.usingContext,
+    siteId: siteIdValue ? maskValue(siteIdValue) : null,
+    store: storePick?.value || null,
+  })
+
+  return { config, diagnostics, signature, forceProd }
 }
 
 function getNetlifyConfig(): NetlifyConfig | null {
   refreshNetlifyEnvironment()
-
-  if (!netlifyConfig && !netlifyWarningIssued) {
-    netlifyWarningIssued = true
-    flagFox({
-      id: 'theory-2-storage-missing',
-      theory: 2,
-      level: 'warn',
-      message: 'Netlify blob storage is not configured; falling back to in-memory blob storage.',
-    })
-  }
-
   return netlifyConfig ?? null
 }
 
@@ -916,13 +1006,52 @@ function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
   return netlifyDiagnostics ?? defaultDiagnostics()
 }
 
-async function getNetlifyStore(): Promise<Store | null> {
-  if (netlifyStore === null) {
-    return null
+async function getNetlifyStore(): Promise<Store> {
+  refreshNetlifyEnvironment()
+
+  const diagnosticsSnapshot = netlifyDiagnostics ?? defaultDiagnostics()
+
+  try {
+    validateBlobEnv()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    netlifyStore = undefined
+    netlifyStoreInitError = {
+      action: 'validate blob environment',
+      target: 'configuration',
+      store: netlifyConfig?.storeName,
+      siteId: netlifyConfig?.siteId,
+      tokenSource: diagnosticsSnapshot.token.selected?.key,
+      tokenLength: diagnosticsSnapshot.token.length,
+      usingContext: diagnosticsSnapshot.usingContext,
+      contextKeys: diagnosticsSnapshot.contextKeys,
+      missing: diagnosticsSnapshot.missing,
+      originalMessage: message,
+    }
+    debugLog('validateBlobEnv failed', {
+      message,
+      forceProd: diagnosticsSnapshot.forceProdBlobs,
+    })
+    throw error instanceof Error ? error : new Error(message)
   }
 
-  const baseConfig = getNetlifyConfig()
-  if (!baseConfig) return null
+  const baseConfig = netlifyConfig ?? null
+  if (!baseConfig) {
+    const message =
+      'Netlify blob storage is not configured. Set NETLIFY_BLOBS_SITE_ID (and related credentials) before handling blob writes.'
+    netlifyStore = undefined
+    netlifyStoreInitError = {
+      action: 'initialize blob store',
+      target: 'configuration',
+      tokenSource: diagnosticsSnapshot.token.selected?.key,
+      tokenLength: diagnosticsSnapshot.token.length,
+      usingContext: diagnosticsSnapshot.usingContext,
+      contextKeys: diagnosticsSnapshot.contextKeys,
+      missing: diagnosticsSnapshot.missing,
+      originalMessage: message,
+    }
+    throw new Error(message)
+  }
 
   try {
     const config = await ensureCanonicalSiteId(baseConfig)
@@ -938,23 +1067,39 @@ async function getNetlifyStore(): Promise<Store | null> {
       if (config.uncachedEdgeUrl) storeOptions.uncachedEdgeURL = config.uncachedEdgeUrl
       if (config.consistency) storeOptions.consistency = config.consistency
 
+      debugLog('initializing Netlify blob store', {
+        name: config.storeName,
+        siteId: maskValue(config.siteId),
+        hasToken: Boolean(config.token?.length),
+        apiUrl: config.apiUrl,
+        edgeUrl: config.edgeUrl,
+        uncachedEdgeUrl: config.uncachedEdgeUrl,
+        consistency: config.consistency,
+      })
+
       netlifyStore = getStore(storeOptions)
     }
 
     netlifyStoreInitError = null
+    if (!netlifyStore) {
+      throw new Error('Netlify blob store failed to initialize')
+    }
     return netlifyStore
   } catch (error) {
     const wrapped = await buildBlobError(error, {
       action: 'initialize blob store',
       config: baseConfig,
     })
-    netlifyStore = null
+    netlifyStore = undefined
     netlifyStoreInitError = (wrapped as any).blobDetails ?? {
       action: 'initialize blob store',
       originalMessage: wrapped.message,
     }
-    console.error(wrapped)
-    return null
+    debugLog('failed to initialize Netlify store', {
+      message: wrapped.message,
+      requestId: (netlifyStoreInitError as any)?.requestId,
+    })
+    throw wrapped
   }
 }
 
@@ -971,6 +1116,7 @@ function refreshNetlifyEnvironment() {
   }
 
   netlifyDiagnostics = result.diagnostics
+  netlifyForceProdActive = result.forceProd
 }
 
 function invalidateNetlifyStoreCache() {
@@ -1011,28 +1157,6 @@ function cacheControlFromSeconds(seconds?: number): string | undefined {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return undefined
   const safeSeconds = Math.max(0, Math.trunc(seconds))
   return `public, max-age=${safeSeconds}`
-}
-
-function deleteFallbackByPrefix(prefix: string) {
-  let removed = 0
-  for (const key of Array.from(memoryStore.keys())) {
-    if (!prefix || key.startsWith(prefix)) {
-      memoryStore.delete(key)
-      removed += 1
-    }
-  }
-  return removed
-}
-
-function deleteFallbackByUrl(url: string) {
-  for (const key of Array.from(memoryStore.keys())) {
-    const record = memoryStore.get(key)
-    if (record && record.dataUrl === url) {
-      memoryStore.delete(key)
-      return true
-    }
-  }
-  return false
 }
 
 function extractPathFromUrl(input: string): string | null {
@@ -1081,16 +1205,6 @@ export function getBlobToken(): string | undefined {
   return 'netlify'
 }
 
-export function getFallbackBlob(path: string): (MemoryBlobRecord & { pathname: string }) | undefined {
-  const record = memoryStore.get(path) ?? memoryStore.get(normalizePath(path))
-  if (!record) return undefined
-  return { ...record, pathname: normalizePath(path) }
-}
-
-export function clearFallbackBlobs() {
-  memoryStore.clear()
-}
-
 export async function putBlobFromBuffer(
   path: string,
   buf: Buffer,
@@ -1104,25 +1218,6 @@ export async function putBlobFromBuffer(
   }
 
   const cacheControl = cacheControlFromSeconds(options.cacheControlMaxAge)
-
-  if (!store) {
-    const bufferCopy = Buffer.from(buf)
-    const dataUrl = buildInlineDataUrl(contentType, bufferCopy)
-    const record: MemoryBlobRecord = {
-      buffer: bufferCopy,
-      contentType,
-      uploadedAt: new Date(),
-      size: bufferCopy.byteLength,
-      dataUrl,
-      cacheControl,
-    }
-    memoryStore.set(targetPath, record)
-    return {
-      url: dataUrl,
-      downloadUrl: dataUrl,
-    }
-  }
-
   const uploadedAt = new Date().toISOString()
   try {
     await store.set(targetPath, buf, {
@@ -1153,40 +1248,12 @@ export async function putBlobFromBuffer(
   }
 }
 
-async function listFallbackBlobs({ prefix }: { prefix: string }): Promise<ListedBlob[]> {
-  const normalizedPrefix = normalizePath(prefix)
-  const results: ListedBlob[] = []
-  for (const [pathname, record] of memoryStore.entries()) {
-    if (normalizedPrefix && !pathname.startsWith(normalizedPrefix)) continue
-    results.push({
-      pathname,
-      url: record.dataUrl,
-      downloadUrl: record.dataUrl,
-      uploadedAt: record.uploadedAt,
-      size: record.size,
-    })
-  }
-  results.sort((a, b) => a.pathname.localeCompare(b.pathname))
-  return results
-}
-
 export async function listBlobs(options: ListCommandOptions = {}): Promise<ListBlobResult> {
   const prefix = options?.prefix ? normalizePath(options.prefix) : ''
   const limit = typeof options?.limit === 'number' ? Math.max(1, options.limit) : 100
   const offset = options?.cursor ? Number.parseInt(options.cursor, 10) || 0 : 0
 
   const store = await getNetlifyStore()
-  if (!store) {
-    const fallback = await listFallbackBlobs({ prefix })
-    const sliced = fallback.slice(offset, offset + limit)
-    const hasMore = offset + limit < fallback.length
-    return {
-      blobs: sliced,
-      hasMore,
-      cursor: hasMore ? String(offset + limit) : undefined,
-    }
-  }
-
   let listResult
   try {
     listResult = await store.list({ prefix, directories: false })
@@ -1252,11 +1319,6 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
 export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
   const store = await getNetlifyStore()
   const sanitizedPrefix = normalizePath(prefix)
-
-  if (!store) {
-    return deleteFallbackByPrefix(sanitizedPrefix)
-  }
-
   let listResult
   try {
     listResult = await store.list({ prefix: sanitizedPrefix, directories: false })
@@ -1299,21 +1361,11 @@ export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
 export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
   if (!pathOrUrl) return false
 
-  const store = await getNetlifyStore()
-
-  if (!store) {
-    if (memoryStore.delete(pathOrUrl) || memoryStore.delete(normalizePath(pathOrUrl))) {
-      return true
-    }
-    if (pathOrUrl.startsWith('data:')) {
-      return deleteFallbackByUrl(pathOrUrl)
-    }
-    return false
-  }
-
   if (pathOrUrl.startsWith('data:')) {
-    return deleteFallbackByUrl(pathOrUrl)
+    throw new Error('Cannot delete data URIs via Netlify blob storage.')
   }
+
+  const store = await getNetlifyStore()
 
   const targetPath = extractPathFromUrl(pathOrUrl) || normalizePath(pathOrUrl)
   if (!targetPath) return false
@@ -1338,32 +1390,10 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
   if (!pathOrUrl) return null
 
   if (pathOrUrl.startsWith('data:')) {
-    for (const [pathname, record] of memoryStore.entries()) {
-      if (record.dataUrl === pathOrUrl) {
-        return {
-          buffer: Buffer.from(record.buffer),
-          contentType: record.contentType,
-          cacheControl: record.cacheControl,
-          uploadedAt: record.uploadedAt.toISOString(),
-          size: record.size,
-        }
-      }
-    }
-    return null
+    throw new Error('Cannot read data URIs from Netlify blob storage.')
   }
 
   const store = await getNetlifyStore()
-  if (!store) {
-    const record = memoryStore.get(pathOrUrl) || memoryStore.get(normalizePath(pathOrUrl))
-    if (!record) return null
-    return {
-      buffer: Buffer.from(record.buffer),
-      contentType: record.contentType,
-      cacheControl: record.cacheControl,
-      uploadedAt: record.uploadedAt.toISOString(),
-      size: record.size,
-    }
-  }
 
   const targetPath = extractPathFromUrl(pathOrUrl) || normalizePath(pathOrUrl)
   if (!targetPath) return null
@@ -1412,21 +1442,21 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
 }
 
 export async function blobHealth() {
+  const diagnostics = getBlobEnvDiagnostics()
   const config = getNetlifyConfig()
   if (!config) {
-    return { ok: true, mode: 'memory', reason: 'no netlify blob config' }
+    const message =
+      'Netlify blob storage is not configured. Provide NETLIFY_BLOBS_SITE_ID and related credentials to enable storage.'
+    return {
+      ok: false,
+      mode: 'netlify',
+      reason: message,
+      details: netlifyStoreInitError || diagnostics,
+    }
   }
 
   try {
     const store = await getNetlifyStore()
-    if (!store) {
-      return {
-        ok: false,
-        mode: 'netlify',
-        reason: netlifyStoreInitError?.originalMessage || 'failed to initialize store',
-        details: netlifyStoreInitError || undefined,
-      }
-    }
     await store.list({ prefix: '', directories: false })
     return { ok: true, mode: 'netlify', store: config.storeName }
   } catch (error: any) {
@@ -1450,18 +1480,44 @@ export function getBlobEnvironment() {
   const diagnostics = getBlobEnvDiagnostics()
   const config = getNetlifyConfig()
   if (!config) {
-    return { provider: 'memory', configured: false as const, diagnostics, error: null }
+    return {
+      provider: 'netlify' as const,
+      configured: false as const,
+      forceProdBlobs: netlifyForceProdActive || diagnostics.forceProdBlobs,
+      diagnostics,
+      error: netlifyStoreInitError,
+    }
   }
   return {
-    provider: 'netlify',
-    configured: netlifyStoreInitError ? false : (true as const),
+    provider: 'netlify' as const,
+    configured: netlifyStoreInitError ? (false as const) : (true as const),
     store: config.storeName,
     siteId: config.siteId,
     siteSlug: config.siteSlug,
     siteName: config.siteName,
+    forceProdBlobs: netlifyForceProdActive || diagnostics.forceProdBlobs,
     diagnostics,
     error: netlifyStoreInitError,
   }
+}
+
+export function blobDiagnostics(
+  source: string,
+  snapshot?: ReturnType<typeof getBlobEnvironment>,
+) {
+  const env = snapshot ?? getBlobEnvironment()
+  const diagnostics = env.diagnostics ?? defaultDiagnostics()
+  const summary = {
+    source,
+    provider: env.provider,
+    store: (env as any).store ?? null,
+    siteId: (env as any).siteId ?? null,
+    forceProdBlobs: env.forceProdBlobs ?? diagnostics.forceProdBlobs ?? false,
+    usingContext: diagnostics.usingContext,
+    contextKeys: diagnostics.contextKeys,
+  }
+  console.info(`[blobs] diagnostics:${source}`, summary)
+  return summary
 }
 
 export { BLOB_PROXY_PREFIX }

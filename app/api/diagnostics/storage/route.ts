@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   BLOB_PROXY_PREFIX,
+  blobDiagnostics,
   blobHealth,
   getBlobEnvironment,
   primeNetlifyBlobContextFromHeaders,
@@ -93,6 +94,7 @@ async function captureResponseSnippet(res: Response): Promise<string | undefined
 export async function GET(req: NextRequest) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   const env = getBlobEnvironment()
+  blobDiagnostics('api/diagnostics/storage', env)
   const health = await blobHealth()
   const flowSteps: FlowStep[] = []
 

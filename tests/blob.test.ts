@@ -5,6 +5,8 @@ afterEach(() => {
   delete process.env.NETLIFY_BLOBS_TOKEN
   delete process.env.NETLIFY_BLOBS_STORE
   delete process.env.NETLIFY_BLOBS_CONTEXT
+  delete process.env.FORCE_PROD_BLOBS
+  delete process.env.CONTEXT
   vi.resetModules()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -71,13 +73,12 @@ describe('putBlobFromBuffer', () => {
     expect(setSpy).toHaveBeenCalled()
   })
 
-  it('falls back to a data URL when storage is not configured', async () => {
+  it('throws when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
     const { putBlobFromBuffer } = await import('../lib/blob')
-    const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
-
-    expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
-    expect(result.downloadUrl).toBe(result.url)
+    await expect(putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')).rejects.toThrow(
+      /Netlify blob storage credentials are missing/i,
+    )
   })
 })
 
@@ -117,7 +118,7 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
   )
 })
 
-it('falls back to memory when given a site slug without a token to resolve it', async () => {
+it('throws when given a site slug without a token to resolve it', async () => {
   process.env.NETLIFY_BLOBS_SITE_ID = 'dadsbot'
 
   const setSpy = vi.fn(async () => ({}))
@@ -133,24 +134,30 @@ it('falls back to memory when given a site slug without a token to resolve it', 
   vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
   const { putBlobFromBuffer } = await import('../lib/blob')
-  const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
-
-  expect(getStoreSpy).not.toHaveBeenCalled()
-  expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
-  expect(result.downloadUrl).toBe(result.url)
+  await expect(putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')).rejects.toThrow(
+    /Netlify API token/i,
+  )
 })
 
 describe('listBlobs', () => {
-  it('returns fallback entries when storage is not configured', async () => {
+  it('propagates errors when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
-    const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
-    clearFallbackBlobs()
+    const { putBlobFromBuffer, listBlobs } = await import('../lib/blob')
 
-    await putBlobFromBuffer('sessions/test/item.json', Buffer.from('{}'), 'application/json')
-    const result = await listBlobs({ prefix: 'sessions/test/' })
-
-    expect(result.blobs).toHaveLength(1)
-    expect(result.blobs[0].pathname).toBe('sessions/test/item.json')
-    expect(result.blobs[0].downloadUrl).toEqual(result.blobs[0].url)
+    await expect(
+      putBlobFromBuffer('sessions/test/item.json', Buffer.from('{}'), 'application/json'),
+    ).rejects.toThrow()
+    await expect(listBlobs({ prefix: 'sessions/test/' })).rejects.toThrow()
   })
+})
+
+it('requires NETLIFY_BLOBS_SITE_ID when FORCE_PROD_BLOBS is set in preview contexts', async () => {
+  process.env.FORCE_PROD_BLOBS = 'true'
+  process.env.CONTEXT = 'deploy-preview'
+  vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
+
+  const { putBlobFromBuffer } = await import('../lib/blob')
+  await expect(putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')).rejects.toThrow(
+    /FORCE_PROD_BLOBS is enabled/i,
+  )
 })
