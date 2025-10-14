@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { jsonErrorResponse } from '@/lib/api-error'
 
 type EndpointSummary = {
   key: string
@@ -75,17 +76,21 @@ const TROUBLESHOOTING = [
 ]
 
 export async function GET() {
-  const deployment = detectDeployment()
+  try {
+    const deployment = detectDeployment()
 
-  const preferredBase = deployment.functionBase ? `${deployment.functionBase}/diagnostics` : '/api/diagnostics'
+    const preferredBase = deployment.functionBase ? `${deployment.functionBase}/diagnostics` : '/api/diagnostics'
 
-  return NextResponse.json({
-    ok: true,
-    message:
-      'Diagnostics base route is available. Invoke the specific endpoints below to run targeted checks.',
-    preferredBase,
-    deployment,
-    endpoints: ENDPOINTS,
-    troubleshooting: TROUBLESHOOTING,
-  })
+    return NextResponse.json({
+      ok: true,
+      message:
+        'Diagnostics base route is available. Invoke the specific endpoints below to run targeted checks.',
+      preferredBase,
+      deployment,
+      endpoints: ENDPOINTS,
+      troubleshooting: TROUBLESHOOTING,
+    })
+  } catch (error) {
+    return jsonErrorResponse(error, 'Failed to load diagnostics metadata')
+  }
 }

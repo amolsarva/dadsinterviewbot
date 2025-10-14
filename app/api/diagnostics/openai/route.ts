@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import OpenAI from 'openai'
+import { jsonErrorResponse } from '@/lib/api-error'
 
 export const runtime = 'nodejs'
 
@@ -47,12 +48,12 @@ export async function GET() {
       model: { id: completion.model || model },
       reply,
     })
-  } catch (error: any) {
+  } catch (error) {
     const status = extractStatus(error)
     const message = extractErrorMessage(error)
-    return NextResponse.json(
-      { ok: false, status, message, error: message },
-      { status: status >= 400 ? status : 502 },
-    )
+    return jsonErrorResponse(error, message, status >= 400 ? status : 502, {
+      status,
+      error: message,
+    })
   }
 }

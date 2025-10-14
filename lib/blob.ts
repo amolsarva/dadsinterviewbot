@@ -1,4 +1,10 @@
 import { getStore, type GetStoreOptions, type Store } from '@netlify/blobs'
+import {
+  assertBlobEnv,
+  describeBlobEnvSnapshot,
+  isForceProdBlobsEnabled,
+  snapshotRequiredBlobEnv,
+} from '../utils/blob-env'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -154,6 +160,7 @@ let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyStoreInitError: BlobErrorDetails | null = null
+let blobEnvLogged = false
 
 type SiteResolution = {
   slug: string
@@ -196,6 +203,13 @@ function maskValue(value: string): string {
   if (!value) return ''
   if (value.length <= 8) return value
   return `${value.slice(0, 4)}…${value.slice(-4)}`
+}
+
+function logBlobEnvironmentOnce() {
+  if (blobEnvLogged) return
+  blobEnvLogged = true
+  const snapshot = snapshotRequiredBlobEnv()
+  console.log('[BLOBS INIT]', describeBlobEnvSnapshot(snapshot))
 }
 
 function truncateForDiagnostics(value: string, limit = 240) {
@@ -598,6 +612,9 @@ function applyRandomSuffix(path: string): string {
 }
 
 function parseNetlifyContext(): NetlifyContext | null {
+  if (isForceProdBlobsEnabled()) {
+    return null
+  }
   try {
     const rawEnv = process.env.NETLIFY_BLOBS_CONTEXT || process.env.BLOBS_CONTEXT
     if (rawEnv && rawEnv.trim().length) {
@@ -670,6 +687,9 @@ function sanitizeContextInput(context: Partial<NetlifyContext> | null | undefine
 export function setNetlifyBlobContext(
   contextInput: Partial<NetlifyContext> | null | undefined,
 ): boolean {
+  if (isForceProdBlobsEnabled()) {
+    return false
+  }
   const sanitized = sanitizeContextInput(contextInput)
   if (!sanitized) return false
   const globalContext = (globalThis as any).netlifyBlobsContext
@@ -754,6 +774,9 @@ function extractNetlifyContextFromHeaders(headers: HeaderLike): Partial<NetlifyC
 }
 
 export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean {
+  if (isForceProdBlobsEnabled()) {
+    return false
+  }
   const extracted = extractNetlifyContextFromHeaders(headers)
   if (!extracted) return false
   return setNetlifyBlobContext(extracted)
@@ -938,6 +961,7 @@ async function getNetlifyStore(): Promise<Store | null> {
       if (config.uncachedEdgeUrl) storeOptions.uncachedEdgeURL = config.uncachedEdgeUrl
       if (config.consistency) storeOptions.consistency = config.consistency
 
+      assertBlobEnv()
       netlifyStore = getStore(storeOptions)
     }
 
@@ -959,6 +983,7 @@ async function getNetlifyStore(): Promise<Store | null> {
 }
 
 function refreshNetlifyEnvironment() {
+  logBlobEnvironmentOnce()
   const result = readNetlifyConfig()
   const signatureChanged =
     typeof netlifyContextSignature === 'undefined' || result.signature !== netlifyContextSignature
@@ -1466,3 +1491,5 @@ export function getBlobEnvironment() {
 
 export { BLOB_PROXY_PREFIX }
 export type { BlobEnvDiagnostics, CandidateSummary, BlobErrorDetails }
+
+refreshNetlifyEnvironment()

@@ -8,6 +8,7 @@ import {
   putBlobFromBuffer,
   readBlob,
 } from '@/lib/blob'
+import { jsonErrorResponse } from '@/lib/api-error'
 import type { BlobErrorReport } from '@/types/error-types'
 
 type FlowStep = {
@@ -97,44 +98,45 @@ async function captureResponseSnippet(res: Response): Promise<string | undefined
 }
 
 export async function GET(req: NextRequest) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
-  const env = getBlobEnvironment()
-  const envError = (env.error ?? null) as BlobErrorReport | null
-  const strictStorageEnabled = env.provider === 'netlify' && env.configured && !envError
-  console.info(
-    `[diagnostics] Strict storage mode: ${
-      strictStorageEnabled ? 'enabled (no memory fallback)' : 'disabled (memory fallback available)'
-    }`,
-  )
-  const health = await blobHealth()
-  const flowSteps: FlowStep[] = []
+  try {
+    primeNetlifyBlobContextFromHeaders(req.headers)
+    const env = getBlobEnvironment()
+    const envError = (env.error ?? null) as BlobErrorReport | null
+    const strictStorageEnabled = env.provider === 'netlify' && env.configured && !envError
+    console.info(
+      `[diagnostics] Strict storage mode: ${
+        strictStorageEnabled ? 'enabled (no memory fallback)' : 'disabled (memory fallback available)'
+      }`,
+    )
+    const health = await blobHealth()
+    const flowSteps: FlowStep[] = []
 
-  const probeId = randomUUID()
-  const startedAt = new Date().toISOString()
-  const origin = req.nextUrl?.origin
-  const context: FlowDiagnostics = {
-    ok: false,
-    probeId,
-    startedAt,
-    origin,
-    steps: flowSteps,
-  }
-
-  const hasNetlifyConfig = env.provider === 'netlify' && Boolean((env as any).store) && Boolean((env as any).siteId)
-  const canProbeNetlify = hasNetlifyConfig && env.configured && !envError
-
-  if (hasNetlifyConfig && envError) {
-    flowSteps.push({
-      id: 'netlify_init',
-      label: 'Netlify blob initialization',
+    const probeId = randomUUID()
+    const startedAt = new Date().toISOString()
+    const origin = req.nextUrl?.origin
+    const context: FlowDiagnostics = {
       ok: false,
-      error:
-        (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
-        (typeof envError.message === 'string' && envError.message.trim()) ||
-        'Failed to initialize the Netlify blob store.',
-      details: envError,
-    })
-  }
+      probeId,
+      startedAt,
+      origin,
+      steps: flowSteps,
+    }
+
+    const hasNetlifyConfig = env.provider === 'netlify' && Boolean((env as any).store) && Boolean((env as any).siteId)
+    const canProbeNetlify = hasNetlifyConfig && env.configured && !envError
+
+    if (hasNetlifyConfig && envError) {
+      flowSteps.push({
+        id: 'netlify_init',
+        label: 'Netlify blob initialization',
+        ok: false,
+        error:
+          (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
+          (typeof envError.message === 'string' && envError.message.trim()) ||
+          'Failed to initialize the Netlify blob store.',
+        details: envError,
+      })
+    }
 
   if (canProbeNetlify) {
     const basePath = `diagnostics/${probeId}`
@@ -516,37 +518,40 @@ export async function GET(req: NextRequest) {
     })
   }
 
-  const requiredFailures = flowSteps.filter((step) => !step.optional && !step.ok && !step.skipped)
-  const flowOk = requiredFailures.length === 0
-  context.ok = flowOk
+    const requiredFailures = flowSteps.filter((step) => !step.optional && !step.ok && !step.skipped)
+    const flowOk = requiredFailures.length === 0
+    context.ok = flowOk
 
-  const ok = canProbeNetlify && health.ok && health.mode === 'netlify' && flowOk
+    const ok = canProbeNetlify && health.ok && health.mode === 'netlify' && flowOk
 
-  let message: string
+    let message: string
 
-  if (ok) {
-    message = `Netlify blob store "${(env as any).store || 'default'}" responded to SDK and proxy checks.`
-  } else if (!hasNetlifyConfig) {
-    const missing = env.diagnostics?.missing?.length ? env.diagnostics.missing.join(', ') : null
-    message = missing
-      ? `Storage is running in in-memory fallback mode. Missing configuration: ${missing}.`
-      : 'Storage is running in in-memory fallback mode.'
-  } else if (envError) {
-    message =
-      (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
-      (typeof envError.message === 'string' && envError.message.trim()) ||
-      'Failed to initialize Netlify blob storage. Check error details.'
-  } else if (!health.ok || health.mode !== 'netlify') {
-    message = `Netlify storage health check failed: ${health.reason || 'unknown error'}`
-  } else if (!flowOk && requiredFailures.length) {
-    const first = requiredFailures[0]
-    const statusLabel = typeof first.status === 'number' ? ` (HTTP ${first.status})` : ''
-    const methodLabel = first.method ? `${first.method} ` : ''
-    const errorLabel = first.error ? ` — ${first.error}` : first.responseSnippet ? ` — ${first.responseSnippet}` : ''
-    message = `Blob flow failed during ${methodLabel}${first.label}${statusLabel}${errorLabel}`
-  } else {
-    message = 'Netlify storage diagnostics completed with warnings. Review flow steps for details.'
+    if (ok) {
+      message = `Netlify blob store "${(env as any).store || 'default'}" responded to SDK and proxy checks.`
+    } else if (!hasNetlifyConfig) {
+      const missing = env.diagnostics?.missing?.length ? env.diagnostics.missing.join(', ') : null
+      message = missing
+        ? `Storage is running in in-memory fallback mode. Missing configuration: ${missing}.`
+        : 'Storage is running in in-memory fallback mode.'
+    } else if (envError) {
+      message =
+        (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
+        (typeof envError.message === 'string' && envError.message.trim()) ||
+        'Failed to initialize Netlify blob storage. Check error details.'
+    } else if (!health.ok || health.mode !== 'netlify') {
+      message = `Netlify storage health check failed: ${health.reason || 'unknown error'}`
+    } else if (!flowOk && requiredFailures.length) {
+      const first = requiredFailures[0]
+      const statusLabel = typeof first.status === 'number' ? ` (HTTP ${first.status})` : ''
+      const methodLabel = first.method ? `${first.method} ` : ''
+      const errorLabel = first.error ? ` — ${first.error}` : first.responseSnippet ? ` — ${first.responseSnippet}` : ''
+      message = `Blob flow failed during ${methodLabel}${first.label}${statusLabel}${errorLabel}`
+    } else {
+      message = 'Netlify storage diagnostics completed with warnings. Review flow steps for details.'
+    }
+
+    return NextResponse.json({ ok, env, health, message, flow: context })
+  } catch (error) {
+    return jsonErrorResponse(error, 'Failed to run storage diagnostics')
   }
-
-  return NextResponse.json({ ok, env, health, message, flow: context })
 }

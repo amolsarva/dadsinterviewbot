@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { jsonErrorResponse } from '@/lib/api-error'
 import { resolveGoogleModel } from '@/lib/google'
 
 export const runtime = 'nodejs'
@@ -73,11 +74,7 @@ export async function GET() {
       model: { name: model },
       reply,
     })
-  } catch (error: any) {
-    const message = typeof error?.message === 'string' ? error.message : 'google_diagnostics_failed'
-    return NextResponse.json(
-      { ok: false, error: message, status: null, model: { name: model } },
-      { status: 500 },
-    )
+  } catch (error) {
+    return jsonErrorResponse(error, 'Google diagnostics failed')
   }
 }

@@ -6,6 +6,7 @@ import {
   putBlobFromBuffer,
   readBlob,
 } from '@/lib/blob'
+import { jsonErrorResponse } from '@/lib/api-error'
 
 function extractPath(params: { path?: string[] | string }): string {
   const raw = params?.path
@@ -30,7 +31,16 @@ async function handleBlobRequest(path: string, download: boolean, includeBody: b
     return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
   }
 
-  const record = await readBlob(path)
+  let record
+  try {
+    record = await readBlob(path)
+  } catch (error) {
+    const fallbackMessage =
+      error && typeof error === 'object' && typeof (error as any).message === 'string' && (error as any).message.trim().length
+        ? (error as any).message
+        : 'failed to read blob'
+    return jsonErrorResponse(error, fallbackMessage, undefined, { reason: fallbackMessage })
+  }
   if (!record) {
     return NextResponse.json({ ok: false, reason: 'not found' }, { status: 404 })
   }
@@ -131,10 +141,16 @@ export async function PUT(req: NextRequest, { params }: { params: { path?: strin
       response.headers.set('Cache-Control', cacheControlHeader)
     }
     return response
-  } catch (error: any) {
-    const status = typeof error?.status === 'number' && error.status >= 400 ? error.status : 500
-    const message = typeof error?.message === 'string' && error.message.length ? error.message : 'failed to upload blob'
-    return NextResponse.json({ ok: false, reason: message }, { status })
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && typeof (error as any).status === 'number' && (error as any).status >= 400
+        ? (error as any).status
+        : 500
+    const fallbackMessage =
+      error && typeof error === 'object' && typeof (error as any).message === 'string' && (error as any).message.length
+        ? (error as any).message
+        : 'failed to upload blob'
+    return jsonErrorResponse(error, fallbackMessage, status, { reason: fallbackMessage })
   }
 }
 
@@ -151,9 +167,15 @@ export async function DELETE(_req: NextRequest, { params }: { params: { path?: s
       return NextResponse.json({ ok: false, reason: 'not found' }, { status: 404 })
     }
     return new NextResponse(null, { status: 204 })
-  } catch (error: any) {
-    const status = typeof error?.status === 'number' && error.status >= 400 ? error.status : 500
-    const message = typeof error?.message === 'string' && error.message.length ? error.message : 'failed to delete blob'
-    return NextResponse.json({ ok: false, reason: message }, { status })
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && typeof (error as any).status === 'number' && (error as any).status >= 400
+        ? (error as any).status
+        : 500
+    const fallbackMessage =
+      error && typeof error === 'object' && typeof (error as any).message === 'string' && (error as any).message.length
+        ? (error as any).message
+        : 'failed to delete blob'
+    return jsonErrorResponse(error, fallbackMessage, status, { reason: fallbackMessage })
   }
 }
