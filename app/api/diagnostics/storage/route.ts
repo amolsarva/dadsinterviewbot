@@ -8,6 +8,7 @@ import {
   putBlobFromBuffer,
   readBlob,
 } from '@/lib/blob'
+import type { BlobErrorReport } from '@/types/error-types'
 
 type FlowStep = {
   id: string
@@ -38,7 +39,12 @@ type FlowDiagnostics = {
   steps: FlowStep[]
 }
 
-type BlobErrorLike = { message?: string; blobDetails?: unknown; cause?: BlobErrorLike }
+type BlobErrorLike = {
+  message?: string
+  blobDetails?: unknown
+  cause?: BlobErrorLike
+  originalMessage?: string
+}
 
 function encodePathSegments(path: string): string {
   return path
@@ -93,6 +99,13 @@ async function captureResponseSnippet(res: Response): Promise<string | undefined
 export async function GET(req: NextRequest) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   const env = getBlobEnvironment()
+  const envError = (env.error ?? null) as BlobErrorReport | null
+  const strictStorageEnabled = env.provider === 'netlify' && env.configured && !envError
+  console.info(
+    `[diagnostics] Strict storage mode: ${
+      strictStorageEnabled ? 'enabled (no memory fallback)' : 'disabled (memory fallback available)'
+    }`,
+  )
   const health = await blobHealth()
   const flowSteps: FlowStep[] = []
 
@@ -107,7 +120,6 @@ export async function GET(req: NextRequest) {
     steps: flowSteps,
   }
 
-  const envError = env.error
   const hasNetlifyConfig = env.provider === 'netlify' && Boolean((env as any).store) && Boolean((env as any).siteId)
   const canProbeNetlify = hasNetlifyConfig && env.configured && !envError
 
@@ -116,7 +128,10 @@ export async function GET(req: NextRequest) {
       id: 'netlify_init',
       label: 'Netlify blob initialization',
       ok: false,
-      error: envError.originalMessage || 'Failed to initialize the Netlify blob store.',
+      error:
+        (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
+        (typeof envError.message === 'string' && envError.message.trim()) ||
+        'Failed to initialize the Netlify blob store.',
       details: envError,
     })
   }
@@ -517,7 +532,10 @@ export async function GET(req: NextRequest) {
       ? `Storage is running in in-memory fallback mode. Missing configuration: ${missing}.`
       : 'Storage is running in in-memory fallback mode.'
   } else if (envError) {
-    message = envError.originalMessage || 'Failed to initialize Netlify blob storage. Check error details.'
+    message =
+      (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
+      (typeof envError.message === 'string' && envError.message.trim()) ||
+      'Failed to initialize Netlify blob storage. Check error details.'
   } else if (!health.ok || health.mode !== 'netlify') {
     message = `Netlify storage health check failed: ${health.reason || 'unknown error'}`
   } else if (!flowOk && requiredFailures.length) {

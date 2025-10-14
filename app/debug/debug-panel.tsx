@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { createSessionRecorder, type SessionRecorder } from '@/lib/session-recorder'
 import { buildScopedPath, normalizeHandle } from '@/lib/user-scope'
+import { resolveErrorMessage, type UploadResultPayload } from '@/types/error-types'
 
 type BlobStatus = {
   env: any
@@ -22,14 +23,6 @@ type BlobListResponse = {
   blobs: BlobListItem[]
   hasMore: boolean
   cursor?: string
-}
-
-type UploadResult = {
-  ok: boolean
-  url?: string | null
-  downloadUrl?: string | null
-  status?: number
-  message?: string
 }
 
 type HistoryClearResult = {
@@ -85,11 +78,11 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
 
   const [textPath, setTextPath] = useState(() => buildDefaultPath('debug', 'txt'))
   const [textContent, setTextContent] = useState(DEFAULT_TEXT_SNIPPET)
-  const [textResult, setTextResult] = useState<UploadResult | null>(null)
+  const [textResult, setTextResult] = useState<UploadResultPayload | null>(null)
   const [textUploading, setTextUploading] = useState(false)
 
   const [audioPath, setAudioPath] = useState(() => buildDefaultPath('debug', 'webm'))
-  const [audioResult, setAudioResult] = useState<UploadResult | null>(null)
+  const [audioResult, setAudioResult] = useState<UploadResultPayload | null>(null)
   const [audioUploading, setAudioUploading] = useState(false)
   const [audioError, setAudioError] = useState<string | null>(null)
   const [audioDuration, setAudioDuration] = useState<number | null>(null)
@@ -251,9 +244,9 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
       },
       body,
     })
-    const payload = (await response.json().catch(() => null)) as UploadResult | null
+    const payload = (await response.json().catch(() => null)) as UploadResultPayload | null
     if (!response.ok) {
-      const message = payload?.message || payload?.reason || `Upload failed (${response.status})`
+      const message = resolveErrorMessage(payload, `Upload failed (${response.status})`)
       const error = new Error(message)
       ;(error as any).status = response.status
       throw error
@@ -310,7 +303,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
       const response = await fetch(`/api/blob/${encodeBlobPath(normalizedPath)}`, { method: 'DELETE' })
       if (!response.ok && response.status !== 404) {
         const payload = await response.json().catch(() => null)
-        const message = (payload && (payload.reason || payload.message)) || `Failed to delete (${response.status})`
+        const message = resolveErrorMessage(payload as UploadResultPayload | null, `Failed to delete (${response.status})`)
         throw new Error(message)
       }
     },
@@ -324,8 +317,8 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
       params.set('prefix', listPrefix.trim())
       const response = await fetch(`/api/debug/blobs?${params.toString()}`, { method: 'DELETE' })
       if (!response.ok) {
-        const payload = await response.json().catch(() => null)
-        const message = (payload && (payload.reason || payload.message)) || `Failed to delete prefix (${response.status})`
+        const payload = (await response.json().catch(() => null)) as UploadResultPayload | null
+        const message = resolveErrorMessage(payload, `Failed to delete prefix (${response.status})`)
         throw new Error(message)
       }
       await fetchList(undefined, true)
@@ -349,8 +342,8 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
           method: 'DELETE',
         })
         if (!response.ok) {
-          const payload = await response.json().catch(() => null)
-          const message = (payload && (payload.reason || payload.message)) || `Failed to clear history (${response.status})`
+          const payload = (await response.json().catch(() => null)) as UploadResultPayload | null
+          const message = resolveErrorMessage(payload, `Failed to clear history (${response.status})`)
           throw new Error(message)
         }
         const payload = (await response.json().catch(() => null)) as HistoryClearResult | null

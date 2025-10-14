@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearFoxes, listFoxes } from '../lib/foxes'
+import type { ListBlobResult } from '../lib/blob'
 
 const putBlobMock = vi.fn(async (path: string, _buf: Buffer, _type: string, _options?: unknown) => ({
   url: `https://blob.test/${path}`,
 }))
-const listBlobsMock = vi.fn(async () => ({ blobs: [], hasMore: false }))
-const deleteByPrefixMock = vi.fn(async () => 0)
-const deleteBlobMock = vi.fn(async () => false)
+const listBlobsMock = vi.fn(
+  async (_options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => ({
+    blobs: [],
+    hasMore: false,
+  }),
+)
+const deleteByPrefixMock = vi.fn(async (_prefix?: string): Promise<number> => 0)
+const deleteBlobMock = vi.fn(async (_path?: string): Promise<boolean> => false)
 const originalFetch = global.fetch
 vi.mock('../lib/blob', () => ({
   putBlobFromBuffer: putBlobMock,
@@ -165,9 +171,9 @@ describe('session deletion helpers', () => {
     await data.appendTurn(session.id, { role: 'user', text: 'memory highlight to remove' })
     await data.finalizeSession(session.id, { clientDurationMs: 100 })
 
-    deleteByPrefixMock.mockImplementation(async (prefix: string) => {
-      if (prefix.startsWith('sessions/')) return 1
-      if (prefix.startsWith('transcripts/')) return 1
+    deleteByPrefixMock.mockImplementation(async (prefix?: string) => {
+      if (typeof prefix === 'string' && prefix.startsWith('sessions/')) return 1
+      if (typeof prefix === 'string' && prefix.startsWith('transcripts/')) return 1
       return 0
     })
 
@@ -266,18 +272,20 @@ describe('memory continuity across requests', () => {
       pathname: `sessions/${session.id}/session-${session.id}.json`,
       url: manifestUrl,
       downloadUrl: manifestUrl,
-      uploadedAt: new Date().toISOString(),
+      uploadedAt: new Date(),
     }
 
     data.__dangerousResetMemoryState()
 
-    listBlobsMock.mockImplementation(async (options?: { prefix?: string }) => {
-      if (!options) return { blobs: [], hasMore: false }
-      if (options.prefix === 'sessions/' || options.prefix === `sessions/${session.id}/`) {
-        return { blobs: [manifestEntry], hasMore: false }
-      }
-      return { blobs: [], hasMore: false }
-    })
+    listBlobsMock.mockImplementation(
+      async (options?: { prefix?: string; limit?: number; cursor?: string }): Promise<ListBlobResult> => {
+        if (!options) return { blobs: [], hasMore: false }
+        if (options.prefix === 'sessions/' || options.prefix === `sessions/${session.id}/`) {
+          return { blobs: [manifestEntry], hasMore: false }
+        }
+        return { blobs: [], hasMore: false }
+      },
+    )
 
     global.fetch = vi.fn(async (url: string) => {
       if (url === manifestUrl) {
