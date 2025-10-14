@@ -3,6 +3,9 @@ import { appendTurn } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { z } from 'zod'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 export async function POST(req: NextRequest, { params }: { params: { id: string }}) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   try {

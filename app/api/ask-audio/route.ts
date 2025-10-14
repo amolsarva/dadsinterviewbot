@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import {
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
   collectAskedQuestions,
   extractAskedQuestions,
   findLatestUserDetails,

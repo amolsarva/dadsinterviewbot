@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { sendSummaryEmail } from '@/lib/email'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 export async function POST() {
   try {
     const to = process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co'

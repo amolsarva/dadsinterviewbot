@@ -5,6 +5,9 @@ import { fetchStoredSessions } from '@/lib/history'
 import { generateSessionTitle, SummarizableTurn } from '@/lib/session-title'
 import { formatSessionTitleFallback } from '@/lib/fallback-texts'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: Request) {
   primeNetlifyBlobContextFromHeaders(request.headers)
   const url = new URL(request.url)

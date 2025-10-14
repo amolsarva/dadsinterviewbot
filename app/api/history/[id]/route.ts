@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { deleteSession } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 export async function DELETE(request: Request, { params }: { params: { id: string } }) {
   primeNetlifyBlobContextFromHeaders(request.headers)
   const id = params?.id

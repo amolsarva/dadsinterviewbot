@@ -3,6 +3,5 @@ const nextConfig = {
   experimental: {
     serverActions: { allowedOrigins: ['*'] },
   },
-  output: 'standalone',
 }
 module.exports = nextConfig

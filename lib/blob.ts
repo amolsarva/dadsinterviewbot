@@ -90,6 +90,7 @@ type BlobErrorDetails = {
   target?: string
   store?: string
   siteId?: string
+  siteIdMasked?: string
   siteSlug?: string
   siteName?: string
   tokenSource?: string
@@ -102,6 +103,12 @@ type BlobErrorDetails = {
   requestId?: string
   responseBodySnippet?: string
   originalMessage?: string
+  strictMode?: boolean
+  environment?: {
+    provider: string
+    strictMode: boolean
+    diagnostics: BlobEnvDiagnostics
+  }
 }
 
 export type ListedBlob = {
@@ -133,6 +140,14 @@ type ReadBlobResult = {
   size?: number
 }
 
+type PutBlobResult = {
+  url: string
+  downloadUrl: string
+  via: 'netlify-sdk' | 'memory'
+  store?: string
+  siteId?: string
+}
+
 const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
 const BLOB_PROXY_PREFIX = '/api/blob/'
 const NETLIFY_API_BASE_URL = 'https://api.netlify.com'
@@ -154,6 +169,10 @@ let netlifySiteResolution: Promise<SiteResolution | null> | null = null
 let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyStoreInitError: BlobErrorDetails | null = null
+
+function strictMode(): boolean {
+  return process.env.STRICT_BLOBS === '1' || process.env.STRICT_STORAGE === '1'
+}
 
 type SiteResolution = {
   slug: string
@@ -198,7 +217,7 @@ function maskValue(value: string): string {
   return `${value.slice(0, 4)}…${value.slice(-4)}`
 }
 
-function truncateForDiagnostics(value: string, limit = 240) {
+function truncateForDiagnostics(value: string, limit = 1024) {
   const cleaned = value.replace(/\s+/g, ' ').trim()
   if (!cleaned.length) return ''
   if (cleaned.length <= limit) return cleaned
@@ -377,16 +396,21 @@ function extractErrorCode(error: any): string | undefined {
 
 function extractRequestId(error: any): string | undefined {
   const headerValue = (() => {
-    const headers = error?.response?.headers
+    const headers = error?.response?.headers || error?.headers
     if (!headers) return undefined
-    if (typeof headers.get === 'function') {
-      try {
-        const value = headers.get('x-nf-request-id')
-        if (typeof value === 'string' && value.trim().length) return value.trim()
-      } catch {}
+    const candidates = [
+      'x-nf-request-id',
+      'x-request-id',
+      'x-amz-request-id',
+      'x-amzn-requestid',
+      'x-amzn-request-id',
+    ]
+    for (const name of candidates) {
+      const value = getHeaderValue(headers, name)
+      if (typeof value === 'string' && value.trim().length) {
+        return value.trim()
+      }
     }
-    const raw = (headers as any)['x-nf-request-id'] || (headers as any)['X-Nf-Request-Id']
-    if (typeof raw === 'string' && raw.trim().length) return raw.trim()
     return undefined
   })()
   const direct =
@@ -458,18 +482,23 @@ async function buildBlobError(
 ): Promise<Error> {
   const diagnostics = getBlobEnvDiagnostics()
   const config = context.config ?? getNetlifyConfig()
+  const environment = getBlobEnvironment()
 
   const status = extractStatusCode(error)
   const code = extractErrorCode(error)
   const requestId = extractRequestId(error)
   const bodySnippet = await extractResponseBodySnippet(error)
   const originalMessage = typeof error?.message === 'string' ? error.message : undefined
+  const maskedSite = config?.siteId ? maskValue(config.siteId) : undefined
+  const storeName =
+    config?.storeName || diagnostics.store.selected?.value || diagnostics.store.selected?.valuePreview
 
   const details: BlobErrorDetails = {
     action: context.action,
     target: context.target,
-    store: config?.storeName,
-    siteId: config?.siteId,
+    store: storeName || undefined,
+    siteId: maskedSite,
+    siteIdMasked: maskedSite,
     siteSlug: config?.siteSlug,
     siteName: config?.siteName,
     tokenSource: diagnostics.token.selected?.key,
@@ -482,18 +511,23 @@ async function buildBlobError(
     requestId,
     responseBodySnippet: bodySnippet,
     originalMessage,
+    strictMode: strictMode(),
+    environment: {
+      provider: String(environment.provider || 'unknown'),
+      strictMode: Boolean((environment as any).strictMode ?? strictMode()),
+      diagnostics: environment.diagnostics,
+    },
   }
 
   const summaryParts: string[] = []
   if (typeof status === 'number') summaryParts.push(`status ${status}`)
   if (code) summaryParts.push(`code ${code}`)
   if (requestId) summaryParts.push(`request ${requestId}`)
-  const maskedSite = config?.siteId ? maskValue(config.siteId) : undefined
   const location =
-    config?.storeName && maskedSite
-      ? `Netlify store "${config.storeName}" (site ${maskedSite})`
-      : config?.storeName
-      ? `Netlify store "${config.storeName}"`
+    storeName && maskedSite
+      ? `Netlify store "${storeName}" (site ${maskedSite})`
+      : storeName
+      ? `Netlify store "${storeName}"`
       : 'Netlify blob store'
   const summary = summaryParts.length ? ` (${summaryParts.join(', ')})` : ''
 
@@ -916,13 +950,47 @@ function getBlobEnvDiagnostics(): BlobEnvDiagnostics {
   return netlifyDiagnostics ?? defaultDiagnostics()
 }
 
+async function throwStrictBlobError(
+  action: string,
+  target?: string,
+  configOverride?: NetlifyConfig | null,
+): Promise<never> {
+  const baseConfig = typeof configOverride === 'undefined' ? getNetlifyConfig() : configOverride
+  const existing = netlifyStoreInitError
+  const fallbackMessage =
+    existing?.originalMessage || 'Strict blob storage mode forbids falling back to in-memory storage.'
+  const wrapped = await buildBlobError(new Error(fallbackMessage), {
+    action,
+    target,
+    config: baseConfig ?? null,
+  })
+  const details = (wrapped as any).blobDetails as BlobErrorDetails | undefined
+  if (details && existing) {
+    const merged: BlobErrorDetails = { ...existing, ...details, strictMode: true }
+    ;(wrapped as any).blobDetails = merged
+    netlifyStoreInitError = merged
+  } else if (details) {
+    details.strictMode = true
+    netlifyStoreInitError = details
+  }
+  throw wrapped
+}
+
 async function getNetlifyStore(): Promise<Store | null> {
   if (netlifyStore === null) {
+    if (strictMode()) {
+      await throwStrictBlobError('initialize blob store')
+    }
     return null
   }
 
   const baseConfig = getNetlifyConfig()
-  if (!baseConfig) return null
+  if (!baseConfig) {
+    if (strictMode()) {
+      await throwStrictBlobError('initialize blob store', undefined, baseConfig)
+    }
+    return null
+  }
 
   try {
     const config = await ensureCanonicalSiteId(baseConfig)
@@ -954,6 +1022,9 @@ async function getNetlifyStore(): Promise<Store | null> {
       originalMessage: wrapped.message,
     }
     console.error(wrapped)
+    if (strictMode()) {
+      throw wrapped
+    }
     return null
   }
 }
@@ -1096,7 +1167,8 @@ export async function putBlobFromBuffer(
   buf: Buffer,
   contentType: string,
   options: PutBlobOptions = {},
-) {
+): Promise<PutBlobResult> {
+  const envSnapshot = getBlobEnvironment()
   const store = await getNetlifyStore()
   let targetPath = normalizePath(path)
   if (options.addRandomSuffix) {
@@ -1106,6 +1178,9 @@ export async function putBlobFromBuffer(
   const cacheControl = cacheControlFromSeconds(options.cacheControlMaxAge)
 
   if (!store) {
+    if (strictMode()) {
+      await throwStrictBlobError('upload blob', targetPath)
+    }
     const bufferCopy = Buffer.from(buf)
     const dataUrl = buildInlineDataUrl(contentType, bufferCopy)
     const record: MemoryBlobRecord = {
@@ -1120,6 +1195,9 @@ export async function putBlobFromBuffer(
     return {
       url: dataUrl,
       downloadUrl: dataUrl,
+      via: 'memory' as const,
+      store: 'memory',
+      siteId: envSnapshot.siteId,
     }
   }
 
@@ -1150,6 +1228,9 @@ export async function putBlobFromBuffer(
   return {
     url: proxyUrl,
     downloadUrl: proxyUrl,
+    via: 'netlify-sdk' as const,
+    store: envSnapshot.store ?? envSnapshot.provider,
+    siteId: envSnapshot.siteId,
   }
 }
 
@@ -1177,6 +1258,9 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
 
   const store = await getNetlifyStore()
   if (!store) {
+    if (strictMode()) {
+      await throwStrictBlobError('list blobs', prefix || '(all)')
+    }
     const fallback = await listFallbackBlobs({ prefix })
     const sliced = fallback.slice(offset, offset + limit)
     const hasMore = offset + limit < fallback.length
@@ -1254,6 +1338,9 @@ export async function deleteBlobsByPrefix(prefix: string): Promise<number> {
   const sanitizedPrefix = normalizePath(prefix)
 
   if (!store) {
+    if (strictMode()) {
+      await throwStrictBlobError('delete blobs by prefix', sanitizedPrefix || '(all)')
+    }
     return deleteFallbackByPrefix(sanitizedPrefix)
   }
 
@@ -1302,6 +1389,12 @@ export async function deleteBlob(pathOrUrl: string): Promise<boolean> {
   const store = await getNetlifyStore()
 
   if (!store) {
+    if (strictMode()) {
+      const normalized = pathOrUrl.startsWith('data:')
+        ? pathOrUrl.slice(0, 64)
+        : normalizePath(pathOrUrl)
+      await throwStrictBlobError('delete blob', normalized)
+    }
     if (memoryStore.delete(pathOrUrl) || memoryStore.delete(normalizePath(pathOrUrl))) {
       return true
     }
@@ -1354,6 +1447,12 @@ export async function readBlob(pathOrUrl: string): Promise<ReadBlobResult | null
 
   const store = await getNetlifyStore()
   if (!store) {
+    if (strictMode()) {
+      const normalized = pathOrUrl.startsWith('data:')
+        ? pathOrUrl.slice(0, 64)
+        : normalizePath(pathOrUrl)
+      await throwStrictBlobError('read blob', normalized)
+    }
     const record = memoryStore.get(pathOrUrl) || memoryStore.get(normalizePath(pathOrUrl))
     if (!record) return null
     return {
@@ -1450,19 +1549,29 @@ export function getBlobEnvironment() {
   const diagnostics = getBlobEnvDiagnostics()
   const config = getNetlifyConfig()
   if (!config) {
-    return { provider: 'memory', configured: false as const, diagnostics, error: null }
+    return {
+      provider: 'memory' as const,
+      configured: false as const,
+      diagnostics,
+      error: null,
+      strictMode: strictMode(),
+      store: undefined,
+      siteId: undefined,
+    }
   }
+  const maskedSiteId = config.siteId ? maskValue(config.siteId) : undefined
   return {
     provider: 'netlify',
     configured: netlifyStoreInitError ? false : (true as const),
     store: config.storeName,
-    siteId: config.siteId,
+    siteId: maskedSiteId,
     siteSlug: config.siteSlug,
     siteName: config.siteName,
     diagnostics,
     error: netlifyStoreInitError,
+    strictMode: strictMode(),
   }
 }
 
 export { BLOB_PROXY_PREFIX }
-export type { BlobEnvDiagnostics, CandidateSummary, BlobErrorDetails }
+export type { BlobEnvDiagnostics, CandidateSummary, BlobErrorDetails, PutBlobResult }

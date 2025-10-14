@@ -3,6 +3,9 @@ import { finalizeSession } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { z } from 'zod'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 const schema = z.object({
   clientDurationMs: z.number().nonnegative().default(0),
   sessionAudioUrl: z.string().min(1).optional(),

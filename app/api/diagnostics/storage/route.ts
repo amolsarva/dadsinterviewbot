@@ -10,6 +10,9 @@ import {
 } from '@/lib/blob'
 import type { BlobErrorReport } from '@/types/error-types'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 type FlowStep = {
   id: string
   label: string
@@ -24,6 +27,11 @@ type FlowStep = {
   note?: string
   error?: string
   responseSnippet?: string
+  responseBodySnippet?: string
+  requestId?: string
+  functionRegion?: string
+  via?: string
+  store?: string
   details?: unknown
 }
 
@@ -36,6 +44,7 @@ type FlowDiagnostics = {
   sdkUrl?: string
   sitePutPath?: string
   directApiPath?: string
+  strictMode?: boolean
   steps: FlowStep[]
 }
 
@@ -96,11 +105,46 @@ async function captureResponseSnippet(res: Response): Promise<string | undefined
   }
 }
 
+function headerValue(headers: Headers, name: string): string | undefined {
+  try {
+    const value = headers.get(name)
+    if (typeof value === 'string' && value.trim().length) return value.trim()
+    const alt = headers.get(name.toLowerCase())
+    if (typeof alt === 'string' && alt.trim().length) return alt.trim()
+  } catch {}
+  return undefined
+}
+
+function readRequestIdFromHeaders(headers: Headers): string | undefined {
+  const candidates = ['x-nf-request-id', 'x-request-id', 'x-amz-request-id', 'x-amzn-requestid', 'x-amzn-request-id']
+  for (const name of candidates) {
+    const value = headerValue(headers, name)
+    if (value) return value
+  }
+  return undefined
+}
+
+function readFunctionRegion(headers: Headers): string | undefined {
+  const candidates = ['x-nf-region', 'x-nf-edge-region', 'x-nf-geo-region']
+  for (const name of candidates) {
+    const value = headerValue(headers, name)
+    if (value) return value
+  }
+  return undefined
+}
+
+function resolveRequestIdFromDetails(details: unknown): string | undefined {
+  if (!details || typeof details !== 'object') return undefined
+  const record = details as Record<string, unknown>
+  const candidate = record.requestId
+  return typeof candidate === 'string' && candidate.trim().length ? candidate.trim() : undefined
+}
+
 export async function GET(req: NextRequest) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   const env = getBlobEnvironment()
   const envError = (env.error ?? null) as BlobErrorReport | null
-  const strictStorageEnabled = env.provider === 'netlify' && env.configured && !envError
+  const strictStorageEnabled = Boolean((env as any).strictMode)
   console.info(
     `[diagnostics] Strict storage mode: ${
       strictStorageEnabled ? 'enabled (no memory fallback)' : 'disabled (memory fallback available)'
@@ -117,6 +161,7 @@ export async function GET(req: NextRequest) {
     probeId,
     startedAt,
     origin,
+    strictMode: strictStorageEnabled,
     steps: flowSteps,
   }
 
@@ -128,12 +173,30 @@ export async function GET(req: NextRequest) {
       id: 'netlify_init',
       label: 'Netlify blob initialization',
       ok: false,
+      status: typeof envError.status === 'number' ? envError.status : undefined,
+      requestId: typeof (envError as any).requestId === 'string' ? ((envError as any).requestId as string) : undefined,
+      responseBodySnippet:
+        typeof (envError as any).responseBodySnippet === 'string'
+          ? ((envError as any).responseBodySnippet as string)
+          : undefined,
+      responseSnippet:
+        typeof (envError as any).responseBodySnippet === 'string'
+          ? ((envError as any).responseBodySnippet as string)
+          : undefined,
       error:
         (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
         (typeof envError.message === 'string' && envError.message.trim()) ||
         'Failed to initialize the Netlify blob store.',
       details: envError,
     })
+    if (strictStorageEnabled) {
+      context.ok = false
+      const message =
+        (typeof envError.originalMessage === 'string' && envError.originalMessage.trim()) ||
+        (typeof envError.message === 'string' && envError.message.trim()) ||
+        'Strict blob storage mode prevented initialization of the Netlify blob store.'
+      return NextResponse.json({ ok: false, env, health, message, flow: context })
+    }
   }
 
   if (canProbeNetlify) {
@@ -170,16 +233,26 @@ export async function GET(req: NextRequest) {
           ok: true,
           durationMs: Date.now() - started,
           message: upload.url,
+          via: upload.via,
+          store: upload.store,
+          note:
+            upload.via === 'memory'
+              ? 'memory fallback used'
+              : upload.store
+              ? `store ${upload.store}`
+              : undefined,
         })
       } catch (error) {
         const err = error as BlobErrorLike
+        const details = extractBlobDetails(err)
         flowSteps.push({
           id: 'sdk_write',
           label: 'Upload via Netlify SDK',
           ok: false,
           durationMs: Date.now() - started,
           error: err?.message,
-          details: extractBlobDetails(err),
+          details,
+          requestId: resolveRequestIdFromDetails(details),
         })
       }
     }
@@ -210,13 +283,15 @@ export async function GET(req: NextRequest) {
         }
       } catch (error) {
         const err = error as BlobErrorLike
+        const details = extractBlobDetails(err)
         flowSteps.push({
           id: 'sdk_read',
           label: 'Read via Netlify SDK',
           ok: false,
           durationMs: Date.now() - started,
           error: err?.message,
-          details: extractBlobDetails(err),
+          details,
+          requestId: resolveRequestIdFromDetails(details),
         })
       }
     }
@@ -233,6 +308,8 @@ export async function GET(req: NextRequest) {
             cache: 'no-store',
           })
           const bodySnippet = await captureResponseSnippet(res)
+          const requestId = readRequestIdFromHeaders(res.headers)
+          const region = readFunctionRegion(res.headers)
           flowSteps.push({
             id: 'proxy_get',
             label: 'GET via site /api/blob proxy',
@@ -242,9 +319,13 @@ export async function GET(req: NextRequest) {
             status: res.status,
             durationMs: Date.now() - started,
             responseSnippet: bodySnippet,
+            responseBodySnippet: bodySnippet,
+            requestId,
+            functionRegion: region,
           })
         } catch (error) {
-          const err = error as Error
+          const err = error as BlobErrorLike
+          const details = extractBlobDetails(err)
           flowSteps.push({
             id: 'proxy_get',
             label: 'GET via site /api/blob proxy',
@@ -253,6 +334,8 @@ export async function GET(req: NextRequest) {
             url: siteUrl,
             durationMs: Date.now() - started,
             error: err?.message,
+            details,
+            requestId: resolveRequestIdFromDetails(details),
           })
         }
       } else {
@@ -284,6 +367,8 @@ export async function GET(req: NextRequest) {
             },
           })
           const bodySnippet = await captureResponseSnippet(res)
+          const requestId = readRequestIdFromHeaders(res.headers)
+          const region = readFunctionRegion(res.headers)
           flowSteps.push({
             id: 'proxy_put',
             label: 'PUT via site /api/blob proxy',
@@ -293,9 +378,13 @@ export async function GET(req: NextRequest) {
             status: res.status,
             durationMs: Date.now() - started,
             responseSnippet: bodySnippet,
+            responseBodySnippet: bodySnippet,
+            requestId,
+            functionRegion: region,
           })
         } catch (error) {
-          const err = error as Error
+          const err = error as BlobErrorLike
+          const details = extractBlobDetails(err)
           flowSteps.push({
             id: 'proxy_put',
             label: 'PUT via site /api/blob proxy',
@@ -304,6 +393,8 @@ export async function GET(req: NextRequest) {
             url: siteUrl,
             durationMs: Date.now() - started,
             error: err?.message,
+            details,
+            requestId: resolveRequestIdFromDetails(details),
           })
         }
       } else {
@@ -330,6 +421,8 @@ export async function GET(req: NextRequest) {
             cache: 'no-store',
           })
           const bodySnippet = await captureResponseSnippet(res)
+          const requestId = readRequestIdFromHeaders(res.headers)
+          const region = readFunctionRegion(res.headers)
           flowSteps.push({
             id: 'proxy_put_verify',
             label: 'GET site PUT target',
@@ -339,9 +432,13 @@ export async function GET(req: NextRequest) {
             status: res.status,
             durationMs: Date.now() - started,
             responseSnippet: bodySnippet,
+            responseBodySnippet: bodySnippet,
+            requestId,
+            functionRegion: region,
           })
         } catch (error) {
-          const err = error as Error
+          const err = error as BlobErrorLike
+          const details = extractBlobDetails(err)
           flowSteps.push({
             id: 'proxy_put_verify',
             label: 'GET site PUT target',
@@ -350,6 +447,8 @@ export async function GET(req: NextRequest) {
             url: siteUrl,
             durationMs: Date.now() - started,
             error: err?.message,
+            details,
+            requestId: resolveRequestIdFromDetails(details),
           })
         }
       } else {
@@ -393,6 +492,7 @@ export async function GET(req: NextRequest) {
             },
           })
           const bodySnippet = await captureResponseSnippet(res)
+          const requestId = readRequestIdFromHeaders(res.headers)
           flowSteps.push({
             id: 'direct_api_put',
             label: 'PUT via Netlify blobs API',
@@ -403,9 +503,12 @@ export async function GET(req: NextRequest) {
             status: res.status,
             durationMs: Date.now() - started,
             responseSnippet: bodySnippet,
+            responseBodySnippet: bodySnippet,
+            requestId,
           })
         } catch (error) {
-          const err = error as Error
+          const err = error as BlobErrorLike
+          const details = extractBlobDetails(err)
           flowSteps.push({
             id: 'direct_api_put',
             label: 'PUT via Netlify blobs API',
@@ -415,6 +518,8 @@ export async function GET(req: NextRequest) {
             url: directUrl,
             durationMs: Date.now() - started,
             error: err?.message,
+            details,
+            requestId: resolveRequestIdFromDetails(details),
           })
         }
       }
@@ -431,6 +536,7 @@ export async function GET(req: NextRequest) {
             },
           })
           const bodySnippet = await captureResponseSnippet(res)
+          const requestId = readRequestIdFromHeaders(res.headers)
           flowSteps.push({
             id: 'direct_api_get',
             label: 'GET via Netlify blobs API',
@@ -441,9 +547,12 @@ export async function GET(req: NextRequest) {
             status: res.status,
             durationMs: Date.now() - started,
             responseSnippet: bodySnippet,
+            responseBodySnippet: bodySnippet,
+            requestId,
           })
         } catch (error) {
-          const err = error as Error
+          const err = error as BlobErrorLike
+          const details = extractBlobDetails(err)
           flowSteps.push({
             id: 'direct_api_get',
             label: 'GET via Netlify blobs API',
@@ -453,6 +562,8 @@ export async function GET(req: NextRequest) {
             url: directUrl,
             durationMs: Date.now() - started,
             error: err?.message,
+            details,
+            requestId: resolveRequestIdFromDetails(details),
           })
         }
       }
@@ -469,6 +580,7 @@ export async function GET(req: NextRequest) {
             },
           })
           const bodySnippet = await captureResponseSnippet(res)
+          const requestId = readRequestIdFromHeaders(res.headers)
           flowSteps.push({
             id: 'direct_api_delete',
             label: 'DELETE via Netlify blobs API',
@@ -479,10 +591,13 @@ export async function GET(req: NextRequest) {
             status: res.status,
             durationMs: Date.now() - started,
             responseSnippet: bodySnippet,
+            responseBodySnippet: bodySnippet,
+            requestId,
             note: res.status === 404 ? 'Resource already removed' : undefined,
           })
         } catch (error) {
-          const err = error as Error
+          const err = error as BlobErrorLike
+          const details = extractBlobDetails(err)
           flowSteps.push({
             id: 'direct_api_delete',
             label: 'DELETE via Netlify blobs API',
@@ -492,6 +607,8 @@ export async function GET(req: NextRequest) {
             url: directUrl,
             durationMs: Date.now() - started,
             error: err?.message,
+            details,
+            requestId: resolveRequestIdFromDetails(details),
           })
         }
       }
@@ -505,7 +622,7 @@ export async function GET(req: NextRequest) {
         error: 'Missing NETLIFY_BLOBS_TOKEN or site/store identifiers; skipping direct API checks.',
       })
     }
-  } else {
+  } else if (!hasNetlifyConfig) {
     flowSteps.push({
       id: 'netlify_config',
       label: 'Netlify blob configuration',

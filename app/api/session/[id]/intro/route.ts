@@ -3,6 +3,10 @@ import { ensureSessionMemoryHydrated, getMemoryPrimer, getSessionMemorySnapshot 
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { collectAskedQuestions, findLatestUserDetails, normalizeQuestion, pickFallbackQuestion } from '@/lib/question-memory'
 import {
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
   formatIntroGreeting,
   formatIntroReminder,
   getIntroInvitation,

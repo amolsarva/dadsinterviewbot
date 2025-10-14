@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getBlobEnvironment, listBlobs, primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 type HistoryEntry = {
   sessionId: string
   startedAt: string | null

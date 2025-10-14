@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { synthesizeSpeechWithOpenAi } from '@/lib/openaiTts'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 const schema = z.object({
   text: z.string().min(1),
   voice: z.string().optional(),

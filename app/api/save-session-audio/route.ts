@@ -3,6 +3,9 @@ import { z } from 'zod'
 import { primeNetlifyBlobContextFromHeaders, putBlobFromBuffer } from '@/lib/blob'
 import { mergeSessionArtifacts } from '@/lib/data'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 const schema = z.object({
   sessionId: z.string().min(1),
   audio: z.string().min(1),

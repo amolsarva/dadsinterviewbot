@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { listBlobs, deleteBlobsByPrefix, primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 function normalizePrefix(prefix: string | null): string {
   if (!prefix) return ''
   return prefix.replace(/^\/+/, '')

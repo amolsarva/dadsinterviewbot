@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
-type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
+type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string; data?: any }
 type FoxRecord = {
   id: string
   theory: number
@@ -119,10 +119,16 @@ function describeBlobDetails(raw: any): string[] {
   if (typeof details.store === 'string' && details.store.length) {
     parts.push(`store ${details.store}`)
   }
+  const maskedSiteId =
+    typeof details.siteIdMasked === 'string' && details.siteIdMasked.length
+      ? details.siteIdMasked
+      : undefined
   if (typeof details.siteSlug === 'string' && details.siteSlug.length) {
     parts.push(`site ${details.siteSlug}`)
   } else if (typeof details.siteName === 'string' && details.siteName.length) {
     parts.push(`site ${details.siteName}`)
+  } else if (maskedSiteId) {
+    parts.push(`site ${maskedSiteId}`)
   } else if (typeof details.siteId === 'string' && details.siteId.length) {
     parts.push(`site ${details.siteId}`)
   }
@@ -170,8 +176,324 @@ function describeBlobDetails(raw: any): string[] {
   if (typeof details.originalMessage === 'string' && details.originalMessage.length) {
     parts.push(`origin: ${details.originalMessage}`)
   }
+  if (typeof details.strictMode === 'boolean') {
+    parts.push(details.strictMode ? 'strict mode enforced' : 'strict mode off')
+  }
+  if (details.environment && typeof details.environment === 'object') {
+    const env = details.environment as Record<string, any>
+    if (typeof env.provider === 'string' && env.provider.length) {
+      parts.push(`provider ${env.provider}`)
+    }
+    if (typeof env.strictMode === 'boolean') {
+      parts.push(env.strictMode ? 'env strict' : 'env not strict')
+    }
+    const missing = Array.isArray(env?.diagnostics?.missing) ? env.diagnostics.missing : []
+    if (missing.length) {
+      parts.push(`env missing ${missing.join(', ')}`)
+    }
+  }
 
   return parts
+}
+
+type StorageExtrasProps = {
+  result: TestResult
+  onNuke: () => Promise<void>
+  running: boolean
+}
+
+function StorageDiagnosticsExtras({ result, onNuke, running }: StorageExtrasProps) {
+  const [nuking, setNuking] = useState(false)
+  const data = result && result.data && typeof result.data === 'object' ? (result.data as any) : null
+
+  const env = (data?.env as any) || {}
+  const diagnostics = env?.diagnostics
+  const flow: BlobFlowDiagnostics | undefined =
+    data && data.flow && typeof data.flow === 'object' && Array.isArray((data.flow as any).steps)
+      ? (data.flow as BlobFlowDiagnostics)
+      : undefined
+
+  type DiagnosticsRow = {
+    key: string
+    label: string
+    status: 'present' | 'missing' | 'info' | 'warning'
+    value: string
+    source: string
+    note: string
+  }
+
+  const rows: DiagnosticsRow[] = []
+  const pushRow = (row: DiagnosticsRow | null | undefined) => {
+    if (row) rows.push(row)
+  }
+
+  const diag = diagnostics && typeof diagnostics === 'object' ? (diagnostics as Record<string, any>) : null
+
+  if (diag) {
+    const addFieldRow = (key: string, label: string, field: any, extraNote?: string) => {
+      if (!field || typeof field !== 'object') return
+      const present = field.present === true
+      const selected = field.selected || {}
+      const valuePreview =
+        typeof selected?.valuePreview === 'string' && selected.valuePreview.length
+          ? selected.valuePreview
+          : typeof selected?.value === 'string' && selected.value.length
+          ? selected.value
+          : ''
+      const value = valuePreview || (present ? 'configured' : '—')
+      const source =
+        typeof selected?.key === 'string' && selected.key.length
+          ? selected.key
+          : present
+          ? 'unknown'
+          : '—'
+      const noteParts: string[] = []
+      if (typeof selected?.note === 'string' && selected.note.length) noteParts.push(selected.note)
+      if (extraNote && extraNote.length) noteParts.push(extraNote)
+      const note = noteParts.length ? noteParts.join(' · ') : '—'
+      pushRow({
+        key,
+        label,
+        status: present ? 'present' : 'missing',
+        value,
+        source,
+        note,
+      })
+    }
+
+    addFieldRow('store', 'Store', diag.store, diag.store?.defaulted ? 'defaulted' : '')
+
+    const siteNote = typeof diag.siteId?.selected?.note === 'string' ? diag.siteId.selected.note : ''
+    addFieldRow('siteId', 'Site ID', diag.siteId, siteNote)
+
+    const tokenNotes: string[] = []
+    if (typeof diag.token?.length === 'number' && Number.isFinite(diag.token.length)) {
+      tokenNotes.push(`${diag.token.length} chars`)
+    }
+    if (Array.isArray(diag.missing) && diag.missing.includes('token')) {
+      tokenNotes.push('missing')
+    }
+    addFieldRow('token', 'Token', diag.token, tokenNotes.join(' · '))
+
+    const optional = (diag.optional || {}) as Record<string, any>
+    const optionalFields: Array<[string, string, any]> = [
+      ['edgeUrl', 'Edge URL', optional.edgeUrl],
+      ['apiUrl', 'API URL', optional.apiUrl],
+      ['uncachedEdgeUrl', 'Uncached edge URL', optional.uncachedEdgeUrl],
+    ]
+    for (const [key, label, field] of optionalFields) {
+      if (!field || typeof field !== 'object') continue
+      if (field.present || field.selected) {
+        addFieldRow(`optional-${key}`, label, field)
+      }
+    }
+
+    if (typeof optional.consistency === 'string' && optional.consistency.length) {
+      pushRow({
+        key: 'consistency',
+        label: 'Consistency',
+        status: 'info',
+        value: optional.consistency,
+        source: 'env',
+        note: 'NETLIFY_BLOBS_CONSISTENCY',
+      })
+    }
+
+    const contextKeys = Array.isArray(diag.contextKeys)
+      ? diag.contextKeys.filter((entry: unknown): entry is string => typeof entry === 'string' && entry.length)
+      : []
+    pushRow({
+      key: 'context',
+      label: 'Context payload',
+      status: diag.usingContext ? 'present' : 'missing',
+      value: contextKeys.length ? contextKeys.join(', ') : diag.usingContext ? 'detected' : '—',
+      source: diag.usingContext ? 'headers' : '—',
+      note: diag.usingContext ? 'Netlify context detected' : 'No context payload',
+    })
+
+    const missing = Array.isArray(diag.missing)
+      ? diag.missing.filter((entry: unknown): entry is string => typeof entry === 'string' && entry.length)
+      : []
+    if (missing.length) {
+      pushRow({
+        key: 'missing',
+        label: 'Missing',
+        status: 'warning',
+        value: missing.join(', '),
+        source: 'env',
+        note: 'Configure these values to enable Netlify blob storage',
+      })
+    }
+  }
+
+  const findStep = (id: string): BlobFlowStep | undefined =>
+    flow && Array.isArray(flow.steps) ? flow.steps.find((step) => step.id === id) : undefined
+
+  const sdkWrite = findStep('sdk_write')
+  const sdkRead = findStep('sdk_read')
+  const proxyGet = findStep('proxy_get')
+  const proxyPut = findStep('proxy_put')
+  const proxyVerify = findStep('proxy_put_verify')
+  const directPut = findStep('direct_api_put')
+
+  type TimelineEntry = { key: string; label: string; steps: BlobFlowStep[]; status: 'ok' | 'error' | 'mixed' | 'skipped' }
+  const computeStatus = (steps: BlobFlowStep[]): TimelineEntry['status'] => {
+    if (!steps.length) return 'skipped'
+    const activeSteps = steps.filter((step) => !step.skipped)
+    if (activeSteps.length === 0) return 'skipped'
+    if (activeSteps.every((step) => step.ok)) return 'ok'
+    if (activeSteps.some((step) => step.ok)) return 'mixed'
+    return 'error'
+  }
+
+  const timelineCandidates: Array<{ key: string; label: string; steps: Array<BlobFlowStep | undefined> }> = [
+    { key: 'sdk', label: 'SDK upload', steps: [sdkWrite, sdkRead] },
+    { key: 'proxy', label: 'Site proxy', steps: [proxyPut, proxyGet, proxyVerify] },
+    { key: 'direct', label: 'Direct API', steps: [directPut] },
+  ]
+
+  const timeline: TimelineEntry[] = timelineCandidates
+    .map(({ key, label, steps }) => {
+      const filtered = steps.filter((step): step is BlobFlowStep => Boolean(step))
+      if (!filtered.length) return null
+      return { key, label, steps: filtered, status: computeStatus(filtered) }
+    })
+    .filter((entry): entry is TimelineEntry => Boolean(entry))
+
+  const statusIcon = (status: TimelineEntry['status']) => {
+    switch (status) {
+      case 'ok':
+        return '✅'
+      case 'mixed':
+        return '⚠️'
+      case 'error':
+        return '❌'
+      case 'skipped':
+      default:
+        return '⏭️'
+    }
+  }
+
+  const handleNuke = async () => {
+    if (running || nuking) return
+    try {
+      setNuking(true)
+      await onNuke()
+    } finally {
+      setNuking(false)
+    }
+  }
+
+  const strictMode = Boolean(env?.strictMode)
+  const hasDetails = rows.length > 0 || timeline.length > 0
+
+  return (
+    <div className="storage-diagnostics-extras">
+      {strictMode && <span className="diagnostic-badge strict-mode-badge">STRICT MODE</span>}
+      {rows.length > 0 && (
+        <div className="diagnostic-section">
+          <h4>Blob environment</h4>
+          <table className="diagnostic-table">
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Status</th>
+                <th>Value</th>
+                <th>Source</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.key} className={`row-${row.status}`}>
+                  <td>{row.label}</td>
+                  <td>
+                    {
+                      row.status === 'present'
+                        ? '✅'
+                        : row.status === 'missing' || row.status === 'warning'
+                        ? '⚠️'
+                        : 'ℹ️'
+                    }
+                  </td>
+                  <td>{row.value || '—'}</td>
+                  <td>{row.source || '—'}</td>
+                  <td>{row.note || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {timeline.length > 0 && (
+        <div className="diagnostic-section">
+          <h4>Request timeline</h4>
+          <ol className="diagnostic-timeline">
+            {timeline.map((entry) => (
+              <li key={entry.key} className={`timeline-item status-${entry.status}`}>
+                <div className="timeline-head">
+                  <span className="timeline-icon" aria-hidden="true">
+                    {statusIcon(entry.status)}
+                  </span>
+                  <span className="timeline-label">{entry.label}</span>
+                </div>
+                <ul className="timeline-substeps">
+                  {entry.steps.map((step) => {
+                    const requestId =
+                      typeof step.requestId === 'string' && step.requestId.length ? step.requestId : null
+                    const region =
+                      typeof step.functionRegion === 'string' && step.functionRegion.length
+                        ? step.functionRegion
+                        : null
+                    const duration =
+                      typeof step.durationMs === 'number' && Number.isFinite(step.durationMs)
+                        ? `${step.durationMs}ms`
+                        : null
+                    const statusLabel = typeof step.status === 'number' ? `HTTP ${step.status}` : null
+                    const body =
+                      typeof step.responseBodySnippet === 'string' && step.responseBodySnippet.length
+                        ? step.responseBodySnippet
+                        : undefined
+                    return (
+                      <li key={step.id} className="timeline-substep">
+                        <span className="timeline-substep-icon" aria-hidden="true">
+                          {step.skipped ? '⏭️' : step.ok ? '✅' : '❌'}
+                        </span>
+                        <div className="timeline-substep-content">
+                          <div className="timeline-substep-line">
+                            <span className="timeline-substep-label">
+                              {step.method ? `${step.method} · ` : ''}
+                              {step.label || step.id}
+                            </span>
+                            {statusLabel && <span className="timeline-substep-status">{statusLabel}</span>}
+                            {duration && <span className="timeline-substep-duration">{duration}</span>}
+                            {requestId && <span className="timeline-substep-request">req {requestId}</span>}
+                            {region && <span className="timeline-substep-region">{region}</span>}
+                          </div>
+                          {step.error && <div className="timeline-substep-error">{step.error}</div>}
+                          {!step.error && body && <div className="timeline-substep-body">{body}</div>}
+                          {step.note && <div className="timeline-substep-note">{step.note}</div>}
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {!hasDetails && <p className="status-note">Run the storage diagnostics to populate details.</p>}
+      <button
+        type="button"
+        className="btn-outline diagnostic-action"
+        onClick={handleNuke}
+        disabled={running || nuking}
+      >
+        {nuking ? 'Nuking…' : 'Nuke test prefix'}
+      </button>
+    </div>
+  )
 }
 
 function readDeploymentSnapshot(): DeploymentSnapshot | null {
@@ -626,8 +948,28 @@ export default function DiagnosticsPage() {
   const formatFlag = (value: boolean | undefined) =>
     value === true ? 'yes' : value === false ? 'no' : 'unknown'
 
-  const append = (line: string) =>
-    setLog((l) => (l && l.length > 0 ? l + '\n' + line : line))
+  const append = useCallback(
+    (line: string) =>
+      setLog((l) => (l && l.length > 0 ? l + '\n' + line : line)),
+    [],
+  )
+
+  const nukeDiagnosticsPrefix = useCallback(async () => {
+    const target = '/api/debug/blobs?prefix=diagnostics/'
+    append(`[nuke] DELETE ${target}`)
+    try {
+      const res = await fetch(target, { method: 'DELETE' })
+      append(`[nuke] status ${res.status} ${res.ok ? 'ok' : 'error'}`)
+      const raw = await res.text()
+      if (raw && raw.trim().length) {
+        const snippet = raw.length > 600 ? `${raw.slice(0, 597)}…` : raw
+        append(`[nuke] response ${snippet}`)
+      }
+    } catch (error: any) {
+      const message = typeof error?.message === 'string' && error.message.length ? error.message : 'unknown error'
+      append(`[nuke] failed: ${message}`)
+    }
+  }, [append])
 
   const statusIcon = useMemo(
     () => ({ idle: '•', pending: '…', ok: '✅', error: '❌' } as const),
@@ -797,7 +1139,7 @@ export default function DiagnosticsPage() {
 
     for (const key of TEST_ORDER) {
       const { path, method } = TEST_CONFIG[key]
-      updateResult(key, { status: 'pending', message: undefined })
+      updateResult(key, { status: 'pending', message: undefined, data: undefined })
       append(`→ ${path}`)
 
       try {
@@ -817,7 +1159,7 @@ export default function DiagnosticsPage() {
           append(JSON.stringify(parsed, null, 2))
           const ok = typeof parsed.ok === 'boolean' ? parsed.ok : res.ok
           const message = formatSummary(key, parsed)
-          updateResult(key, { status: ok ? 'ok' : 'error', message })
+          updateResult(key, { status: ok ? 'ok' : 'error', message, data: parsed })
           if (key === 'storage') {
             const diagnosticsSummary = summarizeNetlifyDiagnostics(parsed?.env?.diagnostics, deploymentSnapshot)
             if (diagnosticsSummary.length) {
@@ -856,12 +1198,13 @@ export default function DiagnosticsPage() {
           updateResult(key, {
             status: res.ok ? 'ok' : 'error',
             message: res.ok ? 'Received response' : `HTTP ${res.status}`,
+            data: rawText || null,
           })
         }
       } catch (e: any) {
         const errorMessage = e?.message || 'Request failed'
         append(`Request failed: ${errorMessage}`)
-        updateResult(key, { status: 'error', message: errorMessage })
+        updateResult(key, { status: 'error', message: errorMessage, data: undefined })
       }
     }
 
@@ -980,6 +1323,13 @@ export default function DiagnosticsPage() {
                   <span className="diagnostic-label">{TEST_CONFIG[key].label}</span>
                 </div>
                 {result.message && <div className="diagnostic-message">{result.message}</div>}
+                {key === 'storage' && (
+                  <StorageDiagnosticsExtras
+                    result={result}
+                    onNuke={nukeDiagnosticsPrefix}
+                    running={isRunning}
+                  />
+                )}
               </div>
             )
           })}

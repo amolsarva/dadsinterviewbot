@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 type EndpointSummary = {
   key: string
   method: 'GET' | 'POST'

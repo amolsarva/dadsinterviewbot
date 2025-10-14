@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { primeNetlifyBlobContextFromHeaders, putBlobFromBuffer } from '@/lib/blob'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
 const schema = z.object({
   sessionId: z.string().min(1),
   turn: z.union([z.number().int(), z.string()]),

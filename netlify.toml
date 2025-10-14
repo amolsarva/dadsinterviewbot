@@ -8,3 +8,18 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+[context.production.environment]
+  NETLIFY_BLOBS_SITE_ID = "YOUR_SITE_UUID"
+  NETLIFY_BLOBS_STORE = "dads-interview-bot"
+  STRICT_BLOBS = "1"
+
+[context.deploy-preview.environment]
+  NETLIFY_BLOBS_SITE_ID = "YOUR_SITE_UUID"
+  NETLIFY_BLOBS_STORE = "dads-interview-bot"
+  STRICT_BLOBS = "1"
+
+[context.branch-deploy.environment]
+  NETLIFY_BLOBS_SITE_ID = "YOUR_SITE_UUID"
+  NETLIFY_BLOBS_STORE = "dads-interview-bot"
+  STRICT_BLOBS = "1"
