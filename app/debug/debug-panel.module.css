@@ -1,0 +1,200 @@
+.debugPage {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.statusGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.statusGrid strong {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(45, 22, 6, 0.68);
+  margin-bottom: 4px;
+}
+
+.statusGridFullWidth {
+  grid-column: 1 / -1;
+  background: rgba(249, 115, 22, 0.08);
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(249, 115, 22, 0.4);
+}
+
+.statusGridFullWidth pre {
+  font-size: 12px;
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(45, 22, 6, 0.72);
+  line-height: 1.5;
+}
+
+.formGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.formGrid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.formGrid input,
+.formGrid textarea {
+  font: inherit;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(243, 203, 165, 0.8);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.formGrid textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.fileInput {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.fileInput input[type="file"] {
+  display: none;
+}
+
+.fileInput span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  border: 1px dashed rgba(243, 203, 165, 0.8);
+  background: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.audioPreview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 247, 237, 0.75);
+}
+
+.audioMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.result {
+  margin-top: 4px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  background: rgba(15, 124, 75, 0.08);
+  border: 1px solid rgba(15, 124, 75, 0.3);
+  color: var(--ink);
+}
+
+.resultError {
+  background: rgba(185, 28, 28, 0.08);
+  border-color: rgba(185, 28, 28, 0.4);
+}
+
+.listControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.scrollContainer {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid rgba(243, 203, 165, 0.6);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.scrollContainer table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.scrollContainer th,
+.scrollContainer td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(243, 203, 165, 0.45);
+  text-align: left;
+}
+
+.scrollContainer tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.scrollContainer code {
+  font-size: 12px;
+  background: rgba(255, 240, 214, 0.68);
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+
+.secondaryLink {
+  font-size: 13px;
+  color: var(--accent-deep);
+}
+
+.secondaryLink:hover {
+  color: #0a5f38;
+}

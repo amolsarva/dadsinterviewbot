@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { createSessionRecorder, type SessionRecorder } from '@/lib/session-recorder'
 import { buildScopedPath, normalizeHandle } from '@/lib/user-scope'
+import styles from './debug-panel.module.css'
 
 type BlobStatus = {
   env: any
@@ -43,6 +44,8 @@ type DebugPanelProps = {
 }
 
 const DEFAULT_TEXT_SNIPPET = 'Debug blob test from the Dad\'s Interview Bot debugging console.'
+
+const classNames = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ')
 
 function encodeBlobPath(path: string): string {
   return path
@@ -374,23 +377,23 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
   }, [audioUrl])
 
   return (
-    <div className="debug-page">
+    <div className={styles.debugPage}>
       <h2>Debug storage console</h2>
       <p>
         This workspace exercises the Netlify Blobs integration end-to-end. Record or upload artifacts, inspect the
         stored files, and clear history when the on-disk state drifts from the session logs.
       </p>
 
-      <section className="panel-card debug-panel__section">
+      <section className={classNames('panel-card', styles.section)}>
         <header>
           <h3>Environment snapshot</h3>
         </header>
         {statusLoading ? (
           <p>Loading storage status…</p>
         ) : statusError ? (
-          <p className="error">{statusError}</p>
+          <p className={styles.error}>{statusError}</p>
         ) : status ? (
-          <div className="debug-status-grid">
+          <div className={styles.statusGrid}>
             <div>
               <strong>Provider</strong>
               <div>{status.env?.provider || 'unknown'}</div>
@@ -412,7 +415,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
               <div>{formatDate(status.fetchedAt)}</div>
             </div>
             {status.env?.error ? (
-              <div className="debug-full-width">
+              <div className={styles.statusGridFullWidth}>
                 <strong>Latest error</strong>
                 <pre>{JSON.stringify(status.env.error, null, 2)}</pre>
               </div>
@@ -421,18 +424,18 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
         ) : (
           <p>Storage status unavailable.</p>
         )}
-        <p className="debug-note">
+        <p className={styles.note}>
           Core prefixes used by this app: <code>sessions/</code> (session manifests &amp; turn audio), <code>transcripts/</code>{' '}
           (final transcripts), and <code>memory/primers/</code> (handle-specific primers). The panels below target the
           <code>debug/</code> namespace so you can validate writes without touching production artifacts.
         </p>
       </section>
 
-      <section className="panel-card debug-panel__section">
+      <section className={classNames('panel-card', styles.section)}>
         <header>
           <h3>Write text blob</h3>
         </header>
-        <form onSubmit={submitText} className="debug-form-grid">
+        <form onSubmit={submitText} className={styles.formGrid}>
           <label>
             Blob path
             <input
@@ -447,7 +450,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
             Contents
             <textarea value={textContent} onChange={(event) => setTextContent(event.target.value)} rows={6} />
           </label>
-          <div className="debug-form-actions">
+          <div className={styles.formActions}>
             <button type="submit" disabled={textUploading}>
               {textUploading ? 'Uploading…' : 'Upload text sample'}
             </button>
@@ -464,7 +467,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
           </div>
         </form>
         {textResult ? (
-          <div className={`debug-result ${textResult.ok ? 'ok' : 'error'}`}>
+          <div className={classNames(styles.result, !textResult.ok && styles.resultError)}>
             {textResult.ok ? (
               <>
                 <strong>Upload succeeded.</strong>{' '}
@@ -483,11 +486,11 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
         ) : null}
       </section>
 
-      <section className="panel-card debug-panel__section">
+      <section className={classNames('panel-card', styles.section)}>
         <header>
           <h3>Write audio blob</h3>
         </header>
-        <form onSubmit={submitAudio} className="debug-form-grid">
+        <form onSubmit={submitAudio} className={styles.formGrid}>
           <label>
             Blob path
             <input
@@ -498,26 +501,26 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
               required
             />
           </label>
-          <div className="debug-button-row">
+          <div className={styles.buttonRow}>
             <button type="button" onClick={isRecording ? stopRecording : startRecording}>
               {isRecording ? 'Stop recording' : 'Start recording'}
             </button>
-            <label className="debug-file-input">
+            <label className={styles.fileInput}>
               <span>or choose audio file</span>
               <input type="file" accept="audio/*" onChange={handleAudioFileChange} />
             </label>
           </div>
           {audioUrl ? (
-            <div className="debug-audio-preview">
+            <div className={styles.audioPreview}>
               <audio src={audioUrl} controls />
-              <div className="debug-audio-meta">
+              <div className={styles.audioMeta}>
                 {audioDuration ? <span>Recorded duration: {(audioDuration / 1000).toFixed(1)}s</span> : null}
                 <span>MIME type: {audioMimeRef.current}</span>
               </div>
             </div>
           ) : null}
-          {audioError ? <p className="debug-error">{audioError}</p> : null}
-          <div className="debug-form-actions">
+          {audioError ? <p className={styles.error}>{audioError}</p> : null}
+          <div className={styles.formActions}>
             <button type="submit" disabled={audioUploading}>
               {audioUploading ? 'Uploading…' : 'Upload audio sample'}
             </button>
@@ -541,7 +544,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
           </div>
         </form>
         {audioResult ? (
-          <div className={`debug-result ${audioResult.ok ? 'ok' : 'error'}`}>
+          <div className={classNames(styles.result, !audioResult.ok && styles.resultError)}>
             {audioResult.ok ? (
               <>
                 <strong>Upload succeeded.</strong>{' '}
@@ -560,11 +563,11 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
         ) : null}
       </section>
 
-      <section className="panel-card debug-panel__section">
+      <section className={classNames('panel-card', styles.section)}>
         <header>
           <h3>Inspect stored blobs</h3>
         </header>
-        <div className="debug-list-controls">
+        <div className={styles.listControls}>
           <label>
             Prefix
             <input
@@ -574,7 +577,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
               placeholder="debug/"
             />
           </label>
-          <div className="debug-button-row">
+          <div className={styles.buttonRow}>
             <button type="button" onClick={() => fetchList(undefined, true)} disabled={listLoading}>
               {listLoading ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -589,8 +592,8 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
             </button>
           </div>
         </div>
-        {listError ? <p className="debug-error">{listError}</p> : null}
-        <div className="debug-scroll-container">
+        {listError ? <p className={styles.error}>{listError}</p> : null}
+        <div className={styles.scrollContainer}>
           <table>
             <thead>
               <tr>
@@ -614,7 +617,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
                     <td>{formatDate(item.uploadedAt)}</td>
                     <td>{formatBytes(item.size)}</td>
                     <td>
-                      <div className="debug-button-row">
+                      <div className={styles.buttonRow}>
                         <a href={item.downloadUrl || item.url} target="_blank" rel="noreferrer">
                           open
                         </a>
@@ -647,7 +650,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
         ) : null}
       </section>
 
-      <section className="panel-card debug-panel__section">
+      <section className={classNames('panel-card', styles.section)}>
         <header>
           <h3>Session history cleanup</h3>
         </header>
@@ -656,7 +659,7 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
           same <code>DELETE /api/history</code> handler that the diagnostics suite uses to purge <code>sessions/</code>,{' '}
           <code>transcripts/</code>, and <code>memory/</code> data.
         </p>
-        <form onSubmit={handleHistoryClear} className="debug-form-grid">
+        <form onSubmit={handleHistoryClear} className={styles.formGrid}>
           <label>
             Limit to handle (optional)
             <input
@@ -666,18 +669,18 @@ export function DebugPanel({ userHandle }: DebugPanelProps) {
               placeholder="Leave blank to clear all"
             />
           </label>
-          <div className="debug-form-actions">
+          <div className={styles.formActions}>
             <button type="submit" disabled={historyClearing}>
               {historyClearing ? 'Clearing…' : 'Clear stored history'}
             </button>
-            <a href={scopedListUrl} target="_blank" rel="noreferrer" className="debug-secondary-link">
+            <a href={scopedListUrl} target="_blank" rel="noreferrer" className={styles.secondaryLink}>
               Review recent sessions
             </a>
           </div>
         </form>
-        {historyError ? <p className="debug-error">{historyError}</p> : null}
+        {historyError ? <p className={styles.error}>{historyError}</p> : null}
         {historyResult ? (
-          <div className="debug-result ok">
+          <div className={styles.result}>
             <strong>History cleared.</strong>{' '}
             {typeof historyResult.deleted === 'number'
               ? `${historyResult.deleted} sessions removed.`
