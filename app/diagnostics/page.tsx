@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'smoke' | 'e2e' | 'email'
+type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'tues' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
 type FoxRecord = {
   id: string
@@ -86,12 +86,13 @@ const TEST_CONFIG: Record<TestKey, { label: string; path: string; method: 'GET' 
   storage: { label: 'Storage check', path: '/api/diagnostics/storage', method: 'GET' },
   google: { label: 'Google AI API check', path: '/api/diagnostics/google', method: 'GET' },
   openai: { label: 'OpenAI API check', path: '/api/diagnostics/openai', method: 'GET' },
+  tues: { label: 'TUES credential check', path: '/api/diagnostics/tues', method: 'POST' },
   smoke: { label: 'Smoke test', path: '/api/diagnostics/smoke', method: 'POST' },
   e2e: { label: 'End-to-end test', path: '/api/diagnostics/e2e', method: 'POST' },
   email: { label: 'Email test', path: '/api/diagnostics/email', method: 'POST' },
 }
 
-const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'smoke', 'e2e', 'email']
+const TEST_ORDER: TestKey[] = ['health', 'storage', 'google', 'openai', 'tues', 'smoke', 'e2e', 'email']
 
 function initialResults(): Record<TestKey, TestResult> {
   return {
@@ -99,6 +100,7 @@ function initialResults(): Record<TestKey, TestResult> {
     storage: { status: 'idle' },
     google: { status: 'idle' },
     openai: { status: 'idle' },
+    tues: { status: 'idle' },
     smoke: { status: 'idle' },
     e2e: { status: 'idle' },
     email: { status: 'idle' },
