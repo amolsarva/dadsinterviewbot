@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 
+import { logBlobDiagnostic } from '@/utils/blob-env'
+
 type MaybeError = {
   status?: number
   statusCode?: number
@@ -58,5 +60,20 @@ export function jsonErrorResponse(
   if (typeof err.code === 'string' && err.code.length) {
     payload.code = err.code
   }
-  return NextResponse.json({ ...payload, ...(extras ?? {}) }, { status })
+  const responsePayload = { ...payload, ...(extras ?? {}) }
+
+  logBlobDiagnostic('error', 'json-error-response', {
+    note: 'Responding with structured error payload',
+    status,
+    message,
+    extras: extras && Object.keys(extras).length ? extras : undefined,
+    error:
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : err && Object.keys(err).length
+        ? err
+        : { message: fallbackMessage },
+  })
+
+  return NextResponse.json(responsePayload, { status })
 }

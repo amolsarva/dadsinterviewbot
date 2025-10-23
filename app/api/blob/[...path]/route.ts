@@ -7,6 +7,47 @@ import {
   readBlob,
 } from '@/lib/blob'
 import { jsonErrorResponse } from '@/lib/api-error'
+import { logBlobDiagnostic } from '@/utils/blob-env'
+
+const ROUTE_NAME = 'app/api/blob'
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack }
+  }
+  if (error && typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error))
+    } catch {
+      return { ...error }
+    }
+  }
+  if (typeof error === 'string') {
+    return { message: error }
+  }
+  return { message: 'Unknown error', value: error }
+}
+
+function collectRelevantHeaderKeys(headers: Headers): string[] {
+  const keys: string[] = []
+  for (const key of headers.keys()) {
+    if (key.toLowerCase().startsWith('x-nf') || key.toLowerCase().startsWith('x-netlify')) {
+      keys.push(key)
+    }
+  }
+  return keys
+}
+
+function logRouteEvent(
+  level: 'log' | 'error',
+  event: string,
+  payload?: Record<string, unknown>,
+) {
+  logBlobDiagnostic(level, event, {
+    route: ROUTE_NAME,
+    ...(payload ?? {}),
+  })
+}
 
 function extractPath(params: { path?: string[] | string }): string {
   const raw = params?.path
@@ -28,13 +69,28 @@ function normalizePath(path: string): string {
 
 async function handleBlobRequest(path: string, download: boolean, includeBody: boolean) {
   if (!path) {
+    logRouteEvent('error', 'blob-route:read:missing-path', {
+      note: 'Blob request missing required path parameter',
+    })
     return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
   }
+
+  logRouteEvent('log', 'blob-route:read:start', {
+    path,
+    download,
+    includeBody,
+  })
 
   let record
   try {
     record = await readBlob(path)
   } catch (error) {
+    logRouteEvent('error', 'blob-route:read:failed', {
+      path,
+      download,
+      includeBody,
+      error: serializeError(error),
+    })
     const fallbackMessage =
       error && typeof error === 'object' && typeof (error as any).message === 'string' && (error as any).message.trim().length
         ? (error as any).message
@@ -42,6 +98,11 @@ async function handleBlobRequest(path: string, download: boolean, includeBody: b
     return jsonErrorResponse(error, fallbackMessage, undefined, { reason: fallbackMessage })
   }
   if (!record) {
+    logRouteEvent('log', 'blob-route:read:not-found', {
+      path,
+      download,
+      includeBody,
+    })
     return NextResponse.json({ ok: false, reason: 'not found' }, { status: 404 })
   }
 
@@ -70,14 +131,42 @@ async function handleBlobRequest(path: string, download: boolean, includeBody: b
   }
   const normalizedPath = normalizePath(path)
   response.headers.set('X-Blob-Path', `${BLOB_PROXY_PREFIX}${encodeURIComponent(normalizedPath)}`)
+  logRouteEvent('log', 'blob-route:read:success', {
+    path,
+    download,
+    includeBody,
+    contentType: record.contentType,
+    size: typeof record.size === 'number' ? record.size : null,
+  })
   return response
 }
 
 function primeContext(req: Request | NextRequest) {
+  const method = (req as any)?.method || 'UNKNOWN'
+  const url = typeof (req as any)?.url === 'string' ? (req as any).url : null
+  const headerKeys = collectRelevantHeaderKeys(req.headers as Headers)
+  logRouteEvent('log', 'blob-route:prime-context:start', {
+    method,
+    url,
+    headerKeys,
+  })
   try {
-    primeNetlifyBlobContextFromHeaders(req.headers)
-  } catch {
-    // ignore header parsing failures
+    const primed = primeNetlifyBlobContextFromHeaders(req.headers)
+    logRouteEvent('log', 'blob-route:prime-context:result', {
+      method,
+      url,
+      headerKeys,
+      primed,
+    })
+    return primed
+  } catch (error) {
+    logRouteEvent('error', 'blob-route:prime-context:failed', {
+      method,
+      url,
+      headerKeys,
+      error: serializeError(error),
+    })
+    throw error
   }
 }
 
@@ -99,17 +188,34 @@ export async function PUT(req: NextRequest, { params }: { params: { path?: strin
   primeContext(req)
   const path = extractPath(params)
   if (!path) {
+    logRouteEvent('error', 'blob-route:put:missing-path', {
+      method: 'PUT',
+      url: req.url,
+    })
     return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
   }
 
   const arrayBuffer = await req.arrayBuffer()
   if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength === 0) {
+    logRouteEvent('error', 'blob-route:put:missing-body', {
+      method: 'PUT',
+      url: req.url,
+      path,
+    })
     return NextResponse.json({ ok: false, reason: 'missing body' }, { status: 400 })
   }
 
   const contentType = req.headers.get('content-type') || 'application/octet-stream'
   const cacheControlHeader = req.headers.get('cache-control') || undefined
   const explicitMaxAge = req.headers.get('x-cache-control-max-age')
+
+  logRouteEvent('log', 'blob-route:put:start', {
+    path,
+    contentType,
+    cacheControlHeader: cacheControlHeader || null,
+    explicitMaxAge: explicitMaxAge || null,
+    bodyBytes: arrayBuffer.byteLength,
+  })
 
   let cacheControlMaxAge: number | undefined
   if (explicitMaxAge) {
@@ -133,6 +239,14 @@ export async function PUT(req: NextRequest, { params }: { params: { path?: strin
     const result = await putBlobFromBuffer(path, buffer, contentType, {
       cacheControlMaxAge,
     })
+    logRouteEvent('log', 'blob-route:put:success', {
+      path,
+      contentType,
+      cacheControlHeader: cacheControlHeader || null,
+      cacheControlMaxAge: cacheControlMaxAge ?? null,
+      url: result.url || null,
+      downloadUrl: result.downloadUrl || null,
+    })
     const response = NextResponse.json({ ok: true, url: result.url, downloadUrl: result.downloadUrl }, { status: 201 })
     if (result.url) {
       response.headers.set('Location', result.url)
@@ -142,6 +256,13 @@ export async function PUT(req: NextRequest, { params }: { params: { path?: strin
     }
     return response
   } catch (error) {
+    logRouteEvent('error', 'blob-route:put:failed', {
+      path,
+      contentType,
+      cacheControlHeader: cacheControlHeader || null,
+      cacheControlMaxAge: cacheControlMaxAge ?? null,
+      error: serializeError(error),
+    })
     const status =
       error && typeof error === 'object' && typeof (error as any).status === 'number' && (error as any).status >= 400
         ? (error as any).status
@@ -158,16 +279,34 @@ export async function DELETE(_req: NextRequest, { params }: { params: { path?: s
   primeContext(_req)
   const path = extractPath(params)
   if (!path) {
+    logRouteEvent('error', 'blob-route:delete:missing-path', {
+      method: 'DELETE',
+      url: _req.url,
+    })
     return NextResponse.json({ ok: false, reason: 'missing path' }, { status: 400 })
   }
+
+  logRouteEvent('log', 'blob-route:delete:start', {
+    path,
+  })
 
   try {
     const deleted = await deleteBlob(path)
     if (!deleted) {
+      logRouteEvent('log', 'blob-route:delete:not-found', {
+        path,
+      })
       return NextResponse.json({ ok: false, reason: 'not found' }, { status: 404 })
     }
+    logRouteEvent('log', 'blob-route:delete:success', {
+      path,
+    })
     return new NextResponse(null, { status: 204 })
   } catch (error) {
+    logRouteEvent('error', 'blob-route:delete:failed', {
+      path,
+      error: serializeError(error),
+    })
     const status =
       error && typeof error === 'object' && typeof (error as any).status === 'number' && (error as any).status >= 400
         ? (error as any).status

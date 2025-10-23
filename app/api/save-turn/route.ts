@@ -1,6 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { primeNetlifyBlobContextFromHeaders, putBlobFromBuffer } from '@/lib/blob'
+import { jsonErrorResponse } from '@/lib/api-error'
+import { logBlobDiagnostic } from '@/utils/blob-env'
+
+const ROUTE_NAME = 'app/api/save-turn'
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack }
+  }
+  if (error && typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error))
+    } catch {
+      return { ...error }
+    }
+  }
+  if (typeof error === 'string') {
+    return { message: error }
+  }
+  return { message: 'Unknown error', value: error }
+}
+
+function logRouteEvent(
+  level: 'log' | 'error',
+  event: string,
+  payload?: Record<string, unknown>,
+) {
+  logBlobDiagnostic(level, event, {
+    route: ROUTE_NAME,
+    ...(payload ?? {}),
+  })
+}
 
 const schema = z.object({
   sessionId: z.string().min(1),
@@ -17,10 +49,29 @@ const schema = z.object({
 })
 
 export async function POST(req: NextRequest) {
-  primeNetlifyBlobContextFromHeaders(req.headers)
+  logRouteEvent('log', 'save-turn:request:start', {
+    url: req.url,
+  })
+  try {
+    primeNetlifyBlobContextFromHeaders(req.headers)
+  } catch (error) {
+    logRouteEvent('error', 'save-turn:prime-context:failed', {
+      url: req.url,
+      error: serializeError(error),
+    })
+    throw error
+  }
   try {
     const body = await req.json()
+    logRouteEvent('log', 'save-turn:request:body-parsed', {
+      keys: body && typeof body === 'object' ? Object.keys(body) : null,
+    })
     const parsed = schema.parse(body)
+    logRouteEvent('log', 'save-turn:request:validated', {
+      sessionId: parsed.sessionId,
+      turn: parsed.turn,
+      hasAssistantAudio: Boolean(parsed.assistant_wav),
+    })
 
     const turnNumber = typeof parsed.turn === 'string' ? Number(parsed.turn) : parsed.turn
     if (!Number.isFinite(turnNumber) || turnNumber <= 0) {
@@ -41,6 +92,12 @@ export async function POST(req: NextRequest) {
       const assistantMime = parsed.assistant_mime || 'audio/mpeg'
       const assistantExt = assistantMime.split('/')[1]?.split(';')[0] || 'mp3'
       const assistantPath = `sessions/${parsed.sessionId}/assistant-${pad}.${assistantExt}`
+      logRouteEvent('log', 'save-turn:upload:assistant-audio', {
+        sessionId: parsed.sessionId,
+        path: assistantPath,
+        mime: assistantMime,
+        bytes: assistantBuffer.byteLength,
+      })
       const assistantBlob = await putBlobFromBuffer(assistantPath, assistantBuffer, assistantMime, { access: 'public' })
       assistantAudioUrl = assistantBlob.downloadUrl || assistantBlob.url
     }
@@ -58,6 +115,12 @@ export async function POST(req: NextRequest) {
       assistantAudioUrl,
       assistantAudioDurationMs: Number(parsed.assistant_duration_ms) || 0,
     }
+    logRouteEvent('log', 'save-turn:upload:user-audio', {
+      sessionId: parsed.sessionId,
+      path: audioPath,
+      mime,
+      bytes: buffer.byteLength,
+    })
     const manifest = await putBlobFromBuffer(
       manifestPath,
       Buffer.from(JSON.stringify(manifestBody, null, 2), 'utf8'),
@@ -65,8 +128,28 @@ export async function POST(req: NextRequest) {
       { access: 'public' }
     )
 
-    return NextResponse.json({ ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url })
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'save_failed' }, { status: 400 })
+    logRouteEvent('log', 'save-turn:upload:manifest', {
+      sessionId: parsed.sessionId,
+      path: manifestPath,
+      url: manifest.url || null,
+    })
+
+    const responsePayload = { ok: true, userAudioUrl: userAudio.url, manifestUrl: manifest.url }
+    logRouteEvent('log', 'save-turn:success', {
+      sessionId: parsed.sessionId,
+      turn: turnNumber,
+      userAudioUrl: userAudio.url || null,
+      manifestUrl: manifest.url || null,
+      assistantAudioUrl,
+    })
+    return NextResponse.json(responsePayload)
+  } catch (error) {
+    logRouteEvent('error', 'save-turn:failed', {
+      url: req.url,
+      error: serializeError(error),
+    })
+    return jsonErrorResponse(error, 'Failed to save turn', 400, {
+      reason: 'save_turn_failed',
+    })
   }
 }
