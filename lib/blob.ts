@@ -140,6 +140,56 @@ type ReadBlobResult = {
   size?: number
 }
 
+function serializeErrorForDiagnostics(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+      cause:
+        error.cause && error.cause instanceof Error
+          ? { name: error.cause.name, message: error.cause.message, stack: error.cause.stack }
+          : error.cause ?? null,
+    }
+  }
+  if (error && typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error))
+    } catch {
+      return { ...error }
+    }
+  }
+  if (typeof error === 'string') {
+    return { message: error }
+  }
+  return { message: 'Unknown error', value: error }
+}
+
+function collectNetlifyHeaderKeys(headers: HeaderLike): string[] {
+  if (!headers) return []
+  if (typeof (headers as any)?.keys === 'function') {
+    return Array.from((headers as any).keys()).filter((key) =>
+      typeof key === 'string' ? key.toLowerCase().startsWith('x-nf') || key.toLowerCase().startsWith('x-netlify') : false,
+    )
+  }
+  if (headers && typeof headers === 'object') {
+    return Object.keys(headers).filter((key) =>
+      key.toLowerCase().startsWith('x-nf') || key.toLowerCase().startsWith('x-netlify'),
+    )
+  }
+  return []
+}
+
+function summarizeNetlifyContext(context: Partial<NetlifyContext>): Record<string, unknown> {
+  return {
+    siteID: context.siteID || null,
+    edgeURL: context.edgeURL || null,
+    uncachedEdgeURL: context.uncachedEdgeURL || null,
+    apiURL: context.apiURL || null,
+    token: context.token ? `${context.token.length} chars` : null,
+  }
+}
+
 const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
 const BLOB_PROXY_PREFIX = '/api/blob/'
 const NETLIFY_API_BASE_URL = 'https://api.netlify.com'
@@ -689,27 +739,55 @@ export function setNetlifyBlobContext(
   contextInput: Partial<NetlifyContext> | null | undefined,
 ): boolean {
   if (isForceProdBlobsEnabled()) {
+    logBlobDiagnostic('log', 'netlify-context:set:skipped', {
+      note: 'FORCE_PROD_BLOBS is enabled; ignoring incoming context payload',
+    })
     return false
   }
   const sanitized = sanitizeContextInput(contextInput)
-  if (!sanitized) return false
+  if (!sanitized) {
+    logBlobDiagnostic('log', 'netlify-context:set:ignored', {
+      note: 'No usable Netlify context fields provided in request headers',
+    })
+    return false
+  }
   const globalContext = (globalThis as any).netlifyBlobsContext
   const existing =
     globalContext && typeof globalContext === 'object' ? (globalContext as NetlifyContext) : ({} as NetlifyContext)
   const merged: NetlifyContext = { ...existing, ...sanitized }
   const changed = JSON.stringify(existing) !== JSON.stringify(merged)
-  if (!changed) return true
+  if (!changed) {
+    logBlobDiagnostic('log', 'netlify-context:set:unchanged', {
+      note: 'Netlify context already matches headers; skipping update',
+      context: summarizeNetlifyContext(sanitized),
+    })
+    return true
+  }
   ;(globalThis as any).netlifyBlobsContext = merged
   try {
-    const encoded = Buffer.from(JSON.stringify(merged)).toString('base64')
+    const json = JSON.stringify(merged)
+    const encoded = Buffer.from(json).toString('base64')
     process.env.NETLIFY_BLOBS_CONTEXT = encoded
-  } catch {
-    // ignore failures to serialize context
+    logBlobDiagnostic('log', 'netlify-context:set:stored', {
+      note: 'Persisted Netlify context payload to process env',
+      context: summarizeNetlifyContext(merged),
+      encodedLength: encoded.length,
+    })
+  } catch (error) {
+    logBlobDiagnostic('error', 'netlify-context:set:store-failed', {
+      note: 'Failed to persist Netlify context payload to process env',
+      context: summarizeNetlifyContext(merged),
+      error: serializeErrorForDiagnostics(error),
+    })
   }
   netlifyConfig = undefined
   netlifyContextSignature = undefined
   netlifyDiagnostics = undefined
   netlifyStore = undefined
+  logBlobDiagnostic('log', 'netlify-context:set:updated', {
+    note: 'Applied Netlify context from request headers and cleared cached configuration',
+    context: summarizeNetlifyContext(merged),
+  })
   return true
 }
 
@@ -723,16 +801,27 @@ function parseContextPayload(raw: string | undefined | null): Partial<NetlifyCon
     if (decoded && decoded !== trimmed) {
       attempts.push(decoded)
     }
-  } catch {
-    // ignore invalid base64 payloads
+  } catch (error) {
+    logBlobDiagnostic('error', 'netlify-context:decode-failed', {
+      note: 'Failed to base64 decode Netlify context header',
+      rawLength: trimmed.length,
+      error: serializeErrorForDiagnostics(error),
+    })
   }
-  for (const candidate of attempts) {
+  for (let index = 0; index < attempts.length; index += 1) {
+    const candidate = attempts[index]
     try {
       const parsed = JSON.parse(candidate)
       if (parsed && typeof parsed === 'object') {
         return parsed as Partial<NetlifyContext>
       }
-    } catch {
+    } catch (error) {
+      logBlobDiagnostic('error', 'netlify-context:parse-failed', {
+        note: 'Failed to parse Netlify context payload as JSON',
+        attemptIndex: index,
+        payloadLength: candidate.length,
+        error: serializeErrorForDiagnostics(error),
+      })
       continue
     }
   }
@@ -775,12 +864,34 @@ function extractNetlifyContextFromHeaders(headers: HeaderLike): Partial<NetlifyC
 }
 
 export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean {
+  const headerKeys = collectNetlifyHeaderKeys(headers)
+  logBlobDiagnostic('log', 'prime-netlify-context:received', {
+    note: 'Attempting to prime Netlify blob context from incoming request headers',
+    headerKeys,
+  })
   if (isForceProdBlobsEnabled()) {
+    logBlobDiagnostic('log', 'prime-netlify-context:skipped', {
+      note: 'FORCE_PROD_BLOBS enabled; ignoring request-scoped context headers',
+      headerKeys,
+    })
     return false
   }
   const extracted = extractNetlifyContextFromHeaders(headers)
-  if (!extracted) return false
-  return setNetlifyBlobContext(extracted)
+  if (!extracted) {
+    logBlobDiagnostic('log', 'prime-netlify-context:missing', {
+      note: 'No Netlify context headers detected on request',
+      headerKeys,
+    })
+    return false
+  }
+  const applied = setNetlifyBlobContext(extracted)
+  logBlobDiagnostic('log', 'prime-netlify-context:applied', {
+    note: 'Applied Netlify context extracted from request headers',
+    headerKeys,
+    context: summarizeNetlifyContext(extracted),
+    applied,
+  })
+  return applied
 }
 
 function readNetlifyConfig(): {
