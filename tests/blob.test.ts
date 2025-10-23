@@ -24,7 +24,7 @@ describe('safeBlobStore', () => {
     const getStoreSpy = vi.fn(() => storeMock)
     vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
-    const { safeBlobStore } = await import('../utils/blob-env')
+    const { safeBlobStore } = await import('@/utils/blob-env')
     const store = await safeBlobStore()
 
     expect(store).toBe(storeMock)
@@ -46,7 +46,7 @@ describe('safeBlobStore', () => {
 
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
 
-    const { safeBlobStore } = await import('../utils/blob-env')
+    const { safeBlobStore } = await import('@/utils/blob-env')
 
     await expect(safeBlobStore()).rejects.toThrow(/Missing blob env: NETLIFY_BLOBS_TOKEN/i)
   })
@@ -71,7 +71,7 @@ describe('putBlobFromBuffer', () => {
     const getStoreSpy = vi.fn(() => storeMock)
     vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
-    const { putBlobFromBuffer } = await import('../lib/blob')
+    const { putBlobFromBuffer } = await import('@/lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
     const firstCall = getStoreSpy.mock.calls.at(0)
@@ -109,7 +109,7 @@ describe('putBlobFromBuffer', () => {
     const getStoreSpy = vi.fn(() => storeMock)
     vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
-    const { putBlobFromBuffer } = await import('../lib/blob')
+    const { putBlobFromBuffer } = await import('@/lib/blob')
     await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
     expect(getStoreSpy).toHaveBeenCalled()
@@ -124,7 +124,7 @@ describe('putBlobFromBuffer', () => {
 
   it('falls back to a data URL when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
-    const { putBlobFromBuffer } = await import('../lib/blob')
+    const { putBlobFromBuffer } = await import('@/lib/blob')
     const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hi'), 'text/plain')
 
     expect(result.url.startsWith('data:text/plain;base64,')).toBe(true)
@@ -157,7 +157,7 @@ it('resolves a site slug to the canonical Netlify site ID', async () => {
 
   vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
-  const { putBlobFromBuffer } = await import('../lib/blob')
+  const { putBlobFromBuffer } = await import('@/lib/blob')
   await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
   expect(fetchSpy).toHaveBeenCalledWith(
@@ -186,7 +186,7 @@ it('falls back to memory when given a site slug without a token to resolve it', 
   const getStoreSpy = vi.fn(() => storeMock)
   vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
 
-  const { putBlobFromBuffer } = await import('../lib/blob')
+  const { putBlobFromBuffer } = await import('@/lib/blob')
   const result = await putBlobFromBuffer('path/file.txt', Buffer.from('hello'), 'text/plain')
 
   expect(getStoreSpy).not.toHaveBeenCalled()
@@ -197,7 +197,7 @@ it('falls back to memory when given a site slug without a token to resolve it', 
 describe('listBlobs', () => {
   it('returns fallback entries when storage is not configured', async () => {
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
-    const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('../lib/blob')
+    const { putBlobFromBuffer, listBlobs, clearFallbackBlobs } = await import('@/lib/blob')
     clearFallbackBlobs()
 
     await putBlobFromBuffer('sessions/test/item.json', Buffer.from('{}'), 'application/json')
