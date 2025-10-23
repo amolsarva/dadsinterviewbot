@@ -395,7 +395,7 @@ function runCheck(def: EnvCheck, env: NodeJS.ProcessEnv): CheckOutcome {
     if (typeof validation.strictFailure === 'boolean') {
       strictFailure = validation.strictFailure
     } else if (severity !== 'error') {
-      strictFailure = def.required ? severity === 'error' : false
+      strictFailure = false
     }
   } else if (!rawValue) {
     severity = def.required ? 'error' : 'warn'

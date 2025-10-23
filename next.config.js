@@ -3,10 +3,6 @@ const nextConfig = {
   experimental: {
     serverActions: { allowedOrigins: ['*'] },
   },
-  
 }
-module.exports = nextConfig
 
-module.exports = {
-  experimental: { incrementalCacheHandlerPath: undefined },
-}
+module.exports = nextConfig
