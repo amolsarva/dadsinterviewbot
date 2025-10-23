@@ -5,7 +5,7 @@ import {
   isForceProdBlobsEnabled,
   logBlobDiagnostic,
   snapshotRequiredBlobEnv,
-} from '../utils/blob-env'
+} from '@/utils/blob-env'
 import { flagFox } from './foxes'
 
 export type PutBlobOptions = {
@@ -168,9 +168,16 @@ function serializeErrorForDiagnostics(error: unknown) {
 function collectNetlifyHeaderKeys(headers: HeaderLike): string[] {
   if (!headers) return []
   if (typeof (headers as any)?.keys === 'function') {
-    return Array.from((headers as any).keys()).filter((key) =>
-      typeof key === 'string' ? key.toLowerCase().startsWith('x-nf') || key.toLowerCase().startsWith('x-netlify') : false,
-    )
+    const iterator = ((headers as unknown as { keys(): IterableIterator<unknown> }).keys?.() ?? [][Symbol.iterator]())
+    const collected: string[] = []
+    for (const key of iterator) {
+      if (typeof key !== 'string') continue
+      const lower = key.toLowerCase()
+      if (lower.startsWith('x-nf') || lower.startsWith('x-netlify')) {
+        collected.push(key)
+      }
+    }
+    return collected
   }
   if (headers && typeof headers === 'object') {
     return Object.keys(headers).filter((key) =>
