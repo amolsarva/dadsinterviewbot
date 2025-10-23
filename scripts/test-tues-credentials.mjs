@@ -5,14 +5,22 @@ function timestamp() {
   return new Date().toISOString()
 }
 
+function envSnapshot() {
+  return {
+    nodeEnv: process.env.NODE_ENV ?? null,
+    netlify: process.env.NETLIFY ?? null,
+    region: process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? null,
+  }
+}
+
 function logInfo(message, details) {
-  const suffix = details ? ` ${details}` : ''
-  console.log(`[diagnostic] ${timestamp()} ${message}${suffix}`)
+  const payload = { level: 'info', message, details: details ?? null, env: envSnapshot() }
+  console.log(`[diagnostic] ${timestamp()} ${JSON.stringify(payload)}`)
 }
 
 function logError(message, details) {
-  const suffix = details ? ` ${details}` : ''
-  console.error(`[diagnostic] ${timestamp()} ${message}${suffix}`)
+  const payload = { level: 'error', message, details: details ?? null, env: envSnapshot() }
+  console.error(`[diagnostic] ${timestamp()} ${JSON.stringify(payload)}`)
 }
 
 function parseArgs(argv) {
