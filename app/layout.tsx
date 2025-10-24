@@ -1,5 +1,6 @@
 import './globals.css'
 import React from 'react'
+import { buildDefaultNotifyEmailBootstrapScript } from '@/lib/default-notify-email.server'
 import { SiteNav } from './site-nav'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -67,9 +68,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   }
   const buildTimestampLabel = `This build is from ${formattedTime}`
 
+  const defaultEmailBootstrapScript = buildDefaultNotifyEmailBootstrapScript()
+
   return (
     <html lang="en">
       <body>
+        <script dangerouslySetInnerHTML={{ __html: defaultEmailBootstrapScript }} />
         <div className="site-shell">
           <header className="site-header">
             <h1 className="site-title">Dad&apos;s Interview Bot</h1>

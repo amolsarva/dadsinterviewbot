@@ -9,7 +9,6 @@ import { SummarizableTurn } from '@/lib/session-title'
 import { detectCompletionIntent } from '@/lib/intents'
 import {
   ACTIVE_USER_HANDLE_STORAGE_KEY,
-  DEFAULT_NOTIFY_EMAIL,
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
   KNOWN_USER_HANDLES_STORAGE_KEY,
@@ -19,6 +18,7 @@ import {
   normalizeHandle,
   scopedStorageKey,
 } from '@/lib/user-scope'
+import { readDefaultNotifyEmailClient } from '@/lib/default-notify-email.client'
 
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
@@ -219,17 +219,26 @@ const clearStoredSessionId = (handle?: string | null) => {
 
 const readEmailPreferences = (handle?: string | null) => {
   if (typeof window === 'undefined') {
-    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+    return { email: readDefaultNotifyEmailClient(), emailsEnabled: true }
   }
   try {
     const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, handle)
-    const email = window.localStorage.getItem(emailKey) || DEFAULT_NOTIFY_EMAIL
+    const email = window.localStorage.getItem(emailKey) || readDefaultNotifyEmailClient()
     const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, handle)
     const rawEnabled = window.localStorage.getItem(enabledKey)
     const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
     return { email, emailsEnabled }
-  } catch {
-    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+  } catch (error) {
+    console.error(
+      `[diagnostic] ${new Date().toISOString()} home:default-email:storage-error ${JSON.stringify({
+        error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
+        clientSummary:
+          typeof window === 'undefined'
+            ? { origin: '__no_window__', pathname: '__no_window__' }
+            : { origin: window.location.origin, pathname: window.location.pathname },
+      })}`,
+    )
+    return { email: readDefaultNotifyEmailClient(), emailsEnabled: true }
   }
 }
 

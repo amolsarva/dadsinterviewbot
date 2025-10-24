@@ -3,8 +3,6 @@ export const EMAIL_STORAGE_BASE_KEY = 'defaultEmail'
 export const EMAIL_ENABLED_STORAGE_BASE_KEY = 'sendSummaryEmails'
 export const ACTIVE_USER_HANDLE_STORAGE_KEY = 'activeUserHandle'
 export const KNOWN_USER_HANDLES_STORAGE_KEY = 'knownUserHandles'
-export const DEFAULT_NOTIFY_EMAIL = 'a@sarva.co'
-
 const DEFAULT_SCOPE_KEY = '__default__'
 
 export function normalizeHandle(handle?: string | null): string | undefined {

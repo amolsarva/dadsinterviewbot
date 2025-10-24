@@ -2,12 +2,12 @@
 import { useEffect, useState } from 'react'
 import {
   ACTIVE_USER_HANDLE_STORAGE_KEY,
-  DEFAULT_NOTIFY_EMAIL,
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
   normalizeHandle,
   scopedStorageKey,
 } from '@/lib/user-scope'
+import { readDefaultNotifyEmailClient } from '@/lib/default-notify-email.client'
 
 type SettingsViewProps = {
   userHandle?: string
@@ -22,7 +22,7 @@ export function SettingsView({ userHandle }: SettingsViewProps) {
 
   useEffect(() => {
     if (typeof window === 'undefined') {
-      setEmail(DEFAULT_NOTIFY_EMAIL)
+      setEmail(readDefaultNotifyEmailClient())
       setSendEmails(true)
       setActiveHandle(undefined)
       return
@@ -38,12 +38,21 @@ export function SettingsView({ userHandle }: SettingsViewProps) {
       setActiveHandle(storedHandle)
 
       const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, storedHandle)
-      setEmail(window.localStorage.getItem(emailKey) || DEFAULT_NOTIFY_EMAIL)
+      setEmail(window.localStorage.getItem(emailKey) || readDefaultNotifyEmailClient())
       const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, storedHandle)
       const raw = window.localStorage.getItem(enabledKey)
       setSendEmails(raw === null ? true : raw !== 'false')
-    } catch {
-      setEmail(DEFAULT_NOTIFY_EMAIL)
+    } catch (error) {
+      console.error(
+        `[diagnostic] ${new Date().toISOString()} settings:default-email:storage-error ${JSON.stringify({
+          error: error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) },
+          clientSummary:
+            typeof window === 'undefined'
+              ? { origin: '__no_window__', pathname: '__no_window__' }
+              : { origin: window.location.origin, pathname: window.location.pathname },
+        })}`,
+      )
+      setEmail(readDefaultNotifyEmailClient())
       setSendEmails(true)
       setActiveHandle(undefined)
     }
