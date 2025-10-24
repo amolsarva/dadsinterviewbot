@@ -6,7 +6,9 @@ afterEach(() => {
   delete process.env.NETLIFY_BLOBS_STORE
   delete process.env.NETLIFY_BLOBS_API_URL
   delete process.env.NETLIFY_BLOBS_CONTEXT
+  delete process.env.MY_DEPLOY_ID
   delete process.env.NETLIFY_DEPLOY_ID
+  delete process.env.DEPLOY_ID
   vi.resetModules()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -18,6 +20,7 @@ describe('safeBlobStore', () => {
     process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
     process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
+    process.env.MY_DEPLOY_ID = 'deploy-override'
     process.env.NETLIFY_DEPLOY_ID = 'deploy-1234'
 
     const storeMock = { ready: true }
@@ -34,7 +37,30 @@ describe('safeBlobStore', () => {
         siteID: '12345678-1234-1234-1234-1234567890ab',
         token: 'api-token',
         apiURL: 'https://api.netlify.com/api/v1/blobs',
-        deployID: 'deploy-1234',
+        deployID: 'deploy-override',
+      }),
+    )
+  })
+
+  it('prefers MY_DEPLOY_ID over legacy deploy identifiers', async () => {
+    process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
+    process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
+    process.env.NETLIFY_BLOBS_STORE = 'store-name'
+    process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
+    process.env.MY_DEPLOY_ID = 'custom-deploy'
+    process.env.NETLIFY_DEPLOY_ID = 'netlify-deploy'
+    process.env.DEPLOY_ID = 'fallback-deploy'
+
+    const storeMock = { ready: true }
+    const getStoreSpy = vi.fn(() => storeMock)
+    vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
+
+    const { safeBlobStore } = await import('@/utils/blob-env')
+    await safeBlobStore()
+
+    expect(getStoreSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deployID: 'custom-deploy',
       }),
     )
   })
