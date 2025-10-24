@@ -10,6 +10,7 @@ import {
 } from '@/lib/blob'
 import { jsonErrorResponse } from '@/lib/api-error'
 import type { BlobErrorReport } from '@/types/error-types'
+import { logBlobDiagnostic } from '@/utils/blob-env'
 
 type FlowStep = {
   id: string
@@ -373,8 +374,29 @@ export async function GET(req: NextRequest) {
       (process.env.NETLIFY_API_TOKEN || '').trim()
     const siteId = env.siteId
     const storeName = env.store
-    const apiBase = (process.env.NETLIFY_BLOBS_API_URL || 'https://api.netlify.com/api/v1/blobs')
-      .replace(/\/+$/, '')
+    const rawApiBase = process.env.NETLIFY_BLOBS_API_URL ? process.env.NETLIFY_BLOBS_API_URL.trim() : ''
+    if (!rawApiBase) {
+      const message = 'NETLIFY_BLOBS_API_URL is required for direct Netlify API diagnostics.'
+      logBlobDiagnostic('error', 'storage-diagnostics:missing-api-base', {
+        probeId,
+        message,
+      })
+      flowSteps.push({
+        id: 'direct_api_base',
+        label: 'Netlify API base URL configured',
+        ok: false,
+        optional: true,
+        error: message,
+      })
+      context.steps = flowSteps
+      return NextResponse.json({
+        ...context,
+        ok: false,
+        message,
+        error: 'missing_netlify_blobs_api_url',
+      }, { status: 500 })
+    }
+    const apiBase = rawApiBase.replace(/\/+$/, '')
 
     if (token && siteId && storeName) {
       const directUrl = `${apiBase}/sites/${encodeURIComponent(siteId)}/stores/${encodeURIComponent(
