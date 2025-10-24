@@ -243,11 +243,23 @@ function redactOptions(options: GetStoreOptions & { token?: string }) {
 
 export async function safeBlobStore(): Promise<Store> {
   const snapshot = snapshotRequiredBlobEnv()
-  const deployID = trimOptionalEnv(process.env.NETLIFY_DEPLOY_ID)
+  const deployIDSource =
+    'MY_DEPLOY_ID' in process.env && process.env.MY_DEPLOY_ID
+      ? 'MY_DEPLOY_ID'
+      : 'NETLIFY_DEPLOY_ID' in process.env && process.env.NETLIFY_DEPLOY_ID
+      ? 'NETLIFY_DEPLOY_ID'
+      : 'DEPLOY_ID' in process.env && process.env.DEPLOY_ID
+      ? 'DEPLOY_ID'
+      : null
+
+  const deployID = trimOptionalEnv(
+    process.env.MY_DEPLOY_ID ?? process.env.NETLIFY_DEPLOY_ID ?? process.env.DEPLOY_ID,
+  )
 
   logBlobDiagnostic('log', 'safe-blob-store-env-snapshot', {
     note: 'Preparing Netlify blob store initialization via safeBlobStore',
     deployID: deployID || null,
+    deployIDSource: deployIDSource,
   })
 
   assertBlobEnv({

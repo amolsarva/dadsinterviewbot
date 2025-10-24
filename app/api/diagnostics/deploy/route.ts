@@ -30,7 +30,9 @@ export async function GET() {
   try {
     logStep(`${stepBase}:start`)
 
-    const deployIdSource = process.env.NETLIFY_DEPLOY_ID
+    const deployIdSource = process.env.MY_DEPLOY_ID
+      ? 'MY_DEPLOY_ID'
+      : process.env.NETLIFY_DEPLOY_ID
       ? 'NETLIFY_DEPLOY_ID'
       : process.env.DEPLOY_ID
       ? 'DEPLOY_ID'
@@ -41,7 +43,10 @@ export async function GET() {
     }
 
     const deployId =
-      process.env.NETLIFY_DEPLOY_ID ?? process.env.DEPLOY_ID ?? '(undefined)'
+      process.env.MY_DEPLOY_ID ??
+      process.env.NETLIFY_DEPLOY_ID ??
+      process.env.DEPLOY_ID ??
+      '(undefined)'
 
     const allKeys = Object.keys(process.env).filter((key) => key.toUpperCase().includes('DEPLOY'))
 
