@@ -56,6 +56,22 @@ const DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 const KNOWN_HANDLE_LIMIT = 8
 const SERVER_HANDLE_LIMIT = 12
 
+const formatSessionEnvSummary = () => ({
+  NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL: process.env.NEXT_PUBLIC_DEFAULT_NOTIFY_EMAIL ?? null,
+  DEFAULT_NOTIFY_EMAIL: process.env.DEFAULT_NOTIFY_EMAIL ?? null,
+})
+
+const logSessionDiagnostic = (level: 'log' | 'error', message: string, detail?: unknown) => {
+  const timestamp = new Date().toISOString()
+  const scope = '[app/page]'
+  const payload = { env: formatSessionEnvSummary(), detail }
+  if (level === 'error') {
+    console.error(`[diagnostic] ${timestamp} ${scope} ${message}`, payload)
+  } else {
+    console.log(`[diagnostic] ${timestamp} ${scope} ${message}`, payload)
+  }
+}
+
 const mergeKnownHandles = (values: Array<string | null | undefined>, limit: number = KNOWN_HANDLE_LIMIT) => {
   const seen = new Set<string>()
   const merged: string[] = []
@@ -104,7 +120,7 @@ export default function RootPage() {
   return <Home key="__default__" />
 }
 
-type SessionInitSource = 'memory' | 'storage' | 'network' | 'fallback'
+type SessionInitSource = 'memory' | 'storage' | 'network'
 
 type SessionInitResult = {
   id: string
@@ -113,7 +129,7 @@ type SessionInitResult = {
 
 type NetworkSessionResult = {
   id: string
-  source: Extract<SessionInitSource, 'network' | 'fallback'>
+  source: Extract<SessionInitSource, 'network'>
 }
 
 type IntroDebugPayload = {
@@ -183,20 +199,17 @@ function getScopedSessionState(handle?: string | null) {
   return { key, state }
 }
 
-const createLocalSessionId = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return Math.random().toString(36).slice(2)
-}
-
 const readStoredSessionId = (handle?: string | null) => {
   if (typeof window === 'undefined') return null
   try {
     const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
     const stored = window.sessionStorage.getItem(key)
     return stored && typeof stored === 'string' ? stored : null
-  } catch {
+  } catch (error) {
+    logSessionDiagnostic('error', 'Failed to read session identifier from storage.', {
+      handle: handle ?? null,
+      error: error instanceof Error ? error.message : 'unknown_error',
+    })
     return null
   }
 }
@@ -206,7 +219,12 @@ const persistSessionId = (id: string, handle?: string | null) => {
   try {
     const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
     window.sessionStorage.setItem(key, id)
-  } catch {}
+  } catch (error) {
+    logSessionDiagnostic('error', 'Failed to persist session identifier to storage.', {
+      handle: handle ?? null,
+      error: error instanceof Error ? error.message : 'unknown_error',
+    })
+  }
 }
 
 const clearStoredSessionId = (handle?: string | null) => {
@@ -214,7 +232,12 @@ const clearStoredSessionId = (handle?: string | null) => {
   try {
     const key = scopedStorageKey(SESSION_STORAGE_BASE_KEY, handle)
     window.sessionStorage.removeItem(key)
-  } catch {}
+  } catch (error) {
+    logSessionDiagnostic('error', 'Failed to clear session identifier from storage.', {
+      handle: handle ?? null,
+      error: error instanceof Error ? error.message : 'unknown_error',
+    })
+  }
 }
 
 const readEmailPreferences = (handle?: string | null) => {
@@ -228,7 +251,11 @@ const readEmailPreferences = (handle?: string | null) => {
     const rawEnabled = window.localStorage.getItem(enabledKey)
     const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
     return { email, emailsEnabled }
-  } catch {
+  } catch (error) {
+    logSessionDiagnostic('error', 'Failed to read email preferences from storage.', {
+      handle: handle ?? null,
+      error: error instanceof Error ? error.message : 'unknown_error',
+    })
     return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
   }
 }
@@ -237,34 +264,81 @@ const requestNewSessionId = async (handle?: string | null): Promise<NetworkSessi
   const { state } = getScopedSessionState(handle)
 
   if (typeof window === 'undefined') {
-    const fallbackId = createLocalSessionId()
-    state.inMemorySessionId = fallbackId
-    return { id: fallbackId, source: 'fallback' as const }
+    const message =
+      'Session initialization attempted without a browser window; cannot continue without diagnostics.'
+    logSessionDiagnostic('error', message, { handle: handle ?? null })
+    throw new Error(message)
   }
 
+  const { email, emailsEnabled } = readEmailPreferences(handle)
+  logSessionDiagnostic('log', 'Requesting new session identifier from API.', {
+    handle: handle ?? null,
+    emailsEnabled,
+    emailConfigured: Boolean(email),
+  })
+
+  let response: Response
   try {
-    const { email, emailsEnabled } = readEmailPreferences(handle)
-    const res = await fetch('/api/session/start', {
+    response = await fetch('/api/session/start', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email, emailsEnabled, userHandle: normalizeHandle(handle) ?? null }),
     })
-    const data = await res.json().catch(() => ({}))
-    const id = typeof data?.id === 'string' && data.id ? data.id : createLocalSessionId()
-    const source: NetworkSessionResult['source'] =
-      typeof data?.id === 'string' && data.id ? 'network' : 'fallback'
-    state.inMemorySessionId = id
-    persistSessionId(id, handle)
-    return { id, source }
-  } catch {
-    let id = readStoredSessionId(handle)
-    if (!id) {
-      id = createLocalSessionId()
-    }
-    state.inMemorySessionId = id
-    persistSessionId(id, handle)
-    return { id, source: 'fallback' as const }
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? `Session start request failed: ${error.message}`
+        : 'Session start request failed: unknown error.'
+    logSessionDiagnostic('error', message, { handle: handle ?? null, error })
+    throw new Error(message)
   }
+
+  const responseText = await response.text()
+  let data: any = {}
+  if (responseText.trim().length) {
+    try {
+      data = JSON.parse(responseText)
+    } catch (error) {
+      const message = 'Session start response was not valid JSON.'
+      logSessionDiagnostic('error', message, {
+        handle: handle ?? null,
+        responseText: truncateForLog(responseText, 200),
+        error: error instanceof Error ? error.message : 'unknown_error',
+      })
+      throw new Error(message)
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data?.error === 'string' && data.error.trim().length
+        ? `Session start failed: ${data.error.trim()}`
+        : `Session start failed with status ${response.status}`
+    logSessionDiagnostic('error', message, {
+      handle: handle ?? null,
+      status: response.status,
+      body: data,
+    })
+    throw new Error(message)
+  }
+
+  const id = typeof data?.id === 'string' ? data.id.trim() : ''
+  if (!id) {
+    const message = 'Session start API did not return a session identifier.'
+    logSessionDiagnostic('error', message, {
+      handle: handle ?? null,
+      body: data,
+    })
+    throw new Error(message)
+  }
+
+  state.inMemorySessionId = id
+  persistSessionId(id, handle)
+  logSessionDiagnostic('log', 'Session identifier persisted after successful start.', {
+    handle: handle ?? null,
+    sessionId: id,
+  })
+  return { id, source: 'network' }
 }
 
 const ensureSessionIdOnce = async (handle?: string | null): Promise<SessionInitResult> => {
@@ -738,12 +812,14 @@ export function Home({ userHandle }: { userHandle?: string }) {
     ensureSessionIdOnce(normalizedHandle)
       .then((result) => {
         if (cancelled) return
-        if (result.source === 'fallback') {
-          pushLog('Session start blocked: server returned fallback session id')
-          setStartupError('Session initialization blocked — diagnostics did not pass.')
+        if (!result.id || !result.id.trim().length) {
+          const message = 'Session initialization returned an empty identifier.'
+          logSessionDiagnostic('error', message, { result })
+          pushLog('Session initialization failed: empty identifier returned')
+          setStartupError('Session initialization failed — diagnostics required.')
           setStartupDetails([
-            'The server returned a fallback session identifier instead of a live session.',
-            'Run Diagnostics and resolve the failing checks before starting again.',
+            'The session API returned an empty identifier.',
+            'Open Diagnostics and review the failing checks before retrying.',
           ])
           const { state } = getScopedSessionState(normalizedHandle)
           state.inMemorySessionId = null
