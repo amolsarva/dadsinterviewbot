@@ -3,6 +3,7 @@ import { createSession, appendTurn, finalizeSession } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { listFoxes } from '@/lib/foxes'
 import { jsonErrorResponse } from '@/lib/api-error'
+import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.server'
 
 export const runtime = 'nodejs'
 
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
   try {
     primeNetlifyBlobContextFromHeaders(request.headers)
     const session = await wrapStage('create_session', () =>
-      createSession({ email_to: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co' })
+      createSession({ email_to: resolveDefaultNotifyEmailServer() })
     )
 
     await wrapStage('append_user_turn', () =>

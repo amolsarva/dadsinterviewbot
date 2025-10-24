@@ -4,6 +4,7 @@ import { flagFox } from './foxes'
 import { generateSessionTitle, SummarizableTurn } from './session-title'
 import { formatSessionTitleFallback } from './fallback-texts'
 import { normalizeHandle } from './user-scope'
+import { resolveDefaultNotifyEmailServer } from './default-notify-email.server'
 
 export type Session = {
   id: string
@@ -1300,7 +1301,7 @@ export function buildSessionFromManifest(
     id: sessionId,
     created_at: createdAt,
     title: typeof data.title === 'string' ? data.title : undefined,
-    email_to: typeof data.email === 'string' ? data.email : process.env.DEFAULT_NOTIFY_EMAIL || '',
+    email_to: typeof data.email === 'string' ? data.email : resolveDefaultNotifyEmailServer(),
     user_handle:
       normalizeHandle(
         typeof data.user_handle === 'string'

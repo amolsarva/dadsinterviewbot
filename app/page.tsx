@@ -9,7 +9,6 @@ import { SummarizableTurn } from '@/lib/session-title'
 import { detectCompletionIntent } from '@/lib/intents'
 import {
   ACTIVE_USER_HANDLE_STORAGE_KEY,
-  DEFAULT_NOTIFY_EMAIL,
   EMAIL_ENABLED_STORAGE_BASE_KEY,
   EMAIL_STORAGE_BASE_KEY,
   KNOWN_USER_HANDLES_STORAGE_KEY,
@@ -19,6 +18,8 @@ import {
   normalizeHandle,
   scopedStorageKey,
 } from '@/lib/user-scope'
+import { readDefaultNotifyEmailClient } from '@/lib/default-notify-email.client'
+import { maskEmail } from '@/lib/default-notify-email.shared'
 
 const HARD_TURN_LIMIT_MS = 90_000
 const DEFAULT_BASELINE = 0.004
@@ -242,21 +243,30 @@ const clearStoredSessionId = (handle?: string | null) => {
 
 const readEmailPreferences = (handle?: string | null) => {
   if (typeof window === 'undefined') {
-    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+    return { email: readDefaultNotifyEmailClient(), emailsEnabled: true }
   }
   try {
     const emailKey = scopedStorageKey(EMAIL_STORAGE_BASE_KEY, handle)
-    const email = window.localStorage.getItem(emailKey) || DEFAULT_NOTIFY_EMAIL
+    const email = window.localStorage.getItem(emailKey) || readDefaultNotifyEmailClient()
     const enabledKey = scopedStorageKey(EMAIL_ENABLED_STORAGE_BASE_KEY, handle)
     const rawEnabled = window.localStorage.getItem(enabledKey)
     const emailsEnabled = rawEnabled === null ? true : rawEnabled !== 'false'
     return { email, emailsEnabled }
   } catch (error) {
+    const errorDetail =
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { message: String(error) }
     logSessionDiagnostic('error', 'Failed to read email preferences from storage.', {
       handle: handle ?? null,
-      error: error instanceof Error ? error.message : 'unknown_error',
+      error: errorDetail,
     })
-    return { email: DEFAULT_NOTIFY_EMAIL, emailsEnabled: true }
+    const fallbackEmail = readDefaultNotifyEmailClient()
+    logSessionDiagnostic('log', 'Using resolved default email after storage failure.', {
+      handle: handle ?? null,
+      emailPreview: maskEmail(fallbackEmail),
+    })
+    return { email: fallbackEmail, emailsEnabled: true }
   }
 }
 

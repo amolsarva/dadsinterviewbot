@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { blobHealth, getBlobEnvironment, primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
 import { dbHealth } from '@/lib/data'
 import { areSummaryEmailsEnabled } from '@/lib/email'
+import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.server'
 
 export async function GET(request: Request) {
   primeNetlifyBlobContextFromHeaders(request.headers)
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
     storageError: storageEnv.error ?? null,
     hasResend: Boolean(process.env.RESEND_API_KEY),
     emailsEnabled: areSummaryEmailsEnabled(),
-    defaultEmail: process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co',
+    defaultEmail: resolveDefaultNotifyEmailServer(),
     blobDiagnostics: storageEnv.diagnostics,
   }
   return NextResponse.json({ ok: true, env, blob, db })

@@ -124,7 +124,7 @@ const GROUPS: EnvGroup[] = [
             ? looksLikeURL(value)
               ? pass('Custom API base detected.')
               : fail('Invalid URL; must start with http(s)://', false)
-            : pass('Using Netlify default API base.'),
+            : warn('Missing explicit API base; refusing to assume Netlify default.'),
       },
       {
         key: 'NETLIFY_BLOBS_EDGE_URL',
@@ -134,7 +134,7 @@ const GROUPS: EnvGroup[] = [
             ? looksLikeURL(value)
               ? pass('Custom edge base detected.')
               : fail('Invalid URL; must start with http(s)://', false)
-            : pass('Using Netlify default edge base.'),
+            : warn('Missing explicit edge base; refusing to assume Netlify default.'),
       },
       {
         key: 'NETLIFY_BLOBS_PUBLIC_BASE_URL',
@@ -144,7 +144,7 @@ const GROUPS: EnvGroup[] = [
             ? looksLikeURL(value)
               ? pass('Public URL override detected.')
               : fail('Invalid URL; must start with http(s)://', false)
-            : pass('Using proxy-relative paths.'),
+            : warn('Missing explicit public base URL; refusing to rely on implicit proxy paths.'),
       },
       {
         key: 'NETLIFY_SITE_ID',
@@ -224,7 +224,10 @@ const GROUPS: EnvGroup[] = [
       {
         key: 'OPENAI_DIAGNOSTICS_MODEL',
         label: 'Diagnostics model override',
-        validate: (value) => (value ? pass('Custom diagnostics model set.') : pass('Using default diagnostics model.')),
+        validate: (value) =>
+          value
+            ? pass('Custom diagnostics model set.')
+            : warn('Missing diagnostics model override; verify defaults match deployment expectations.'),
       },
     ],
   },
@@ -434,7 +437,7 @@ function buildGroupOutcomes(env: NodeJS.ProcessEnv) {
   return { groups, resultMap }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     logStep('env-diagnostics:start')
     const hypotheses = [
@@ -447,6 +450,13 @@ export async function GET() {
     const env = process.env
     const { groups, resultMap } = buildGroupOutcomes(env)
 
+    const requestUrl = new URL(request.url)
+    const requestedFormat = requestUrl.searchParams.get('format')
+    const acceptHeader = request.headers.get('accept') ?? ''
+    const wantsJson =
+      (requestedFormat && requestedFormat.toLowerCase() === 'json') ||
+      acceptHeader.toLowerCase().includes('application/json')
+
     const allEnvKeys = Object.keys(env).sort()
     const knownKeys = new Set(Array.from(resultMap.keys()))
     const unknownKeys = allEnvKeys.filter((key) => !knownKeys.has(key))
@@ -458,6 +468,50 @@ export async function GET() {
       }
     }
 
+    const collectIssues = (keys: string[]) =>
+      keys
+        .map((key) => resultMap.get(key))
+        .filter((outcome): outcome is CheckOutcome => !!outcome && outcome.severity !== 'ok')
+
+    const blobIssues = collectIssues([
+      'NETLIFY_BLOBS_SITE_ID',
+      'NETLIFY_BLOBS_STORE',
+      'NETLIFY_BLOBS_TOKEN',
+      'NETLIFY_BLOBS_API_URL',
+      'NETLIFY_BLOBS_EDGE_URL',
+      'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+    ])
+    const emailIssues = collectIssues([
+      'DEFAULT_NOTIFY_EMAIL',
+      'RESEND_API_KEY',
+      'SENDGRID_API_KEY',
+      'ENABLE_SESSION_EMAILS',
+    ])
+    const googleIssues = collectIssues(['GOOGLE_API_KEY', 'GOOGLE_MODEL'])
+
+    const hypothesisEvaluations = [
+      {
+        hypothesis: hypotheses[0],
+        confirmed: criticalFailures.length > 0,
+        evidence: criticalFailures,
+      },
+      {
+        hypothesis: hypotheses[1],
+        confirmed: blobIssues.length > 0,
+        evidence: blobIssues.map((issue) => ({ key: issue.key, severity: issue.severity })),
+      },
+      {
+        hypothesis: hypotheses[2],
+        confirmed: emailIssues.length > 0,
+        evidence: emailIssues.map((issue) => ({ key: issue.key, severity: issue.severity })),
+      },
+      {
+        hypothesis: hypotheses[3],
+        confirmed: googleIssues.length > 0,
+        evidence: googleIssues.map((issue) => ({ key: issue.key, severity: issue.severity })),
+      },
+    ]
+
     logStep('env-diagnostics:checks-complete', {
       totals: {
         groups: groups.length,
@@ -465,6 +519,10 @@ export async function GET() {
         unknownKeys: unknownKeys.length,
         criticalFailures,
       },
+    })
+
+    logStep('env-diagnostics:hypothesis-evaluation', {
+      evaluations: hypothesisEvaluations,
     })
 
     const unknownOutcomes: CheckOutcome[] = unknownKeys.map((key) => ({
@@ -484,6 +542,34 @@ export async function GET() {
     }
 
     const allRows = [...groups.flatMap((group) => group.outcomes), ...unknownOutcomes]
+    const sortedAllRows = [...allRows].sort((a, b) => a.key.localeCompare(b.key))
+    const statusCode = criticalFailures.length ? 500 : 200
+
+    if (wantsJson) {
+      const jsonPayload = {
+        ok: statusCode === 200,
+        summary: {
+          total: summaryCounts.total,
+          errors: criticalFailures.length,
+          warnings: summaryCounts.warnings,
+        },
+        env: sortedAllRows.map((outcome) => ({
+          key: outcome.key,
+          value: outcome.value ?? null,
+          severity: outcome.severity,
+          message: outcome.message ?? null,
+        })),
+      }
+
+      logStep('env-diagnostics:json-rendered', {
+        statusCode,
+        criticalFailures,
+        warnings: summaryCounts.warnings,
+        total: jsonPayload.env.length,
+      })
+
+      return Response.json(jsonPayload, { status: statusCode })
+    }
 
     const groupedHtml = groups
       .map((group) => {
@@ -573,8 +659,7 @@ export async function GET() {
             </tr>
           </thead>
           <tbody>
-            ${allRows
-              .sort((a, b) => a.key.localeCompare(b.key))
+            ${sortedAllRows
               .map((outcome) => {
                 const value = outcome.value ?? '(undefined)'
                 const color = severityColors[outcome.severity]
@@ -594,8 +679,6 @@ export async function GET() {
         </table>
       </section>
     `
-
-    const statusCode = criticalFailures.length ? 500 : 200
 
     const html = `
       <html>
