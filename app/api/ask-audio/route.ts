@@ -120,6 +120,40 @@ type MemoryPrompt = {
   hasCurrentConversation: boolean
 }
 
+type DiagnosticLevel = 'log' | 'error'
+
+const providerHypotheses = [
+  'The provider query parameter may be missing or blank.',
+  'The PROVIDER environment variable may not be configured.',
+  'GOOGLE_API_KEY could be unset for the Google provider.',
+  'GOOGLE_MODEL might be blank or unresolved.',
+]
+
+function diagnosticsTimestamp() {
+  return new Date().toISOString()
+}
+
+function providerEnvSummary() {
+  return {
+    providerEnv: process.env.PROVIDER ?? null,
+    googleApiKey: process.env.GOOGLE_API_KEY ? 'set' : 'missing',
+    googleModel: process.env.GOOGLE_MODEL ?? null,
+  }
+}
+
+function logDiagnostic(level: DiagnosticLevel, step: string, payload: Record<string, unknown> = {}) {
+  const entry = {
+    ...payload,
+    envSummary: providerEnvSummary(),
+  }
+  const message = `[diagnostic] ${diagnosticsTimestamp()} ${step} ${JSON.stringify(entry)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
 function softenQuestion(question: string | null | undefined): string {
   if (!question) return ''
   const trimmed = question.trim()
@@ -204,7 +238,47 @@ async function buildMemoryPrompt(sessionId: string | undefined): Promise<MemoryP
 export async function POST(req: NextRequest) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   const url = new URL(req.url)
-  const provider = url.searchParams.get('provider') || process.env.PROVIDER || 'google'
+  const providerQuery = url.searchParams.get('provider')
+  const providerEnv = typeof process.env.PROVIDER === 'string' ? process.env.PROVIDER.trim() : ''
+  const providerCandidate = providerQuery && providerQuery.trim().length ? providerQuery.trim() : providerEnv
+  const provider = providerCandidate.trim()
+
+  logDiagnostic('log', 'ask-audio:provider:resolve', {
+    providerQuery: providerQuery ?? null,
+    providerEnv: providerEnv || null,
+    resolvedProvider: provider || null,
+    hypotheses: providerHypotheses,
+  })
+
+  if (!provider) {
+    const message = 'No provider was supplied. Set the provider query parameter or PROVIDER env variable.'
+    logDiagnostic('error', 'ask-audio:provider:missing', { message })
+    return NextResponse.json({ ok: false, error: 'missing_provider', message }, { status: 500 })
+  }
+
+  if (provider !== 'google') {
+    const message = `Unsupported provider "${provider}". Configure PROVIDER=google and supply GOOGLE_API_KEY/GOOGLE_MODEL.`
+    logDiagnostic('error', 'ask-audio:provider:unsupported', { message })
+    return NextResponse.json({ ok: false, error: 'unsupported_provider', message }, { status: 500 })
+  }
+
+  const googleApiKey = process.env.GOOGLE_API_KEY ? process.env.GOOGLE_API_KEY.trim() : ''
+  if (!googleApiKey) {
+    const message = 'GOOGLE_API_KEY is required for the Google audio provider.'
+    logDiagnostic('error', 'ask-audio:google:missing-api-key', { message })
+    return NextResponse.json({ ok: false, error: 'missing_google_api_key', message }, { status: 500 })
+  }
+
+  let model: string
+  try {
+    model = resolveGoogleModel(process.env.GOOGLE_MODEL)
+    logDiagnostic('log', 'ask-audio:google:model-resolved', { model })
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unable to resolve Google model. Set GOOGLE_MODEL to a valid Gemini model.'
+    logDiagnostic('error', 'ask-audio:google:model-resolution-failed', { message })
+    return NextResponse.json({ ok: false, error: 'missing_google_model', message }, { status: 500 })
+  }
   let requestTurn: number | null = null
   let requestSessionId: string | undefined
   let debugMemory: AskAudioDebug['memory'] | undefined
@@ -245,17 +319,6 @@ export async function POST(req: NextRequest) {
       : getAskReturningDefault()
     const fallbackReply = fallbackSuggestion ? `${baseFallbackReply} ${fallbackSuggestion}`.trim() : baseFallbackReply
 
-    if (!process.env.GOOGLE_API_KEY) {
-      return NextResponse.json<AskAudioResponse>({
-        ok: true,
-        provider,
-        reply: fallbackReply,
-        transcript: text || '',
-        end_intent: detectCompletionIntent(text || '').shouldStop,
-        debug: { ...debugBase, usedFallback: true, reason: 'missing_api_key' },
-      })
-    }
-
     const primerSnippet = memory.primerText ? memory.primerText.slice(0, 6000) : ''
     const parts: any[] = [{ text: SYSTEM_PROMPT }]
     if (primerSnippet) {
@@ -273,9 +336,8 @@ export async function POST(req: NextRequest) {
     if (text) parts.push({ text })
     parts.push({ text: 'Respond only with JSON in the format {"reply":"...","transcript":"...","end_intent":false}.' })
 
-    const model = resolveGoogleModel(process.env.GOOGLE_MODEL)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${googleApiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -300,7 +362,7 @@ export async function POST(req: NextRequest) {
 
     const fallback: AskAudioResponse = {
       ok: true,
-      provider: 'google',
+      provider,
       reply: fallbackReply,
       transcript: text || '',
       end_intent: detectCompletionIntent(text || '').shouldStop,
@@ -371,10 +433,14 @@ export async function POST(req: NextRequest) {
       ) {
         reply = reply.includes(fallbackQuestion) ? reply : `${reply} ${fallbackQuestion}`.trim()
       }
-
+      logDiagnostic('log', 'ask-audio:provider:success', {
+        providerStatus,
+        providerError: providerErrorMessage,
+        usedParsedResponse: true,
+      })
       return NextResponse.json({
         ok: true,
-        provider: 'google',
+        provider,
         reply,
         transcript: transcriptText,
         end_intent: Boolean((parsed as any).end_intent) || completion.shouldStop,
@@ -390,6 +456,9 @@ export async function POST(req: NextRequest) {
 
     const normalized = normalizeQuestion(txt)
     if (normalized && memory.askedQuestions.some((question) => normalizeQuestion(question) === normalized)) {
+      logDiagnostic('error', 'ask-audio:google:duplicate-question', {
+        normalizedQuestion: normalized,
+      })
       return NextResponse.json(fallback)
     }
     const completion = detectCompletionIntent(txt || text || '')
@@ -398,6 +467,11 @@ export async function POST(req: NextRequest) {
       : txt.trim().length
       ? 'unstructured_response'
       : 'empty_response'
+    logDiagnostic('error', 'ask-audio:google:fallback', {
+      reason: fallbackReason,
+      providerStatus,
+      providerError: providerErrorMessage,
+    })
     return NextResponse.json({
       ...fallback,
       reply: txt || fallback.reply,
@@ -412,21 +486,23 @@ export async function POST(req: NextRequest) {
         providerError: providerErrorMessage,
       },
     })
-  } catch (e) {
-    return NextResponse.json<AskAudioResponse>({
-      ok: true,
-      provider,
-      reply: getAskProviderExceptionPrompt(),
-      transcript: '',
-      end_intent: false,
-      debug: {
-        sessionId: requestSessionId ?? null,
-        turn: requestTurn,
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error during ask-audio provider execution.'
+      logDiagnostic('error', 'ask-audio:provider:exception', { message })
+      return NextResponse.json<AskAudioResponse>({
+        ok: true,
         provider,
-        usedFallback: true,
-        reason: 'exception',
-        memory: debugMemory,
-      },
-    })
+        reply: getAskProviderExceptionPrompt(),
+        transcript: '',
+        end_intent: false,
+        debug: {
+          sessionId: requestSessionId ?? null,
+          turn: requestTurn,
+          provider,
+          usedFallback: true,
+          reason: 'exception',
+          memory: debugMemory,
+        },
+      })
   }
 }

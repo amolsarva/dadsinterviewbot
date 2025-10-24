@@ -37,5 +37,18 @@ export function resolveGoogleModel(
       return normalized
     }
   }
-  return DEFAULT_GOOGLE_MODEL
+  const timestamp = new Date().toISOString()
+  const hypotheses = [
+    'GOOGLE_MODEL may be unset for the current deployment.',
+    'GOOGLE_DIAGNOSTICS_MODEL may not be defined for diagnostics flows.',
+    'The provided model values may be blank or whitespace after trimming.',
+  ]
+  const payload = {
+    hypotheses,
+    candidates: candidates.map((candidate) => (typeof candidate === 'string' ? candidate : null)),
+  }
+  console.error(`[diagnostic] ${timestamp} google:resolve-model:missing ${JSON.stringify(payload)}`)
+  throw new Error(
+    'No valid Google model has been configured. Set GOOGLE_MODEL (or GOOGLE_DIAGNOSTICS_MODEL for diagnostics) to a supported Gemini model name.',
+  )
 }
