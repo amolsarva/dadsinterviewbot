@@ -21,6 +21,38 @@ Instructions:
 - Summarize or acknowledge relevant remembered details naturally, without repeating the user's exact phrasing.
 - Respond only with JSON shaped as {"message":"<spoken message>","question":"<the follow-up question>"}. No commentary or code fences.`
 
+type DiagnosticLevel = 'log' | 'error'
+
+const introHypotheses = [
+  'GOOGLE_API_KEY may be unset for intro generation.',
+  'GOOGLE_MODEL might be missing or blank.',
+  'Session memory could be incomplete, leading to fallback copy.',
+]
+
+function introTimestamp() {
+  return new Date().toISOString()
+}
+
+function introEnvSummary() {
+  return {
+    googleApiKey: process.env.GOOGLE_API_KEY ? 'set' : 'missing',
+    googleModel: process.env.GOOGLE_MODEL ?? null,
+  }
+}
+
+function logIntro(level: DiagnosticLevel, step: string, payload: Record<string, unknown> = {}) {
+  const entry = {
+    ...payload,
+    envSummary: introEnvSummary(),
+  }
+  const message = `[diagnostic] ${introTimestamp()} ${step} ${JSON.stringify(entry)}`
+  if (level === 'error') {
+    console.error(message)
+  } else {
+    console.log(message)
+  }
+}
+
 function buildFallbackIntro(options: {
   titles: string[]
   details: string[]
@@ -75,6 +107,7 @@ function buildHistorySummary(
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   primeNetlifyBlobContextFromHeaders(req.headers)
   const sessionId = params.id
+  logIntro('log', 'session-intro:request:start', { sessionId, hypotheses: introHypotheses })
   await ensureSessionMemoryHydrated().catch(() => undefined)
   const { current, sessions } = getSessionMemorySnapshot(sessionId)
   if (!current) {
@@ -109,8 +142,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     fallbackQuestion,
   }
 
-  if (!process.env.GOOGLE_API_KEY) {
-    return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
+  const googleApiKey = process.env.GOOGLE_API_KEY ? process.env.GOOGLE_API_KEY.trim() : ''
+  if (!googleApiKey) {
+    const message = 'GOOGLE_API_KEY is required for intro generation.'
+    logIntro('error', 'session-intro:google:missing-api-key', { sessionId, message })
+    return NextResponse.json({ ok: false, error: 'missing_google_api_key', message }, { status: 500 })
+  }
+
+  let model: string
+  try {
+    model = resolveGoogleModel(process.env.GOOGLE_MODEL)
+    logIntro('log', 'session-intro:google:model-resolved', { sessionId, model })
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unable to resolve Google model. Set GOOGLE_MODEL to a supported Gemini model.'
+    logIntro('error', 'session-intro:google:model-resolution-failed', { sessionId, message })
+    return NextResponse.json({ ok: false, error: 'missing_google_model', message }, { status: 500 })
   }
 
   try {
@@ -123,9 +170,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     parts.push({ text: questionText })
     parts.push({ text: 'Respond only with JSON in the format {"message":"...","question":"..."}.' })
 
-    const model = resolveGoogleModel(process.env.GOOGLE_MODEL)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GOOGLE_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${googleApiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -136,6 +182,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const json = await response.json().catch(() => ({}))
     const txt =
       json?.candidates?.[0]?.content?.parts?.map((part: any) => part?.text || '').filter(Boolean).join('\n') || ''
+    const providerStatus = response.status
+    const providerErrorMessage =
+      typeof json?.error?.message === 'string'
+        ? json.error.message
+        : typeof json?.error === 'string'
+        ? json.error
+        : !response.ok
+        ? response.statusText || 'Provider request failed'
+        : null
+    const providerResponseSnippet = (txt && txt.trim().length
+      ? txt
+      : JSON.stringify(json?.error || json) || '').slice(0, 400)
 
     let message = ''
     try {
@@ -159,12 +217,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     if (!message) {
+      logIntro('error', 'session-intro:google:fallback-empty', {
+        sessionId,
+        providerStatus,
+        providerError: providerErrorMessage,
+        providerResponseSnippet,
+      })
       return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, debug })
     }
 
+    logIntro('log', 'session-intro:google:success', {
+      sessionId,
+      providerStatus,
+      providerError: providerErrorMessage,
+    })
     return NextResponse.json({ ok: true, message, fallback: false, debug })
   } catch (error: any) {
     const reason = typeof error?.message === 'string' ? error.message : 'intro_failed'
+    logIntro('error', 'session-intro:provider:exception', { sessionId, reason })
     return NextResponse.json({ ok: true, message: fallbackMessage, fallback: true, reason, debug })
   }
 }

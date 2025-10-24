@@ -100,17 +100,17 @@ function readClientEnvSummary(additional?: Record<string, unknown>) {
         pathname: window.location.pathname,
       }
     : {
-        origin: '__browser_unavailable__',
-        pathname: '__browser_unavailable__',
+        origin: null,
+        pathname: null,
       }
 
   return {
     timestamp: diagnosticsTimestamp(),
-    vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV ?? '__missing__',
-    vercelUrl: process.env.NEXT_PUBLIC_VERCEL_URL ?? '__missing__',
-    deploymentUrl: process.env.NEXT_PUBLIC_DEPLOYMENT_URL ?? '__missing__',
-    siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? '__missing__',
-    netlifySiteUrl: process.env.NEXT_PUBLIC_NETLIFY_SITE_URL ?? '__missing__',
+    vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV ?? null,
+    vercelUrl: process.env.NEXT_PUBLIC_VERCEL_URL ?? null,
+    deploymentUrl: process.env.NEXT_PUBLIC_DEPLOYMENT_URL ?? null,
+    siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? null,
+    netlifySiteUrl: process.env.NEXT_PUBLIC_NETLIFY_SITE_URL ?? null,
     ...browserSummary,
     ...(additional ?? {}),
   }
