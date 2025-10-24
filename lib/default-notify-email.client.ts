@@ -55,7 +55,10 @@ export function readDefaultNotifyEmailClient(): string {
     return assertEmail(process.env.DEFAULT_NOTIFY_EMAIL, 'server-env')
   }
 
-  const globalValue = (window as Record<string, unknown>)[DEFAULT_NOTIFY_EMAIL_GLOBAL_KEY]
+  const globalValue = Reflect.get(
+    window,
+    DEFAULT_NOTIFY_EMAIL_GLOBAL_KEY,
+  ) as unknown
   if (typeof globalValue === 'string' && globalValue.trim().length) {
     return assertEmail(globalValue, 'bootstrap-global')
   }
