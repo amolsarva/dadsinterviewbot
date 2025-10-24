@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSession } from '@/lib/data'
 import { primeNetlifyBlobContextFromHeaders } from '@/lib/blob'
+import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.server'
 
 const formatEnvSummary = () => ({
   DEFAULT_NOTIFY_EMAIL: process.env.DEFAULT_NOTIFY_EMAIL ?? null,
@@ -39,14 +40,7 @@ export async function POST(req: NextRequest) {
 
   const rawEmail = typeof payload?.email === 'string' ? payload.email.trim() : ''
   const emailsEnabled = payload?.emailsEnabled !== false
-  const defaultEmail = (process.env.DEFAULT_NOTIFY_EMAIL ?? '').trim()
-  if (!defaultEmail || defaultEmail === 'a@sarva.co') {
-    const message =
-      'DEFAULT_NOTIFY_EMAIL must be configured in the environment before sessions can start.'
-    logDiagnostic('error', message)
-    return NextResponse.json({ ok: false, error: message }, { status: 500 })
-  }
-
+  const defaultEmail = resolveDefaultNotifyEmailServer()
   const targetEmail = emailsEnabled ? rawEmail || defaultEmail : ''
   const userHandle =
     typeof payload?.userHandle === 'string'

@@ -78,6 +78,58 @@ type BlobFlowDiagnostics = {
   steps: BlobFlowStep[]
 }
 
+type EnvDumpEntry = {
+  key: string
+  value: string | null
+  severity: 'ok' | 'warn' | 'error' | 'info'
+  message: string | null
+}
+
+type EnvDumpSummary = {
+  total: number
+  errors: number
+  warnings: number
+}
+
+const diagnosticsTimestamp = () => new Date().toISOString()
+
+function readClientEnvSummary(additional?: Record<string, unknown>) {
+  const browserSummary = typeof window !== 'undefined'
+    ? {
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+      }
+    : {
+        origin: '__browser_unavailable__',
+        pathname: '__browser_unavailable__',
+      }
+
+  return {
+    timestamp: diagnosticsTimestamp(),
+    vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV ?? '__missing__',
+    vercelUrl: process.env.NEXT_PUBLIC_VERCEL_URL ?? '__missing__',
+    deploymentUrl: process.env.NEXT_PUBLIC_DEPLOYMENT_URL ?? '__missing__',
+    siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? '__missing__',
+    netlifySiteUrl: process.env.NEXT_PUBLIC_NETLIFY_SITE_URL ?? '__missing__',
+    ...browserSummary,
+    ...(additional ?? {}),
+  }
+}
+
+function logClientDiagnostics(
+  level: 'log' | 'error',
+  step: string,
+  payload?: Record<string, unknown>,
+) {
+  const envSummary = readClientEnvSummary(payload?.envSummary as Record<string, unknown> | undefined)
+  const merged = { ...payload, envSummary }
+  if (level === 'error') {
+    console.error('[diagnostic]', diagnosticsTimestamp(), step, merged)
+  } else {
+    console.log('[diagnostic]', diagnosticsTimestamp(), step, merged)
+  }
+}
+
 const TRANSCRIPT_STORAGE_KEY = 'diagnostics:lastTranscript'
 const PROVIDER_ERROR_STORAGE_KEY = 'diagnostics:lastProviderError'
 
@@ -507,6 +559,9 @@ function formatSummary(key: TestKey, data: any): string {
 export default function DiagnosticsPage() {
   const [latestTranscript, setLatestTranscript] = useState<TranscriptSynopsis | null>(null)
   const [latestProviderError, setLatestProviderError] = useState<ProviderErrorSynopsis | null>(null)
+  const [envDump, setEnvDump] = useState<EnvDumpEntry[] | null>(null)
+  const [envSummary, setEnvSummary] = useState<EnvDumpSummary | null>(null)
+  const [envError, setEnvError] = useState<string | null>(null)
   const [log, setLog] = useState<string>('Ready. Run diagnostics to gather fresh results.')
   const [results, setResults] = useState<Record<TestKey, TestResult>>(() => initialResults())
   const [isRunning, setIsRunning] = useState(false)
@@ -514,15 +569,227 @@ export default function DiagnosticsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const read = () => {
+    let cancelled = false
+    const url = '/api/diagnostics/env?format=json'
+
+    logClientDiagnostics('log', 'diagnostics:env-dump:fetch:start', {
+      request: { url, method: 'GET', accept: 'application/json' },
+    })
+
+    async function loadEnvDump() {
       try {
+        const response = await fetch(url, { headers: { accept: 'application/json' } })
+        const payload = await response.json()
+
+        if (!response.ok || (payload && typeof payload === 'object' && payload.ok === false)) {
+          const detail =
+            payload && typeof payload === 'object' && typeof (payload as any).error === 'string'
+              ? (payload as any).error
+              : `HTTP ${response.status}`
+          throw new Error(detail)
+        }
+
+        if (!payload || typeof payload !== 'object' || !Array.isArray((payload as any).env)) {
+          throw new Error('Malformed environment diagnostics payload')
+        }
+
+        const entriesRaw = (payload as any).env as any[]
+        const sanitizedEntries: EnvDumpEntry[] = entriesRaw.map((item) => {
+          const rawKey = typeof item?.key === 'string' ? item.key : String(item?.key ?? '')
+          const key = rawKey && rawKey.length ? rawKey : '(unnamed)'
+          const rawValue = item?.value
+          const value =
+            rawValue === null || rawValue === undefined
+              ? null
+              : typeof rawValue === 'string'
+              ? rawValue
+              : String(rawValue)
+          const rawSeverity = typeof item?.severity === 'string' ? item.severity.toLowerCase() : 'info'
+          const severity: EnvDumpEntry['severity'] = ['ok', 'warn', 'error', 'info'].includes(rawSeverity)
+            ? (rawSeverity as EnvDumpEntry['severity'])
+            : 'info'
+          const message =
+            item?.message === null || item?.message === undefined
+              ? null
+              : typeof item.message === 'string'
+              ? item.message
+              : String(item.message)
+          return { key, value, severity, message }
+        })
+        sanitizedEntries.sort((a, b) => a.key.localeCompare(b.key))
+
+        const summarySource = (payload as any).summary
+        const summary: EnvDumpSummary | null =
+          summarySource && typeof summarySource === 'object'
+            ? {
+                total: (() => {
+                  if (typeof summarySource.total === 'number' && Number.isFinite(summarySource.total)) {
+                    return summarySource.total
+                  }
+                  if (typeof summarySource.total === 'string') {
+                    const parsed = Number(summarySource.total)
+                    if (Number.isFinite(parsed)) return parsed
+                  }
+                  return sanitizedEntries.length
+                })(),
+                errors: (() => {
+                  if (typeof summarySource.errors === 'number' && Number.isFinite(summarySource.errors)) {
+                    return summarySource.errors
+                  }
+                  if (typeof summarySource.errors === 'string') {
+                    const parsed = Number(summarySource.errors)
+                    if (Number.isFinite(parsed)) return parsed
+                  }
+                  return 0
+                })(),
+                warnings: (() => {
+                  if (
+                    typeof summarySource.warnings === 'number' &&
+                    Number.isFinite(summarySource.warnings)
+                  ) {
+                    return summarySource.warnings
+                  }
+                  if (typeof summarySource.warnings === 'string') {
+                    const parsed = Number(summarySource.warnings)
+                    if (Number.isFinite(parsed)) return parsed
+                  }
+                  return 0
+                })(),
+              }
+            : {
+                total: sanitizedEntries.length,
+                errors: 0,
+                warnings: 0,
+              }
+
+        if (!cancelled) {
+          setEnvDump(sanitizedEntries)
+          setEnvSummary(summary)
+          setEnvError(null)
+        }
+
+        const severityCounts = sanitizedEntries.reduce(
+          (acc, entry) => {
+            acc.total += 1
+            acc.bySeverity[entry.severity] = (acc.bySeverity[entry.severity] ?? 0) + 1
+            return acc
+          },
+          { total: 0, bySeverity: { ok: 0, warn: 0, error: 0, info: 0 } as Record<EnvDumpEntry['severity'], number> },
+        )
+
+        const collectIssues = (keys: string[]) =>
+          sanitizedEntries.filter(
+            (entry) => keys.includes(entry.key) && (entry.severity === 'warn' || entry.severity === 'error'),
+          )
+
+        const hypothesisEvaluations = [
+          {
+            hypothesis: 'Required environment variables might be missing or using fallback placeholders.',
+            confirmed: severityCounts.bySeverity.error > 0,
+            evidence: sanitizedEntries
+              .filter((entry) => entry.severity === 'error')
+              .map((entry) => ({ key: entry.key, message: entry.message })),
+          },
+          {
+            hypothesis: 'Blob storage credentials may not match the current Netlify site configuration.',
+            confirmed: collectIssues([
+              'NETLIFY_BLOBS_SITE_ID',
+              'NETLIFY_BLOBS_STORE',
+              'NETLIFY_BLOBS_TOKEN',
+              'NETLIFY_BLOBS_API_URL',
+              'NETLIFY_BLOBS_EDGE_URL',
+              'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+            ]).length > 0,
+            evidence: collectIssues([
+              'NETLIFY_BLOBS_SITE_ID',
+              'NETLIFY_BLOBS_STORE',
+              'NETLIFY_BLOBS_TOKEN',
+              'NETLIFY_BLOBS_API_URL',
+              'NETLIFY_BLOBS_EDGE_URL',
+              'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+            ]).map((entry) => ({ key: entry.key, severity: entry.severity, message: entry.message })),
+          },
+          {
+            hypothesis: 'Email delivery could be disabled because provider API keys are absent.',
+            confirmed: collectIssues([
+              'DEFAULT_NOTIFY_EMAIL',
+              'RESEND_API_KEY',
+              'SENDGRID_API_KEY',
+              'ENABLE_SESSION_EMAILS',
+            ]).length > 0,
+            evidence: collectIssues([
+              'DEFAULT_NOTIFY_EMAIL',
+              'RESEND_API_KEY',
+              'SENDGRID_API_KEY',
+              'ENABLE_SESSION_EMAILS',
+            ]).map((entry) => ({ key: entry.key, severity: entry.severity, message: entry.message })),
+          },
+          {
+            hypothesis: 'Google AI access may fail if the API key or model name is unset.',
+            confirmed: collectIssues(['GOOGLE_API_KEY', 'GOOGLE_MODEL']).length > 0,
+            evidence: collectIssues(['GOOGLE_API_KEY', 'GOOGLE_MODEL']).map((entry) => ({
+              key: entry.key,
+              severity: entry.severity,
+              message: entry.message,
+            })),
+          },
+        ]
+
+        logClientDiagnostics('log', 'diagnostics:env-dump:fetch:success', {
+          response: { status: response.status },
+          summary,
+          severityCounts,
+          hypothesisEvaluations,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        logClientDiagnostics('error', 'diagnostics:env-dump:fetch:error', {
+          request: { url },
+          error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error,
+          detail: message,
+        })
+        if (!cancelled) {
+          setEnvError(message)
+          setEnvDump([])
+          setEnvSummary(null)
+        }
+      }
+    }
+
+    void loadEnvDump()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const read = () => {
+      if (typeof window === 'undefined') {
+        logClientDiagnostics('log', 'diagnostics:transcript:storage-read:skipped', {
+          reason: 'window undefined',
+        })
+        return
+      }
+
+      try {
+        logClientDiagnostics('log', 'diagnostics:transcript:storage-read:start', {
+          storageKey: TRANSCRIPT_STORAGE_KEY,
+        })
         const raw = window.localStorage.getItem(TRANSCRIPT_STORAGE_KEY)
         if (!raw) {
           setLatestTranscript(null)
+          logClientDiagnostics('log', 'diagnostics:transcript:storage-read:empty', {
+            storageKey: TRANSCRIPT_STORAGE_KEY,
+          })
         } else {
           const parsed = JSON.parse(raw)
           if (!parsed || typeof parsed !== 'object') {
             setLatestTranscript(null)
+            logClientDiagnostics('log', 'diagnostics:transcript:storage-read:invalid', {
+              storageKey: TRANSCRIPT_STORAGE_KEY,
+            })
           } else {
             const payload: TranscriptSynopsis = {
               text: typeof (parsed as any).text === 'string' ? (parsed as any).text : '',
@@ -555,20 +822,45 @@ export default function DiagnosticsPage() {
                   : undefined,
             }
             setLatestTranscript(payload)
+            logClientDiagnostics('log', 'diagnostics:transcript:storage-read:success', {
+              storageKey: TRANSCRIPT_STORAGE_KEY,
+              transcript: {
+                isEmpty: payload.isEmpty,
+                turn: payload.turn,
+                at: payload.at,
+                provider: payload.provider,
+              },
+            })
           }
         }
-      } catch {
+      } catch (error) {
+        logClientDiagnostics('error', 'diagnostics:transcript:storage-read:error', {
+          storageKey: TRANSCRIPT_STORAGE_KEY,
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message, stack: error.stack }
+              : { message: 'Unknown error', value: error },
+        })
         setLatestTranscript(null)
       }
 
       try {
+        logClientDiagnostics('log', 'diagnostics:provider-error:storage-read:start', {
+          storageKey: PROVIDER_ERROR_STORAGE_KEY,
+        })
         const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
         if (!rawError) {
           setLatestProviderError(null)
+          logClientDiagnostics('log', 'diagnostics:provider-error:storage-read:empty', {
+            storageKey: PROVIDER_ERROR_STORAGE_KEY,
+          })
         } else {
           const parsedError = JSON.parse(rawError)
           if (!parsedError || typeof parsedError !== 'object') {
             setLatestProviderError(null)
+            logClientDiagnostics('log', 'diagnostics:provider-error:storage-read:invalid', {
+              storageKey: PROVIDER_ERROR_STORAGE_KEY,
+            })
           } else {
             const rawStatus =
               typeof (parsedError as any).status === 'number'
@@ -589,9 +881,24 @@ export default function DiagnosticsPage() {
                 typeof (parsedError as any).resolvedAt === 'string' ? (parsedError as any).resolvedAt : undefined,
             }
             setLatestProviderError(snapshot)
+            logClientDiagnostics('log', 'diagnostics:provider-error:storage-read:success', {
+              storageKey: PROVIDER_ERROR_STORAGE_KEY,
+              providerError: {
+                status: snapshot.status,
+                resolved: snapshot.resolved,
+                at: snapshot.at,
+              },
+            })
           }
         }
-      } catch {
+      } catch (error) {
+        logClientDiagnostics('error', 'diagnostics:provider-error:storage-read:error', {
+          storageKey: PROVIDER_ERROR_STORAGE_KEY,
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message, stack: error.stack }
+              : { message: 'Unknown error', value: error },
+        })
         setLatestProviderError(null)
       }
     }
@@ -647,6 +954,14 @@ export default function DiagnosticsPage() {
     setResults(initialResults())
     setFoxes([])
 
+    const resultStatusLog: Record<TestKey, TestResult['status']> = Object.fromEntries(
+      TEST_ORDER.map((key) => [key, 'idle' as TestResult['status']]),
+    ) as Record<TestKey, TestResult['status']>
+
+    logClientDiagnostics('log', 'diagnostics:run:start', {
+      tests: TEST_ORDER.map((key) => ({ key, path: TEST_CONFIG[key].path, method: TEST_CONFIG[key].method })),
+    })
+
     let transcriptSnapshot: TranscriptSynopsis | null = null
     let providerSnapshot: ProviderErrorSynopsis | null = null
     if (typeof window !== 'undefined') {
@@ -684,7 +999,14 @@ export default function DiagnosticsPage() {
             }
           }
         }
-      } catch {}
+      } catch (error) {
+        logClientDiagnostics('error', 'diagnostics:run:transcript-snapshot:error', {
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message, stack: error.stack }
+              : { message: 'Unknown error', value: error },
+        })
+      }
 
       try {
         const rawError = window.localStorage.getItem(PROVIDER_ERROR_STORAGE_KEY)
@@ -711,7 +1033,14 @@ export default function DiagnosticsPage() {
             }
           }
         }
-      } catch {}
+      } catch (error) {
+        logClientDiagnostics('error', 'diagnostics:run:provider-snapshot:error', {
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message, stack: error.stack }
+              : { message: 'Unknown error', value: error },
+        })
+      }
     }
 
     const deploymentSnapshot = readDeploymentSnapshot()
@@ -800,12 +1129,21 @@ export default function DiagnosticsPage() {
     for (const key of TEST_ORDER) {
       const { path, method } = TEST_CONFIG[key]
       updateResult(key, { status: 'pending', message: undefined })
+      resultStatusLog[key] = 'pending'
       append(`→ ${path}`)
+      logClientDiagnostics('log', 'diagnostics:test:start', {
+        test: key,
+        request: { path, method },
+      })
 
       try {
         const res = await fetch(path, {
           method,
           headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+        })
+        logClientDiagnostics('log', 'diagnostics:test:response', {
+          test: key,
+          response: { status: res.status, ok: res.ok },
         })
         const rawText = await res.text()
         let parsed: any = null
@@ -813,13 +1151,26 @@ export default function DiagnosticsPage() {
           parsed = JSON.parse(rawText)
         } catch (err) {
           parsed = null
+          logClientDiagnostics('log', 'diagnostics:test:parse-json-failed', {
+            test: key,
+            error:
+              err instanceof Error
+                ? { name: err.name, message: err.message, stack: err.stack }
+                : { message: 'Unknown parse error', value: err },
+          })
         }
+
+        let normalizedMessage: string | undefined
+        let normalizedOk = res.ok
 
         if (parsed) {
           append(JSON.stringify(parsed, null, 2))
           const ok = typeof parsed.ok === 'boolean' ? parsed.ok : res.ok
+          normalizedOk = ok
           const message = formatSummary(key, parsed)
+          normalizedMessage = message
           updateResult(key, { status: ok ? 'ok' : 'error', message })
+          resultStatusLog[key] = ok ? 'ok' : 'error'
           if (key === 'storage') {
             const diagnosticsSummary = summarizeNetlifyDiagnostics(parsed?.env?.diagnostics, deploymentSnapshot)
             if (diagnosticsSummary.length) {
@@ -855,20 +1206,45 @@ export default function DiagnosticsPage() {
           }
         } else {
           append(rawText || '(no response body)')
+          normalizedMessage = res.ok ? 'Received response' : `HTTP ${res.status}`
+          normalizedOk = res.ok
           updateResult(key, {
             status: res.ok ? 'ok' : 'error',
-            message: res.ok ? 'Received response' : `HTTP ${res.status}`,
+            message: normalizedMessage,
           })
+          resultStatusLog[key] = res.ok ? 'ok' : 'error'
         }
+
+        logClientDiagnostics('log', 'diagnostics:test:success', {
+          test: key,
+          response: { status: res.status, ok: normalizedOk },
+          message: normalizedMessage,
+        })
       } catch (e: any) {
         const errorMessage = e?.message || 'Request failed'
         append(`Request failed: ${errorMessage}`)
         updateResult(key, { status: 'error', message: errorMessage })
+        resultStatusLog[key] = 'error'
+        logClientDiagnostics('error', 'diagnostics:test:error', {
+          test: key,
+          error:
+            e instanceof Error
+              ? { name: e.name, message: e.message, stack: e.stack }
+              : { message: 'Unknown error', value: e },
+          detail: errorMessage,
+        })
       }
     }
 
+    logClientDiagnostics('log', 'diagnostics:foxes:fetch:start', {
+      request: { path: '/api/diagnostics/foxes', method: 'GET' },
+    })
+
     try {
       const foxRes = await fetch('/api/diagnostics/foxes')
+      logClientDiagnostics('log', 'diagnostics:foxes:fetch:response', {
+        response: { status: foxRes.status, ok: foxRes.ok },
+      })
       if (foxRes.ok) {
         const data = await foxRes.json()
         if (data && Array.isArray(data.foxes)) {
@@ -876,16 +1252,32 @@ export default function DiagnosticsPage() {
           if (data.foxes.length) {
             append(`Foxes flagged: ${data.foxes.length}`)
             append(JSON.stringify(data.foxes, null, 2))
+            logClientDiagnostics('log', 'diagnostics:foxes:fetch:success', {
+              count: data.foxes.length,
+            })
           } else {
             append('Foxes flagged: 0')
+            logClientDiagnostics('log', 'diagnostics:foxes:fetch:success', {
+              count: 0,
+            })
           }
         }
       }
     } catch (err) {
       append('Failed to load fox diagnostics.')
+      logClientDiagnostics('error', 'diagnostics:foxes:fetch:error', {
+        error:
+          err instanceof Error
+            ? { name: err.name, message: err.message, stack: err.stack }
+            : { message: 'Unknown error', value: err },
+      })
     }
 
     append('Diagnostics complete.')
+    logClientDiagnostics('log', 'diagnostics:run:complete', {
+      testsRun: TEST_ORDER.length,
+      results: { ...resultStatusLog },
+    })
     setIsRunning(false)
   }
 
@@ -967,6 +1359,60 @@ export default function DiagnosticsPage() {
             </div>
           ) : (
             <p className="status-note">No provider errors have been recorded yet.</p>
+          )}
+        </div>
+
+        <div className="diagnostics-env-dump">
+          <h3>Environment variables snapshot</h3>
+          {envError ? (
+            <p className="status-note env-error-note">
+              Failed to load environment variables: {envError}
+            </p>
+          ) : envDump === null ? (
+            <p className="status-note">Loading environment variables…</p>
+          ) : envDump.length === 0 ? (
+            <p className="status-note">No environment variables were returned by diagnostics.</p>
+          ) : (
+            <>
+              {envSummary && (
+                <div className="diagnostics-env-summary">
+                  <span>Total: {envSummary.total}</span>
+                  <span>Errors: {envSummary.errors}</span>
+                  <span>Warnings: {envSummary.warnings}</span>
+                </div>
+              )}
+              <div className="env-table-wrapper" role="region" aria-live="polite">
+                <table className="env-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Key</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Value</th>
+                      <th scope="col">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {envDump.map((entry, index) => {
+                      const rowKey = entry.key && entry.key.length ? entry.key : `env-${index}`
+                      return (
+                        <tr key={rowKey}>
+                          <td>{entry.key || '(unnamed)'}</td>
+                          <td>
+                            <span className={`env-severity env-${entry.severity}`}>
+                              {entry.severity.toUpperCase()}
+                            </span>
+                          </td>
+                          <td>
+                            <code>{entry.value ?? '(undefined)'}</code>
+                          </td>
+                          <td>{entry.message ?? '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
 

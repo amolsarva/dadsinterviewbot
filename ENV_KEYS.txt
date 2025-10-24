@@ -7,6 +7,6 @@ Provision these environment variables for production deployments:
 - NETLIFY_BLOBS_PUBLIC_BASE_URL (optional): use a custom absolute/relative URL for blob downloads.
 - OPENAI_API_KEY: optional; enables AI-generated follow-ups.
 - RESEND_API_KEY: optional; sends the summary email on finalize.
-- DEFAULT_NOTIFY_EMAIL: server-side default recipient (fallback: a@sarva.co).
+- DEFAULT_NOTIFY_EMAIL: server-side default recipient (must be explicitly configured; placeholders rejected).
 - NEXT_PUBLIC_APP_NAME and patience knobs are optional for UI polish.
 

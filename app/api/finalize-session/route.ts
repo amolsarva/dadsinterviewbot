@@ -4,6 +4,7 @@ import { getBlobToken, listBlobs, primeNetlifyBlobContextFromHeaders, putBlobFro
 import { sendSummaryEmail } from '@/lib/email'
 import { getSession, mergeSessionArtifacts, rememberSessionManifest } from '@/lib/data'
 import { flagFox, listFoxes } from '@/lib/foxes'
+import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.server'
 
 import { z } from 'zod'
 
@@ -239,7 +240,7 @@ export async function POST(req: NextRequest) {
 
     const manifest = {
       sessionId,
-      email: email || process.env.DEFAULT_NOTIFY_EMAIL || null,
+      email: email || resolveDefaultNotifyEmailServer() || null,
       startedAt,
       endedAt,
       totals: { turns: turns.length, durationMs: totalDuration },
@@ -308,7 +309,7 @@ export async function POST(req: NextRequest) {
     emailStatus = { skipped: true }
 
     const allowEmails = emailsEnabled !== false
-    const targetEmail = allowEmails ? email || process.env.DEFAULT_NOTIFY_EMAIL : ''
+    const targetEmail = allowEmails ? email || resolveDefaultNotifyEmailServer() : ''
     if (!allowEmails) {
       emailStatus = { skipped: true }
     } else if (!targetEmail) {

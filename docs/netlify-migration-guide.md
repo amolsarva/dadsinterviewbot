@@ -36,7 +36,7 @@ Add these values under **Site settings → Environment variables**:
 Add any production credentials you use today:
 - `OPENAI_API_KEY` (enables real assistant follow-ups)
 - `RESEND_API_KEY` or `SENDGRID_API_KEY` (controls outbound summary mail)
-- `DEFAULT_NOTIFY_EMAIL` (defaults to `a@sarva.co` if omitted)
+- `DEFAULT_NOTIFY_EMAIL` (must be set explicitly; fallback placeholders are rejected)
 - UI niceties such as `NEXT_PUBLIC_APP_NAME` are optional.
 
 ## 5. Deploy and validate

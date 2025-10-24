@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 import { jsonErrorResponse } from '@/lib/api-error'
 import { sendSummaryEmail } from '@/lib/email'
+import { resolveDefaultNotifyEmailServer } from '@/lib/default-notify-email.server'
 
 export async function POST() {
   try {
-    const to = process.env.DEFAULT_NOTIFY_EMAIL || 'a@sarva.co'
+    const to = resolveDefaultNotifyEmailServer()
     const subject = 'Interview Bot – Test Email'
     const body = 'This is a test email from /api/diagnostics/email.'
     const status = await sendSummaryEmail(to, subject, body)
