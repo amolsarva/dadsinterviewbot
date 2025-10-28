@@ -51,6 +51,7 @@ type NetlifyConfig = {
   consistency?: 'strong' | 'eventual'
   siteSlug?: string
   siteName?: string
+  deployId?: string
 }
 
 type CandidateSource = 'env' | 'context' | 'default'
@@ -88,6 +89,7 @@ type BlobEnvDiagnostics = {
     apiUrl: FieldDiagnostics
     edgeUrl: FieldDiagnostics
     uncachedEdgeUrl: FieldDiagnostics
+    deployId: FieldDiagnostics
     consistency?: string
   }
 }
@@ -252,6 +254,7 @@ function defaultDiagnostics(): BlobEnvDiagnostics {
       apiUrl: { present: false, selected: undefined, candidates: [] },
       edgeUrl: { present: false, selected: undefined, candidates: [] },
       uncachedEdgeUrl: { present: false, selected: undefined, candidates: [] },
+      deployId: { present: false, selected: undefined, candidates: [] },
       consistency: undefined,
     },
   }
@@ -604,7 +607,7 @@ function makeCandidate(
 
 function summarizeCandidate(
   candidate: CandidateInternal,
-  previewMode: 'store' | 'site' | 'token' | 'url',
+  previewMode: 'store' | 'site' | 'token' | 'url' | 'deploy',
 ): CandidateSummary {
   let valuePreview: string | undefined
   if (candidate.value.length) {
@@ -946,12 +949,36 @@ function readNetlifyConfig(): {
     makeCandidate('context.uncachedEdgeURL', context?.uncachedEdgeURL, 'context'),
   ]
 
+  const deployIdCandidates: CandidateInternal[] = [
+    makeCandidate('MY_DEPLOY_ID', process.env.MY_DEPLOY_ID, 'env'),
+    makeCandidate('NETLIFY_DEPLOY_ID', process.env.NETLIFY_DEPLOY_ID, 'env'),
+    makeCandidate('DEPLOY_ID', process.env.DEPLOY_ID, 'env'),
+  ]
+
   const storePick = pickFirstPresent(storeCandidates)
   const siteIdPick = pickFirstPresent(siteIdCandidates)
   const tokenPick = pickFirstPresent(tokenCandidates)
   const edgePick = pickFirstPresent(edgeUrlCandidates)
   const apiPick = pickFirstPresent(apiUrlCandidates)
   const uncachedPick = pickFirstPresent(uncachedEdgeCandidates)
+  const deployPick = pickFirstPresent(deployIdCandidates)
+
+  const deployCandidatesSummary = deployIdCandidates.map((candidate) =>
+    summarizeCandidate(candidate, 'deploy'),
+  )
+
+  if (deployPick) {
+    logBlobDiagnostic('log', 'deploy-id:selected', {
+      note: 'Resolved deploy identifier from environment variables',
+      selected: summarizeCandidate(deployPick, 'deploy'),
+      candidates: deployCandidatesSummary,
+    })
+  } else {
+    logBlobDiagnostic('log', 'deploy-id:missing', {
+      note: 'No deploy identifier environment variables detected',
+      candidates: deployCandidatesSummary,
+    })
+  }
 
   const consistency =
     (process.env.NETLIFY_BLOBS_CONSISTENCY as 'strong' | 'eventual' | undefined) || undefined
@@ -997,6 +1024,11 @@ function readNetlifyConfig(): {
         selected: uncachedPick ? summarizeCandidate(uncachedPick, 'url') : undefined,
         candidates: uncachedEdgeCandidates.map((candidate) => summarizeCandidate(candidate, 'url')),
       },
+      deployId: {
+        present: Boolean(deployPick?.value.length),
+        selected: deployPick ? summarizeCandidate(deployPick, 'deploy') : undefined,
+        candidates: deployCandidatesSummary,
+      },
       consistency,
     },
   }
@@ -1017,6 +1049,7 @@ function readNetlifyConfig(): {
           apiUrl: apiPick?.value || undefined,
           edgeUrl: edgePick?.value || undefined,
           uncachedEdgeUrl: uncachedPick?.value || undefined,
+          deployId: deployPick?.value || undefined,
           consistency,
         }
       : null
@@ -1028,6 +1061,7 @@ function readNetlifyConfig(): {
     edgeUrl: edgeUrlCandidates.map((candidate) => candidate.value),
     apiUrl: apiUrlCandidates.map((candidate) => candidate.value),
     uncachedEdgeUrl: uncachedEdgeCandidates.map((candidate) => candidate.value),
+    deployId: deployIdCandidates.map((candidate) => candidate.value),
     consistency,
   })
 
@@ -1076,6 +1110,7 @@ async function getNetlifyStore(): Promise<Store | null> {
       if (config.apiUrl) storeOptions.apiURL = config.apiUrl
       if (config.edgeUrl) storeOptions.edgeURL = config.edgeUrl
       if (config.uncachedEdgeUrl) storeOptions.uncachedEdgeURL = config.uncachedEdgeUrl
+      if (config.deployId) storeOptions.deployID = config.deployId
       if (config.consistency) storeOptions.consistency = config.consistency
 
       assertBlobEnv()
