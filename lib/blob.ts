@@ -244,7 +244,7 @@ let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyStoreInitError: BlobErrorDetails | null = null
 let blobEnvLogged = false
-const EMBEDDED_DEPLOY_ID_FILE = path.join(process.cwd(), '.next', 'deploy-id.json')
+const EMBEDDED_DEPLOY_ID_FILE = path.resolve('.next/deploy-id.json')
 
 type SiteResolution = {
   slug: string
