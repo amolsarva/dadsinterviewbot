@@ -23,6 +23,8 @@ describe('safeBlobStore', () => {
     process.env.MY_DEPLOY_ID = 'deploy-override'
     process.env.NETLIFY_DEPLOY_ID = 'deploy-1234'
 
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
     const storeMock = { ready: true }
     const getStoreSpy = vi.fn(() => storeMock)
     vi.doMock('@netlify/blobs', () => ({ getStore: getStoreSpy }))
@@ -40,6 +42,9 @@ describe('safeBlobStore', () => {
         deployID: 'deploy-override',
       }),
     )
+
+    const snapshotLog = logSpy.mock.calls.find((call) => call[2] === 'safe-blob-store-env-snapshot')
+    expect(snapshotLog?.[3]).toMatchObject({ deployIDSource: 'MY_DEPLOY_ID', deployID: 'deploy-override' })
   })
 
   it('prefers MY_DEPLOY_ID over legacy deploy identifiers', async () => {
@@ -50,6 +55,8 @@ describe('safeBlobStore', () => {
     process.env.MY_DEPLOY_ID = 'custom-deploy'
     process.env.NETLIFY_DEPLOY_ID = 'netlify-deploy'
     process.env.DEPLOY_ID = 'fallback-deploy'
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     const storeMock = { ready: true }
     const getStoreSpy = vi.fn(() => storeMock)
@@ -63,6 +70,9 @@ describe('safeBlobStore', () => {
         deployID: 'custom-deploy',
       }),
     )
+
+    const snapshotLog = logSpy.mock.calls.find((call) => call[2] === 'safe-blob-store-env-snapshot')
+    expect(snapshotLog?.[3]).toMatchObject({ deployIDSource: 'MY_DEPLOY_ID', deployID: 'custom-deploy' })
   })
 
   it('throws when configuration is incomplete', async () => {
@@ -84,6 +94,9 @@ describe('putBlobFromBuffer', () => {
     process.env.NETLIFY_BLOBS_TOKEN = 'api-token'
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
     process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
+    process.env.NETLIFY_DEPLOY_ID = 'deploy-from-netlify'
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     const setSpy = vi.fn(async () => ({}))
     const storeMock = {
@@ -109,6 +122,7 @@ describe('putBlobFromBuffer', () => {
       siteID: '12345678-1234-1234-1234-1234567890ab',
       token: 'api-token',
       apiURL: 'https://api.netlify.com/api/v1/blobs',
+      deployID: 'deploy-from-netlify',
     })
     expect(configArg?.edgeURL).toBeUndefined()
     expect(configArg?.uncachedEdgeURL).toBeUndefined()
@@ -116,6 +130,11 @@ describe('putBlobFromBuffer', () => {
     expect(setSpy).toHaveBeenCalled()
     expect(result.url).toBe('/api/blob/path/file.txt')
     expect(result.downloadUrl).toBe(result.url)
+
+    const deployLog = logSpy.mock.calls.find((call) => call[2] === 'deploy-id:selected')
+    expect(deployLog?.[3]).toMatchObject({
+      selected: expect.objectContaining({ key: 'NETLIFY_DEPLOY_ID', valuePreview: 'deploy-from-netlify' }),
+    })
   })
 
   it('uploads via Netlify without a token when the site ID is canonical', async () => {
