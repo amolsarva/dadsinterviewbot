@@ -1,3 +1,5 @@
+import fs from 'fs'
+import path from 'path'
 import { getStore, type GetStoreOptions, type Store } from '@netlify/blobs'
 import {
   assertBlobEnv,
@@ -221,6 +223,7 @@ let netlifySiteResolutionSlug: string | null = null
 let netlifySiteResolutionNotified = false
 let netlifyStoreInitError: BlobErrorDetails | null = null
 let blobEnvLogged = false
+const EMBEDDED_DEPLOY_ID_FILE = path.join(process.cwd(), '.next', 'deploy-id.json')
 
 type SiteResolution = {
   slug: string
@@ -904,12 +907,58 @@ export function primeNetlifyBlobContextFromHeaders(headers: HeaderLike): boolean
   return applied
 }
 
+function loadEmbeddedDeployIdCandidate(): CandidateInternal {
+  logBlobDiagnostic('log', 'deploy-id:embedded:probe', {
+    note: 'Checking for embedded Netlify deploy identifier on disk.',
+    filePath: EMBEDDED_DEPLOY_ID_FILE,
+  })
+
+  if (!fs.existsSync(EMBEDDED_DEPLOY_ID_FILE)) {
+    logBlobDiagnostic('log', 'deploy-id:embedded:missing', {
+      note: 'Embedded deploy identifier file not found. Falling back to environment variables.',
+      filePath: EMBEDDED_DEPLOY_ID_FILE,
+    })
+    return makeCandidate('embedded.deploy-id', '', 'default', 'No .next/deploy-id.json present')
+  }
+
+  try {
+    const raw = fs.readFileSync(EMBEDDED_DEPLOY_ID_FILE, 'utf8')
+    const parsed = JSON.parse(raw) as { deployID?: string | null }
+    const value = typeof parsed.deployID === 'string' ? parsed.deployID.trim() : ''
+
+    if (!value.length) {
+      logBlobDiagnostic('error', 'deploy-id:embedded:empty', {
+        note: 'Embedded deploy identifier file did not contain a deployID string.',
+        filePath: EMBEDDED_DEPLOY_ID_FILE,
+        raw,
+      })
+      throw new Error('Embedded deploy ID file is missing a deployID value.')
+    }
+
+    logBlobDiagnostic('log', 'deploy-id:embedded:loaded', {
+      note: 'Loaded deploy identifier from embedded Netlify build artifact.',
+      filePath: EMBEDDED_DEPLOY_ID_FILE,
+      deployIDPreview: maskValue(value),
+    })
+
+    return makeCandidate('embedded.deploy-id', value, 'default', 'Loaded from .next/deploy-id.json')
+  } catch (error) {
+    logBlobDiagnostic('error', 'deploy-id:embedded:load-failed', {
+      note: 'Failed to read or parse embedded Netlify deploy identifier file.',
+      filePath: EMBEDDED_DEPLOY_ID_FILE,
+      error: serializeErrorForDiagnostics(error),
+    })
+    throw new Error('Failed to read embedded deploy ID file; see diagnostic logs for details.')
+  }
+}
+
 function readNetlifyConfig(): {
   config: NetlifyConfig | null
   diagnostics: BlobEnvDiagnostics
   signature: string
 } {
   const context = parseNetlifyContext()
+  const embeddedDeployCandidate = loadEmbeddedDeployIdCandidate()
 
   const storeCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
@@ -953,6 +1002,7 @@ function readNetlifyConfig(): {
     makeCandidate('MY_DEPLOY_ID', process.env.MY_DEPLOY_ID, 'env'),
     makeCandidate('NETLIFY_DEPLOY_ID', process.env.NETLIFY_DEPLOY_ID, 'env'),
     makeCandidate('DEPLOY_ID', process.env.DEPLOY_ID, 'env'),
+    embeddedDeployCandidate,
   ]
 
   const storePick = pickFirstPresent(storeCandidates)
