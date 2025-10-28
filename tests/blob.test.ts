@@ -95,6 +95,7 @@ describe('putBlobFromBuffer', () => {
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
     process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
     process.env.NETLIFY_DEPLOY_ID = 'deploy-from-netlify'
+    process.env.URL = 'https://deploy.example.netlify.app'
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
@@ -129,7 +130,7 @@ describe('putBlobFromBuffer', () => {
     expect(configArg?.consistency).toBeUndefined()
     expect(setSpy).toHaveBeenCalled()
     expect(result.url).toBe('/api/blob/path/file.txt')
-    expect(result.downloadUrl).toBe(result.url)
+    expect(result.downloadUrl).toBe('https://deploy.example.netlify.app/api/blob/path/file.txt')
 
     const deployLog = logSpy.mock.calls.find((call) => call[2] === 'deploy-id:selected')
     expect(deployLog?.[3]).toMatchObject({
