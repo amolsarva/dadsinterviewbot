@@ -205,6 +205,27 @@ const GLOBAL_STORE_KEY = '__dads_interview_blob_fallback__'
 const BLOB_PROXY_PREFIX = '/api/blob/'
 const NETLIFY_API_BASE_URL = 'https://api.netlify.com'
 const CANONICAL_SITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ABSOLUTE_URL_PATTERN = /^https?:\/\//i
+
+type DeploymentOriginDetails = {
+  origin: string
+  href: string
+  pathname: string
+  source: string
+}
+
+type AbsoluteProxyBase = {
+  base: string
+  source: string
+  override: boolean
+  derivedFrom?: string
+  relativeOverride?: boolean
+}
+
+const loggedDownloadUrls = new Set<string>()
+
+let cachedDeploymentOrigin: DeploymentOriginDetails | null | undefined
+let cachedAbsoluteProxyBase: AbsoluteProxyBase | null | undefined
 
 const globalAny = globalThis as any
 if (!globalAny[GLOBAL_STORE_KEY]) {
@@ -281,6 +302,238 @@ function truncateForDiagnostics(value: string, limit = 240) {
   if (!cleaned.length) return ''
   if (cleaned.length <= limit) return cleaned
   return `${cleaned.slice(0, limit - 1)}…`
+}
+
+function ensureLeadingSlash(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed.length) return '/'
+  const withoutLeading = trimmed.replace(/^\/+/, '')
+  return `/${withoutLeading}`
+}
+
+function ensureTrailingSlash(value: string): string {
+  if (!value.length) return '/'
+  return value.endsWith('/') ? value : `${value}/`
+}
+
+function ensureUrlPathTrailingSlash(url: URL): URL {
+  url.pathname = ensureTrailingSlash(url.pathname)
+  return url
+}
+
+function isAbsoluteUrl(value: string): boolean {
+  return ABSOLUTE_URL_PATTERN.test(value)
+}
+
+function resolveDeploymentOrigin(): DeploymentOriginDetails | null {
+  if (cachedDeploymentOrigin !== undefined) return cachedDeploymentOrigin
+
+  const candidates = [
+    ['NEXT_PUBLIC_DEPLOYMENT_URL', process.env.NEXT_PUBLIC_DEPLOYMENT_URL],
+    ['NEXT_PUBLIC_SITE_URL', process.env.NEXT_PUBLIC_SITE_URL],
+    ['NETLIFY_SITE_URL', process.env.NETLIFY_SITE_URL],
+    ['URL', process.env.URL],
+    ['DEPLOY_URL', process.env.DEPLOY_URL],
+    ['DEPLOY_PRIME_URL', process.env.DEPLOY_PRIME_URL],
+    ['SITE_URL', process.env.SITE_URL],
+  ] as const
+
+  logBlobDiagnostic('log', 'blob-proxy:origin:probe', {
+    note: 'Probing environment variables for deployment origin to build absolute blob URLs.',
+    candidateKeys: candidates.map((candidate) => candidate[0]),
+  })
+
+  for (const [key, rawValue] of candidates) {
+    const value = typeof rawValue === 'string' ? rawValue.trim() : ''
+    logBlobDiagnostic('log', 'blob-proxy:origin:candidate', {
+      key,
+      present: Boolean(value.length),
+      valuePreview: value.length ? truncateForDiagnostics(value, 120) : null,
+    })
+
+    if (!value.length) {
+      continue
+    }
+
+    if (!isAbsoluteUrl(value)) {
+      logBlobDiagnostic('error', 'blob-proxy:origin:candidate-invalid', {
+        key,
+        valuePreview: truncateForDiagnostics(value, 120),
+        reason: 'value is not an absolute HTTP(S) URL',
+      })
+      continue
+    }
+
+    try {
+      const parsed = ensureUrlPathTrailingSlash(new URL(value))
+      const originDetails: DeploymentOriginDetails = {
+        origin: parsed.origin,
+        href: parsed.href,
+        pathname: parsed.pathname,
+        source: key,
+      }
+      cachedDeploymentOrigin = originDetails
+      logBlobDiagnostic('log', 'blob-proxy:origin:resolved', {
+        key,
+        origin: originDetails.origin,
+        href: originDetails.href,
+      })
+      return originDetails
+    } catch (error) {
+      logBlobDiagnostic('error', 'blob-proxy:origin:candidate-parse-failed', {
+        key,
+        valuePreview: truncateForDiagnostics(value, 120),
+        error: serializeErrorForDiagnostics(error),
+      })
+    }
+  }
+
+  cachedDeploymentOrigin = null
+  logBlobDiagnostic('error', 'blob-proxy:origin:missing', {
+    note: 'Unable to determine deployment origin from environment variables. Absolute blob URLs may be unavailable.',
+  })
+  return null
+}
+
+function resolveAbsoluteProxyBase(): AbsoluteProxyBase | null {
+  if (cachedAbsoluteProxyBase !== undefined) return cachedAbsoluteProxyBase
+
+  const overrideRaw = typeof process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL === 'string'
+    ? process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL.trim()
+    : ''
+
+  logBlobDiagnostic('log', 'blob-proxy:absolute-base:probe', {
+    note: 'Resolving absolute base URL used for blob proxy fetches.',
+    overridePresent: Boolean(overrideRaw.length),
+  })
+
+  if (overrideRaw.length) {
+    logBlobDiagnostic('log', 'blob-proxy:absolute-base:override-detected', {
+      overridePreview: truncateForDiagnostics(overrideRaw, 160),
+    })
+
+    if (isAbsoluteUrl(overrideRaw)) {
+      try {
+        const parsed = ensureUrlPathTrailingSlash(new URL(overrideRaw))
+        const resolved: AbsoluteProxyBase = {
+          base: parsed.toString(),
+          source: 'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+          override: true,
+        }
+        cachedAbsoluteProxyBase = resolved
+        logBlobDiagnostic('log', 'blob-proxy:absolute-base:override-absolute', {
+          base: resolved.base,
+        })
+        return resolved
+      } catch (error) {
+        logBlobDiagnostic('error', 'blob-proxy:absolute-base:override-invalid', {
+          overridePreview: truncateForDiagnostics(overrideRaw, 160),
+          error: serializeErrorForDiagnostics(error),
+        })
+      }
+    } else {
+      const relativeBase = ensureTrailingSlash(ensureLeadingSlash(overrideRaw))
+      const origin = resolveDeploymentOrigin()
+      if (origin) {
+        try {
+          const parsed = new URL(relativeBase, origin.origin)
+          const resolved: AbsoluteProxyBase = {
+            base: parsed.toString(),
+            source: 'NETLIFY_BLOBS_PUBLIC_BASE_URL',
+            override: true,
+            derivedFrom: origin.source,
+            relativeOverride: true,
+          }
+          cachedAbsoluteProxyBase = resolved
+          logBlobDiagnostic('log', 'blob-proxy:absolute-base:override-relative', {
+            base: resolved.base,
+            overridePreview: truncateForDiagnostics(overrideRaw, 160),
+            origin: origin.origin,
+            originSource: origin.source,
+          })
+          return resolved
+        } catch (error) {
+          logBlobDiagnostic('error', 'blob-proxy:absolute-base:override-relative-invalid', {
+            overridePreview: truncateForDiagnostics(overrideRaw, 160),
+            origin: origin.origin,
+            originSource: origin.source,
+            error: serializeErrorForDiagnostics(error),
+          })
+        }
+      } else {
+        logBlobDiagnostic('error', 'blob-proxy:absolute-base:override-relative-missing-origin', {
+          overridePreview: truncateForDiagnostics(overrideRaw, 160),
+          note: 'Relative override requires a deployment origin to build absolute URLs.',
+        })
+      }
+    }
+  }
+
+  const origin = resolveDeploymentOrigin()
+  if (origin) {
+    try {
+      const parsed = ensureUrlPathTrailingSlash(new URL(BLOB_PROXY_PREFIX, origin.origin))
+      const resolved: AbsoluteProxyBase = {
+        base: parsed.toString(),
+        source: origin.source,
+        override: false,
+      }
+      cachedAbsoluteProxyBase = resolved
+      logBlobDiagnostic('log', 'blob-proxy:absolute-base:origin-derived', {
+        base: resolved.base,
+        origin: origin.origin,
+        originSource: origin.source,
+      })
+      return resolved
+    } catch (error) {
+      logBlobDiagnostic('error', 'blob-proxy:absolute-base:origin-invalid', {
+        origin: origin.origin,
+        originSource: origin.source,
+        error: serializeErrorForDiagnostics(error),
+      })
+    }
+  }
+
+  cachedAbsoluteProxyBase = null
+  logBlobDiagnostic('error', 'blob-proxy:absolute-base:unresolved', {
+    note: 'Absolute blob proxy base could not be determined. Falling back to relative URLs may break server-side fetches.',
+  })
+  return null
+}
+
+function recordDownloadUrlLog(url: string, details: AbsoluteProxyBase | null, path: string) {
+  if (loggedDownloadUrls.has(url)) return
+  loggedDownloadUrls.add(url)
+  if (details) {
+    logBlobDiagnostic('log', 'blob-proxy:absolute-url:built', {
+      url,
+      base: details.base,
+      baseSource: details.source,
+      derivedFrom: details.derivedFrom ?? null,
+      relativeOverride: details.relativeOverride ?? false,
+      path,
+    })
+  } else {
+    logBlobDiagnostic('error', 'blob-proxy:absolute-url:fallback-logged', {
+      url,
+      path,
+      note: 'Using relative blob URL because no absolute base is available.',
+    })
+  }
+}
+
+function buildDownloadUrl(path: string): string {
+  const normalized = normalizePath(path)
+  const encoded = encodePathForUrl(normalized)
+  const base = resolveAbsoluteProxyBase()
+  if (base) {
+    const absolute = new URL(encoded, base.base).toString()
+    recordDownloadUrlLog(absolute, base, normalized)
+    return absolute
+  }
+  const fallback = buildProxyUrl(normalized)
+  recordDownloadUrlLog(fallback, null, normalized)
+  return fallback
 }
 
 function looksLikeSiteId(value: string): boolean {
@@ -1229,11 +1482,26 @@ function shouldInvalidateNetlifyStore(error: any): boolean {
 }
 
 function buildProxyUrl(path: string): string {
-  const base = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
-  const encoded = encodePathForUrl(path)
-  if (base.length) {
-    return `${base.replace(/\/+$/, '')}/${encoded}`
+  const normalized = normalizePath(path)
+  const override = (process.env.NETLIFY_BLOBS_PUBLIC_BASE_URL || '').trim()
+  const encoded = encodePathForUrl(normalized)
+
+  if (override.length) {
+    if (isAbsoluteUrl(override)) {
+      try {
+        const baseUrl = ensureUrlPathTrailingSlash(new URL(override))
+        return new URL(encoded, baseUrl.toString()).toString()
+      } catch (error) {
+        logBlobDiagnostic('error', 'blob-proxy:relative-build:override-absolute-invalid', {
+          overridePreview: truncateForDiagnostics(override, 160),
+          error: serializeErrorForDiagnostics(error),
+        })
+      }
+    }
+    const relativeBase = ensureTrailingSlash(ensureLeadingSlash(override))
+    return `${relativeBase}${encoded}`
   }
+
   return `${BLOB_PROXY_PREFIX}${encoded}`
 }
 
@@ -1379,7 +1647,7 @@ export async function putBlobFromBuffer(
   const proxyUrl = buildProxyUrl(targetPath)
   return {
     url: proxyUrl,
-    downloadUrl: proxyUrl,
+    downloadUrl: buildDownloadUrl(targetPath),
   }
 }
 
@@ -1451,10 +1719,11 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
             : undefined
         const size = Number((metadata as any).size)
         const proxyUrl = buildProxyUrl(key)
+        const downloadUrl = buildDownloadUrl(key)
         blobs.push({
           pathname: key,
           url: proxyUrl,
-          downloadUrl: proxyUrl,
+          downloadUrl,
           uploadedAt,
           size: Number.isFinite(size) ? size : undefined,
         })
@@ -1464,7 +1733,8 @@ export async function listBlobs(options: ListCommandOptions = {}): Promise<ListB
           console.warn('Blob metadata error details', (err as any).blobDetails)
         }
         const proxyUrl = buildProxyUrl(key)
-        blobs.push({ pathname: key, url: proxyUrl, downloadUrl: proxyUrl })
+        const downloadUrl = buildDownloadUrl(key)
+        blobs.push({ pathname: key, url: proxyUrl, downloadUrl })
       }
     }),
   )

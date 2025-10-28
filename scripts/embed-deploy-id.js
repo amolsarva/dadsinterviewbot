@@ -1,34 +1,39 @@
 #!/usr/bin/env node
-const fs = require('fs')
-const path = require('path')
+import fs from 'node:fs'
+import path from 'node:path'
 
 function timestamp() {
   return new Date().toISOString()
 }
 
-function log(level, step, payload) {
-  const basePayload = {
-    step,
-    env: {
-      DEPLOY_ID: process.env.DEPLOY_ID || null,
-      NETLIFY: process.env.NETLIFY || null,
-    },
-    ...payload,
-  }
-  const message = ['[diagnostic]', timestamp(), 'embed-deploy-id', step, JSON.stringify(basePayload)]
-  if (level === 'error') {
-    console.error(message.join(' '))
-  } else {
-    console.log(message.join(' '))
+function envSnapshot() {
+  return {
+    NETLIFY: process.env.NETLIFY ?? null,
+    DEPLOY_ID: process.env.DEPLOY_ID ?? null,
+    MY_DEPLOY_ID: process.env.MY_DEPLOY_ID ?? null,
+    NODE_VERSION: process.version,
   }
 }
 
-log('log', 'start', { note: 'Embedding Netlify deploy identifier before build' })
+function log(level, step, payload = {}) {
+  const messagePayload = { step, ...payload, env: envSnapshot() }
+  const prefix = `[diagnostic] ${timestamp()} embed-deploy-id ${step}`
+  if (level === 'error') {
+    console.error(`${prefix} ${JSON.stringify(messagePayload)}`)
+  } else {
+    console.log(`${prefix} ${JSON.stringify(messagePayload)}`)
+  }
+}
 
-const deployId = process.env.DEPLOY_ID ? String(process.env.DEPLOY_ID).trim() : ''
+log('log', 'start', {
+  note: 'Embedding Netlify deploy identifier before build.',
+  cwd: process.cwd(),
+})
+
+const deployId = typeof process.env.DEPLOY_ID === 'string' ? process.env.DEPLOY_ID.trim() : ''
 if (!deployId) {
   log('error', 'missing-deploy-id', {
-    note: 'DEPLOY_ID must be provided by Netlify at build time. Aborting build.',
+    note: 'DEPLOY_ID must be provided by Netlify at build time. Aborting to avoid broken runtime.',
   })
   process.exit(1)
 }
@@ -38,13 +43,20 @@ const outputFile = path.join(outputDir, 'deploy-id.json')
 
 try {
   fs.mkdirSync(outputDir, { recursive: true })
-  log('log', 'directory-ensured', { directory: outputDir })
+  log('log', 'directory-ensured', {
+    directory: outputDir,
+  })
 
   const payload = { deployID: deployId }
-  fs.writeFileSync(outputFile, JSON.stringify(payload))
-  log('log', 'deploy-id-written', { file: outputFile, payload })
+  fs.writeFileSync(outputFile, `${JSON.stringify(payload)}\n`, 'utf8')
+  log('log', 'deploy-id-written', {
+    file: outputFile,
+    deployIdPreview: deployId.length > 8 ? `${deployId.slice(0, 4)}…${deployId.slice(-4)}` : deployId,
+  })
 
-  log('log', 'complete', { note: 'Successfully embedded deploy ID for runtime use.' })
+  log('log', 'complete', {
+    note: 'Successfully embedded deploy ID for runtime use.',
+  })
 } catch (error) {
   log('error', 'write-failed', {
     file: outputFile,
