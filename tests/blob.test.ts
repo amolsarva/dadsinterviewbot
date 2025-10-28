@@ -79,6 +79,7 @@ describe('safeBlobStore', () => {
     process.env.NETLIFY_BLOBS_SITE_ID = '12345678-1234-1234-1234-1234567890ab'
     process.env.NETLIFY_BLOBS_STORE = 'store-name'
     process.env.NETLIFY_BLOBS_API_URL = 'https://api.netlify.com/api/v1/blobs'
+    process.env.NETLIFY_DEPLOY_ID = 'deploy-incomplete-test'
 
     vi.doMock('@netlify/blobs', () => ({ getStore: vi.fn() }))
 

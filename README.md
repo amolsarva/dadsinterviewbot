@@ -25,7 +25,7 @@
 
 ## Hosting migration resources
 - [Netlify migration checklist](docs/netlify-migration-guide.md) — step-by-step instructions for provisioning Netlify Blobs, wiring secrets, and verifying diagnostics after a deploy.
-- [Hosting options after Vercel](docs/hosting-options.md) — side-by-side comparison of Netlify, Cloudflare, Render, AWS Amplify, and Fly.io for this Next.js build.
+- [Hosting options for Netlify builds](docs/hosting-options.md) — side-by-side comparison of Netlify, Cloudflare, Render, AWS Amplify, and Fly.io for this Next.js build.
 
 ## Pages
 - `/` Home — one-button flow + **Finish Session**, greeting voice, on-screen log.
@@ -38,14 +38,14 @@
   1. Key sentences from the latest user turns are categorised by Interview Guide stage.
   2. All sessions for that handle are re-analysed, newest notes flagged as “Latest”, and a biography-style cheat sheet is rewritten.
   3. The markdown snapshot is uploaded to blob storage and cached in-memory for fast reuse.
-- Inspect or download primers via the Vercel Blob CLI: `vercel blob ls memory/primers/` and `vercel blob get memory/primers/amol.md` (replace handle as needed). Session manifests remain under `sessions/{id}/` alongside transcripts.
+- Inspect or download primers via the Netlify CLI: `netlify blobs:list --site $NETLIFY_BLOBS_SITE_ID --store memory --prefix primers/` and `netlify blobs:get --site $NETLIFY_BLOBS_SITE_ID --store memory --key primers/amol.md` (replace handle as needed). Session manifests remain under `sessions/{id}/` alongside transcripts.
 
 ## Diagnostics & operator tooling
 - **Diagnostics dashboard:** `/diagnostics` shows recent health checks, captured provider failures, and links to localStorage payloads (`DIAGNOSTIC_TRANSCRIPT_STORAGE_KEY`, `DIAGNOSTIC_PROVIDER_ERROR_STORAGE_KEY`).
 - **Logs:** the home panel card mirrors the most recent state transitions for quick triage. Browser storage keeps the rolling log per handle.
 - **Blob helpers:** `app/api/blob/[...path]` exposes inline blob contents with the site’s Netlify credentials.
 - **Commit stamp:** the footer (see `app/layout.tsx`) links to the active commit and renders the timestamp in US Eastern Time for release tracking.
-- **Memory Log review:** use the Vercel Blob CLI to inspect per-session manifests (`vercel blob ls sessions/`) and fetch specific logs (`vercel blob get sessions/<SESSION_ID>/session.json`). Primers live beside them at `memory/primers/<HANDLE>.md`.
+- **Memory Log review:** use the Netlify CLI to inspect per-session manifests (`netlify blobs:list --site $NETLIFY_BLOBS_SITE_ID --store memory --prefix sessions/`) and fetch specific logs (`netlify blobs:get --site $NETLIFY_BLOBS_SITE_ID --store memory --key sessions/<SESSION_ID>/session.json`). Primers live beside them at `memory/primers/<HANDLE>.md`.
 
 ## Deployment & runtime notes
 - **Netlify-first storage:** configure `NETLIFY_BLOBS_SITE_ID` (and optionally `NETLIFY_BLOBS_STORE`) so transcripts and manifests stream to Blobs.

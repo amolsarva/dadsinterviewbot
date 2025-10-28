@@ -8,10 +8,11 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 3. Locate the store named `dads-interview-bot`. If it is missing, click **Create blob store**, enter `dads-interview-bot`, and finish the wizard. If you already use a different store name, note the exact value—you must copy it into `NETLIFY_BLOBS_STORE`.
 4. When the store is present, open it and copy its **Store name** and **Store ID** for reference.
 
-## 2. Let Netlify inject the blob credentials automatically
-1. Delete any `NETLIFY_BLOBS_TOKEN` you previously defined in the Netlify UI. The runtime now asks Netlify to inject an internal JWT during each request, so manual tokens are no longer necessary for app-managed writes.
-2. Keep `NETLIFY_BLOBS_STORE` (if you override the default) and `NETLIFY_BLOBS_SITE_ID` configured as before. These settings still inform the runtime which store and site to target.
-3. Only generate a personal access token if you need to write to Blobs from an external script or CLI. In that case you can continue to create a token with **Blobs: Read and write** scope and use it with the Netlify REST API instead of the in-app SDK.
+## 2. Export the Netlify blob credentials explicitly
+1. In **Site settings → Environment variables**, define `NETLIFY_BLOBS_TOKEN`. Netlify’s managed function token works, or you can create a personal access token with **Blobs: Read and write** scope. The app refuses to fall back to anonymous credentials.
+2. Set `NETLIFY_BLOBS_API_URL` explicitly — for most teams this is `https://api.netlify.com/api/v1/blobs`. Leaving it blank now blocks `/api/diagnostics/storage` so you immediately notice missing configuration.
+3. Keep `NETLIFY_BLOBS_STORE` (if you override the default) and `NETLIFY_BLOBS_SITE_ID` configured as before. These settings still inform the runtime which store and site to target.
+4. Remove any legacy aliases such as `BLOBS_TOKEN`, `BLOBS_SITE_ID`, or `BLOBS_CONTEXT`. They now trigger diagnostics errors and are ignored by the runtime.
 
 ## 3. Link the site ID
 1. From the Netlify dashboard, open the **Sites** tab and select the site that hosts this app.
@@ -22,7 +23,7 @@ Use this walkthrough to verify the blob configuration items that cause 405 error
 ## 4. Validate optional URL overrides (if any)
 1. Only follow this step if you have provided `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_API_URL`, or similar overrides.
 2. In the blob store view from step 1, check the **Region** value. Netlify uses different base URLs per region.
-3. Compare the region to the override values you have set. Confirm the hostnames point to the same region as your store. In particular, do **not** send writes to `https://netlify-blobs.netlify.app`; that domain serves cached reads only. For upload operations, rely on `NETLIFY_BLOBS_API_URL=https://api.netlify.com/api/v1/blobs` (the default) and remove the edge override unless Netlify support instructs otherwise.
+3. Compare the region to the override values you have set. Confirm the hostnames point to the same region as your store. In particular, do **not** send writes to `https://netlify-blobs.netlify.app`; that domain serves cached reads only. For upload operations, explicitly set `NETLIFY_BLOBS_API_URL=https://api.netlify.com/api/v1/blobs` unless Netlify support instructs otherwise.
 4. After adjusting overrides, redeploy the environment so the updated settings apply.
 
 ## 5. Ensure Next.js API routes deploy on Netlify

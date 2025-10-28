@@ -45,7 +45,7 @@ const formatTimestamp = () => new Date().toISOString()
 const envSummary = () => ({
   totalKeys: Object.keys(process.env).length,
   nodeEnv: process.env.NODE_ENV ?? null,
-  platform: process.env.NETLIFY === 'true' ? 'netlify' : process.env.VERCEL ? 'vercel' : 'custom',
+  platform: process.env.NETLIFY === 'true' ? 'netlify' : 'custom',
 })
 
 function logStep(step: string, payload?: Record<string, unknown>) {
@@ -163,8 +163,11 @@ const GROUPS: EnvGroup[] = [
       },
       {
         key: 'BLOBS_TOKEN',
-        label: 'Generic blobs token',
-        validate: (value) => (value ? pass('Generic token override detected.') : pass('Not provided.')),
+        label: 'Deprecated blobs token',
+        validate: (value) =>
+          value
+            ? fail('BLOBS_TOKEN is deprecated. Rename it to NETLIFY_BLOBS_TOKEN.', true)
+            : pass('Not provided.'),
       },
     ],
   },
@@ -319,29 +322,52 @@ const GROUPS: EnvGroup[] = [
         validate: (value) => (value ? pass(`CI=${value}`) : pass('Not running in CI.')),
       },
       {
-        key: 'VERCEL',
-        label: 'Vercel runtime flag',
-        validate: (value) => (value ? pass('Running on Vercel platform.') : pass('Vercel platform not detected.')),
-      },
-      {
-        key: 'VERCEL_ENV',
-        label: 'Vercel environment',
-        validate: (value) => (value ? pass(`Vercel env ${value}.`) : pass('Vercel environment unset.')),
-      },
-      {
-        key: 'VERCEL_URL',
-        label: 'Vercel URL',
-        validate: (value) => (value ? pass(`Deployment URL ${value}.`) : pass('Vercel URL unavailable.')),
-      },
-      {
         key: 'SITE_ID',
         label: 'Site ID',
         validate: (value) => (value ? pass(`SITE_ID=${value}`) : warn('SITE_ID missing; some logs cannot correlate to site.')),
       },
       {
+        key: 'NETLIFY_SITE_NAME',
+        label: 'Netlify site name',
+        validate: (value) =>
+          value
+            ? pass(`Site name ${value}.`)
+            : warn('NETLIFY_SITE_NAME missing; admin console links may not render.'),
+      },
+      {
         key: 'CONTEXT',
         label: 'Netlify build context',
         validate: (value) => (value ? pass(`CONTEXT=${value}`) : warn('CONTEXT missing; Netlify build context unknown.')),
+      },
+      {
+        key: 'DEPLOY_URL',
+        label: 'Published deploy URL',
+        validate: (value) =>
+          value
+            ? looksLikeURL(value)
+              ? pass('Deploy URL detected.')
+              : fail('DEPLOY_URL should be a full URL starting with http(s)://', false)
+            : warn('DEPLOY_URL missing; production links may not resolve.'),
+      },
+      {
+        key: 'DEPLOY_PRIME_URL',
+        label: 'Preview deploy URL',
+        validate: (value) =>
+          value
+            ? looksLikeURL(value)
+              ? pass('Preview URL detected.')
+              : fail('DEPLOY_PRIME_URL should be a full URL starting with http(s)://', false)
+            : warn('DEPLOY_PRIME_URL missing; preview deploy link unavailable.'),
+      },
+      {
+        key: 'URL',
+        label: 'Primary site URL',
+        validate: (value) =>
+          value
+            ? looksLikeURL(value)
+              ? pass('Site URL detected.')
+              : fail('URL should be a full URL starting with http(s)://', false)
+            : warn('Primary site URL missing; configure a production domain.'),
       },
       {
         key: 'NEXT_RUNTIME',

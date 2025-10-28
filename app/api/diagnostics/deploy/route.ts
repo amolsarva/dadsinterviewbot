@@ -1,3 +1,5 @@
+import { resolveDeploymentMetadata } from '@/lib/deployment-metadata.server'
+
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
@@ -6,7 +8,7 @@ const formatTimestamp = () => new Date().toISOString()
 const envSummary = () => ({
   totalKeys: Object.keys(process.env).length,
   nodeEnv: process.env.NODE_ENV ?? null,
-  platform: process.env.NETLIFY === 'true' ? 'netlify' : process.env.VERCEL ? 'vercel' : 'custom',
+  platform: process.env.NETLIFY === 'true' ? 'netlify' : 'custom',
 })
 
 const logStep = (step: string, payload?: Record<string, unknown>) => {
@@ -25,32 +27,31 @@ const logError = (step: string, error: unknown, payload?: Record<string, unknown
   console.error(`[diagnostic] ${formatTimestamp()} ${step} ${JSON.stringify(merged)}`)
 }
 
+const HYPOTHESES = [
+  'Deploy ID variables were not exported into the runtime environment.',
+  'Deployment metadata helper is not wired to diagnostics route.',
+  'Netlify build metadata is incomplete so blobs cannot attribute writes correctly.',
+]
+
 export async function GET() {
   const stepBase = 'diagnostics.deploy.get'
   try {
-    logStep(`${stepBase}:start`)
+    logStep(`${stepBase}:start`, { hypotheses: HYPOTHESES })
 
-    const deployIdSource = process.env.MY_DEPLOY_ID
-      ? 'MY_DEPLOY_ID'
-      : process.env.NETLIFY_DEPLOY_ID
-      ? 'NETLIFY_DEPLOY_ID'
-      : process.env.DEPLOY_ID
-      ? 'DEPLOY_ID'
-      : null
-
-    if (!deployIdSource) {
-      logError(`${stepBase}:missing`, new Error('Deploy ID variables are not set'))
+    const metadata = resolveDeploymentMetadata()
+    const responsePayload = {
+      deployId: metadata.deployId,
+      deployIdSource: metadata.deployIdSource,
+      context: metadata.context,
+      siteId: metadata.siteId,
+      siteName: metadata.siteName,
+      deployUrl: metadata.deployUrl,
+      deployPrimeUrl: metadata.deployPrimeUrl,
+      branch: metadata.branch,
+      commitRef: metadata.commitRef,
+      repo: metadata.repo,
+      hypotheses: HYPOTHESES,
     }
-
-    const deployId =
-      process.env.MY_DEPLOY_ID ??
-      process.env.NETLIFY_DEPLOY_ID ??
-      process.env.DEPLOY_ID ??
-      '(undefined)'
-
-    const allKeys = Object.keys(process.env).filter((key) => key.toUpperCase().includes('DEPLOY'))
-
-    const responsePayload = { deployId, deployIdSource: deployIdSource ?? 'none', allKeys }
 
     logStep(`${stepBase}:resolved`, responsePayload)
 

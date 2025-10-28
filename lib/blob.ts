@@ -932,8 +932,17 @@ function parseNetlifyContext(): NetlifyContext | null {
   if (isForceProdBlobsEnabled()) {
     return null
   }
+
+  const deprecatedContext = process.env.BLOBS_CONTEXT
+  if (deprecatedContext && deprecatedContext.trim().length) {
+    logBlobDiagnostic('error', 'netlify-context:deprecated-env-detected', {
+      note: 'Detected BLOBS_CONTEXT which is no longer respected. Rename to NETLIFY_BLOBS_CONTEXT.',
+      encodedLength: deprecatedContext.trim().length,
+    })
+  }
+
   try {
-    const rawEnv = process.env.NETLIFY_BLOBS_CONTEXT || process.env.BLOBS_CONTEXT
+    const rawEnv = process.env.NETLIFY_BLOBS_CONTEXT
     if (rawEnv && rawEnv.trim().length) {
       const decoded = Buffer.from(rawEnv.trim(), 'base64').toString('utf8')
       const parsed = JSON.parse(decoded)
@@ -941,8 +950,11 @@ function parseNetlifyContext(): NetlifyContext | null {
         return parsed as NetlifyContext
       }
     }
-  } catch {
-    // ignore malformed context payloads
+  } catch (error) {
+    logBlobDiagnostic('error', 'netlify-context:parse-failed', {
+      note: 'Failed to parse NETLIFY_BLOBS_CONTEXT payload',
+      error: serializeErrorForDiagnostics(error),
+    })
   }
   const context = (globalThis as any).netlifyBlobsContext
   if (context && typeof context === 'object') {
@@ -1213,21 +1225,45 @@ function readNetlifyConfig(): {
   const context = parseNetlifyContext()
   const embeddedDeployCandidate = loadEmbeddedDeployIdCandidate()
 
+  const deprecatedCandidates: { mode: 'store' | 'site' | 'token'; candidate: CandidateInternal }[] = []
+
+  const trackDeprecated = (mode: 'store' | 'site' | 'token', candidate: CandidateInternal) => {
+    if (candidate.value.length) {
+      deprecatedCandidates.push({ mode, candidate })
+    }
+  }
+
+  trackDeprecated('store', makeCandidate('NETLIFY_BLOBS_STORE_NAME', process.env.NETLIFY_BLOBS_STORE_NAME, 'env'))
+  trackDeprecated('site', makeCandidate('BLOBS_SITE_ID', process.env.BLOBS_SITE_ID, 'env'))
+  trackDeprecated('token', makeCandidate('BLOBS_TOKEN', process.env.BLOBS_TOKEN, 'env'))
+
+  if (deprecatedCandidates.length) {
+    logBlobDiagnostic('error', 'deprecated-blob-env-detected', {
+      note: 'Deprecated blob environment variables detected. Rename them to the Netlify-specific NETLIFY_BLOBS_* keys.',
+      candidates: deprecatedCandidates.map(({ mode, candidate }) => ({
+        ...summarizeCandidate(candidate, mode),
+        replacement:
+          mode === 'store'
+            ? 'NETLIFY_BLOBS_STORE'
+            : mode === 'site'
+            ? 'NETLIFY_BLOBS_SITE_ID'
+            : 'NETLIFY_BLOBS_TOKEN',
+      })),
+    })
+  }
+
   const storeCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_STORE', process.env.NETLIFY_BLOBS_STORE, 'env'),
-    makeCandidate('NETLIFY_BLOBS_STORE_NAME', process.env.NETLIFY_BLOBS_STORE_NAME, 'env'),
   ]
 
   const siteIdCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_SITE_ID', process.env.NETLIFY_BLOBS_SITE_ID, 'env'),
-    makeCandidate('BLOBS_SITE_ID', process.env.BLOBS_SITE_ID, 'env'),
     makeCandidate('NETLIFY_SITE_ID', process.env.NETLIFY_SITE_ID, 'env'),
     makeCandidate('context.siteID', context?.siteID, 'context'),
   ]
 
   const tokenCandidates: CandidateInternal[] = [
     makeCandidate('NETLIFY_BLOBS_TOKEN', process.env.NETLIFY_BLOBS_TOKEN, 'env'),
-    makeCandidate('BLOBS_TOKEN', process.env.BLOBS_TOKEN, 'env'),
     makeCandidate('NETLIFY_API_TOKEN', process.env.NETLIFY_API_TOKEN, 'env'),
     makeCandidate('context.token', context?.token, 'context'),
   ]
