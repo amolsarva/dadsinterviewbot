@@ -1,4 +1,5 @@
 import { getStore, type GetStoreOptions, type Store } from '@netlify/blobs'
+import { resolveDeploymentMetadata, type DeploymentMetadata } from '@/lib/deployment-metadata.server'
 
 const REQUIRED_BASE = ['NETLIFY_BLOBS_SITE_ID', 'NETLIFY_BLOBS_STORE'] as const
 const OPTIONAL_KEYS = ['NETLIFY_BLOBS_API_URL', 'NETLIFY_BLOBS_TOKEN'] as const
@@ -153,6 +154,23 @@ export function logBlobDiagnostic(level: 'log' | 'error', event: string, payload
   }
 }
 
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack }
+  }
+  if (error && typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error))
+    } catch {
+      return { ...error }
+    }
+  }
+  if (typeof error === 'string') {
+    return { message: error }
+  }
+  return { message: 'Unknown error', value: error }
+}
+
 function coerceBoolean(value: string | undefined | null): boolean {
   if (!value) return false
   const normalized = value.trim().toLowerCase()
@@ -243,23 +261,22 @@ function redactOptions(options: GetStoreOptions & { token?: string }) {
 
 export async function safeBlobStore(): Promise<Store> {
   const snapshot = snapshotRequiredBlobEnv()
-  const deployIDSource =
-    'MY_DEPLOY_ID' in process.env && process.env.MY_DEPLOY_ID
-      ? 'MY_DEPLOY_ID'
-      : 'NETLIFY_DEPLOY_ID' in process.env && process.env.NETLIFY_DEPLOY_ID
-      ? 'NETLIFY_DEPLOY_ID'
-      : 'DEPLOY_ID' in process.env && process.env.DEPLOY_ID
-      ? 'DEPLOY_ID'
-      : null
-
-  const deployID = trimOptionalEnv(
-    process.env.MY_DEPLOY_ID ?? process.env.NETLIFY_DEPLOY_ID ?? process.env.DEPLOY_ID,
-  )
+  let deploymentMetadata: DeploymentMetadata
+  try {
+    deploymentMetadata = resolveDeploymentMetadata()
+  } catch (error) {
+    logBlobDiagnostic('error', 'safe-blob-store-deploy-metadata-missing', {
+      error: serializeError(error),
+    })
+    throw error instanceof Error
+      ? error
+      : new Error('Failed to resolve deployment metadata for blob initialization.')
+  }
 
   logBlobDiagnostic('log', 'safe-blob-store-env-snapshot', {
     note: 'Preparing Netlify blob store initialization via safeBlobStore',
-    deployID: deployID || null,
-    deployIDSource: deployIDSource,
+    deployID: deploymentMetadata.deployId,
+    deployIDSource: deploymentMetadata.deployIdSource,
   })
 
   assertBlobEnv({
@@ -290,13 +307,12 @@ export async function safeBlobStore(): Promise<Store> {
     apiURL: apiUrl,
   }
 
-  if (deployID) {
-    options.deployID = deployID
-  }
+  options.deployID = deploymentMetadata.deployId
 
   logBlobDiagnostic('log', 'safe-blob-store-options', {
     note: 'Attempting to initialize Netlify blob store',
     options: redactOptions(options),
+    deploymentMetadata,
   })
 
   try {

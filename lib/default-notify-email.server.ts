@@ -7,7 +7,7 @@ function timestamp() {
 function envSummary() {
   return {
     nodeEnv: process.env.NODE_ENV ?? null,
-    platform: process.env.NETLIFY === 'true' ? 'netlify' : process.env.VERCEL ? 'vercel' : 'custom',
+    platform: process.env.NETLIFY === 'true' ? 'netlify' : 'custom',
     totalKeys: Object.keys(process.env).length,
   }
 }

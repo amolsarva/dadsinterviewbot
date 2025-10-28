@@ -21,14 +21,16 @@ This project already builds with `next build`/`next start` and exposes every ser
 ## 3. Provision Netlify Blobs
 1. In the site dashboard, open **Storage → Blobs** and create (or note) the store name. The repo defaults to `dads-interview-bot`; feel free to keep it.
 2. Copy the **Site ID** from **Site settings → General → Site details**.
-3. (Optional) If you need to drive uploads from external tooling, generate a personal access token with Blobs write scope. The app runtime now receives a managed JWT automatically, so you can omit `NETLIFY_BLOBS_TOKEN` for server-side usage.
+3. Generate a Netlify function token or personal access token with **Blobs: Read and write** scope. The runtime refuses to operate without `NETLIFY_BLOBS_TOKEN` defined.
 
 Add these values under **Site settings → Environment variables**:
 - `NETLIFY_BLOBS_SITE_ID`
 - `NETLIFY_BLOBS_STORE` (optional override; omit to use the default)
-- Optional overrides if you host the store elsewhere: `NETLIFY_BLOBS_API_URL`, `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_PUBLIC_BASE_URL`.
+- `NETLIFY_BLOBS_TOKEN`
+- `NETLIFY_BLOBS_API_URL` (required; use `https://api.netlify.com/api/v1/blobs` unless support instructs otherwise)
+- Optional overrides if you host the store elsewhere: `NETLIFY_BLOBS_EDGE_URL`, `NETLIFY_BLOBS_PUBLIC_BASE_URL`.
 
-> Tip: If you accidentally paste the site slug (for example `dadsbot`) instead of the UUID Site ID, temporarily define `NETLIFY_BLOBS_TOKEN` with Sites API scope so diagnostics can resolve the slug. Once the canonical Site ID appears in the logs you can remove the token.
+> Tip: If you accidentally paste the site slug (for example `dadsbot`) instead of the UUID Site ID, keep `NETLIFY_BLOBS_TOKEN` defined and let diagnostics resolve the slug. Once the canonical Site ID appears in the logs you can rotate the token but you should not remove it.
 
 > Without the site ID the runtime falls back to the in-memory store. Diagnostics will warn with `mode: "memory"` until you add the secret and redeploy.
 
@@ -57,4 +59,4 @@ Add any production credentials you use today:
 - **Blob downloads 404** → ensure the store name matches the one you configured; wrong store names silently create a new empty store.
 - **Diagnostics missing OpenAI/Google** → Netlify hides secrets from build logs; verify they exist via the dashboard and re-run the deploy. The `/api/health` endpoint echoes which providers are active.
 
-Following this checklist keeps feature parity with the old Vercel deployment while ensuring Netlify storage is live from the first run.
+Following this checklist keeps feature parity with the previous hosting setup while ensuring Netlify storage is live from the first run.

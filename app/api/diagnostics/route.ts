@@ -1,3 +1,4 @@
+import { resolveDeploymentMetadata } from '@/lib/deployment-metadata.server'
 import { NextResponse } from 'next/server'
 import { jsonErrorResponse } from '@/lib/api-error'
 
@@ -66,7 +67,8 @@ const ENDPOINTS: EndpointSummary[] = [
 ]
 
 function detectDeployment() {
-  const platform = process.env.NETLIFY === 'true' ? 'netlify' : process.env.VERCEL ? 'vercel' : 'custom'
+  const metadata = resolveDeploymentMetadata()
+  const platform = metadata.platform
   const functionBase = platform === 'netlify' ? '/.netlify/functions' : null
 
   return {
@@ -74,9 +76,13 @@ function detectDeployment() {
     functionBase,
     nodeEnv: process.env.NODE_ENV,
     edgeMiddleware: Boolean(process.env.NEXT_RUNTIME && process.env.NEXT_RUNTIME !== 'nodejs'),
-    netlifySiteId: process.env.NETLIFY_SITE_ID ?? null,
-    vercelEnv: process.env.VERCEL_ENV ?? null,
-    vercelUrl: process.env.VERCEL_URL ?? null,
+    netlifySiteId: metadata.siteId ?? null,
+    netlifySiteName: metadata.siteName ?? null,
+    deployContext: metadata.context ?? null,
+    deployUrl: metadata.deployUrl ?? metadata.deployPrimeUrl ?? metadata.siteUrl ?? null,
+    deployId: metadata.deployId,
+    branch: metadata.branch,
+    commitRef: metadata.commitRef,
   }
 }
 

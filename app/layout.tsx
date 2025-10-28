@@ -1,55 +1,22 @@
 import './globals.css'
 import React from 'react'
 import { buildDefaultNotifyEmailBootstrapScript } from '@/lib/default-notify-email.server'
+import { buildDeploymentBootstrapScript, resolveDeploymentMetadata } from '@/lib/deployment-metadata.server'
 import { SiteNav } from './site-nav'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const commitSha =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ??
-    process.env.VERCEL_GIT_COMMIT_SHA ??
-    process.env.NEXT_PUBLIC_GIT_COMMIT_SHA ??
-    process.env.GIT_COMMIT_SHA ??
-    process.env.COMMIT_REF ??
-    process.env.RENDER_GIT_COMMIT ??
-    ''
-  const commitMessage =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE ??
-    process.env.VERCEL_GIT_COMMIT_MESSAGE ??
-    process.env.NEXT_PUBLIC_GIT_COMMIT_MESSAGE ??
-    process.env.GIT_COMMIT_MESSAGE ??
-    process.env.COMMIT_MESSAGE ??
-    process.env.RENDER_GIT_COMMIT_MESSAGE ??
-    'local changes'
-  const commitTimestamp =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_TIMESTAMP ??
-    process.env.VERCEL_GIT_COMMIT_TIMESTAMP ??
-    process.env.NEXT_PUBLIC_GIT_COMMIT_TIMESTAMP ??
-    process.env.GIT_COMMIT_TIMESTAMP ??
-    process.env.DEPLOY_CREATED_AT ??
-    null
-  const repoOwner =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_OWNER ??
-    process.env.VERCEL_GIT_REPO_OWNER ??
-    process.env.NEXT_PUBLIC_GIT_REPO_OWNER ??
-    process.env.GIT_REPO_OWNER ??
-    ''
-  const repoSlug =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_REPO_SLUG ??
-    process.env.VERCEL_GIT_REPO_SLUG ??
-    process.env.NEXT_PUBLIC_GIT_REPO_SLUG ??
-    process.env.GIT_REPO_SLUG ??
-    ''
+  const deploymentMetadata = resolveDeploymentMetadata()
+  const commitSha = deploymentMetadata.commitRef ?? ''
+  const commitMessage = deploymentMetadata.commitMessage ?? 'commit message unavailable'
+  const commitTimestamp = deploymentMetadata.commitTimestamp
+  const repoOwner = deploymentMetadata.repo.owner ?? ''
+  const repoSlug = deploymentMetadata.repo.name ?? ''
 
-  const githubRepo = process.env.GITHUB_REPOSITORY ?? process.env.NEXT_PUBLIC_GITHUB_REPOSITORY ?? ''
-  const [githubOwner, githubSlug] = githubRepo.includes('/') ? githubRepo.split('/', 2) : ['', '']
-
-  const shortSha = commitSha ? commitSha.slice(0, 7) : 'local'
-  const finalRepoOwner = repoOwner || githubOwner
-  const finalRepoSlug = repoSlug || githubSlug
+  const shortSha = commitSha ? commitSha.slice(0, 7) : deploymentMetadata.deployId.slice(0, 7)
 
   const commitUrl =
-    commitSha && finalRepoOwner && finalRepoSlug
-      ? `https://github.com/${finalRepoOwner}/${finalRepoSlug}/commit/${commitSha}`
+    commitSha && deploymentMetadata.repo.httpsUrl
+      ? `${deploymentMetadata.repo.httpsUrl}/commit/${commitSha}`
       : null
 
   const easternFormatter = new Intl.DateTimeFormat('en-US', {
@@ -69,11 +36,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const buildTimestampLabel = `This build is from ${formattedTime}`
 
   const defaultEmailBootstrapScript = buildDefaultNotifyEmailBootstrapScript()
+  const deploymentBootstrapScript = buildDeploymentBootstrapScript(deploymentMetadata)
 
   return (
     <html lang="en">
       <body>
         <script dangerouslySetInnerHTML={{ __html: defaultEmailBootstrapScript }} />
+        <script dangerouslySetInnerHTML={{ __html: deploymentBootstrapScript }} />
         <div className="site-shell">
           <header className="site-header">
             <h1 className="site-title">Dad&apos;s Interview Bot</h1>

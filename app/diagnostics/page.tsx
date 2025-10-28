@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type { DeploymentMetadata } from '@/types/deployment'
 
 type TestKey = 'health' | 'storage' | 'google' | 'openai' | 'tues' | 'smoke' | 'e2e' | 'email'
 type TestResult = { status: 'idle' | 'pending' | 'ok' | 'error'; message?: string }
@@ -45,9 +46,13 @@ type DeploymentSnapshot = {
   href?: string
   pathname?: string
   releaseId?: string
-  vercelEnv?: string
-  vercelUrl?: string
+  deployId?: string
+  deployContext?: string
+  deployUrl?: string
+  deployPrimeUrl?: string
+  siteUrl?: string
   netlifySiteUrl?: string
+  branch?: string
 }
 
 type BlobFlowStep = {
@@ -78,6 +83,12 @@ type BlobFlowDiagnostics = {
   steps: BlobFlowStep[]
 }
 
+declare global {
+  interface Window {
+    __DEPLOYMENT_METADATA__?: DeploymentMetadata
+  }
+}
+
 type EnvDumpEntry = {
   key: string
   value: string | null
@@ -104,13 +115,20 @@ function readClientEnvSummary(additional?: Record<string, unknown>) {
         pathname: null,
       }
 
+  const deployment: DeploymentMetadata | null =
+    typeof window !== 'undefined' && window.__DEPLOYMENT_METADATA__
+      ? window.__DEPLOYMENT_METADATA__
+      : null
+
   return {
     timestamp: diagnosticsTimestamp(),
-    vercelEnv: process.env.NEXT_PUBLIC_VERCEL_ENV ?? null,
-    vercelUrl: process.env.NEXT_PUBLIC_VERCEL_URL ?? null,
-    deploymentUrl: process.env.NEXT_PUBLIC_DEPLOYMENT_URL ?? null,
-    siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? null,
-    netlifySiteUrl: process.env.NEXT_PUBLIC_NETLIFY_SITE_URL ?? null,
+    deployId: deployment?.deployId ?? null,
+    deployContext: deployment?.context ?? null,
+    deployUrl: deployment?.deployUrl ?? null,
+    deployPrimeUrl: deployment?.deployPrimeUrl ?? null,
+    siteUrl: deployment?.siteUrl ?? null,
+    netlifySiteUrl: deployment?.siteUrl ?? null,
+    branch: deployment?.branch ?? null,
     ...browserSummary,
     ...(additional ?? {}),
   }
@@ -256,22 +274,27 @@ function readDeploymentSnapshot(): DeploymentSnapshot | null {
     }
   }
 
-  const vercelEnv = process.env.NEXT_PUBLIC_VERCEL_ENV
-  if (typeof vercelEnv === 'string' && vercelEnv.length) {
-    snapshot.vercelEnv = vercelEnv
-  }
-
-  const vercelUrl =
-    process.env.NEXT_PUBLIC_VERCEL_URL ??
-    process.env.NEXT_PUBLIC_DEPLOYMENT_URL ??
-    process.env.NEXT_PUBLIC_SITE_URL
-  if (typeof vercelUrl === 'string' && vercelUrl.length) {
-    snapshot.vercelUrl = vercelUrl
-  }
-
-  const netlifySiteUrl = process.env.NEXT_PUBLIC_NETLIFY_SITE_URL
-  if (typeof netlifySiteUrl === 'string' && netlifySiteUrl.length) {
-    snapshot.netlifySiteUrl = netlifySiteUrl
+  const deploymentMetadata = window.__DEPLOYMENT_METADATA__
+  if (deploymentMetadata) {
+    if (typeof deploymentMetadata.deployId === 'string' && deploymentMetadata.deployId.length) {
+      snapshot.deployId = deploymentMetadata.deployId
+    }
+    if (typeof deploymentMetadata.context === 'string' && deploymentMetadata.context.length) {
+      snapshot.deployContext = deploymentMetadata.context
+    }
+    if (typeof deploymentMetadata.deployUrl === 'string' && deploymentMetadata.deployUrl.length) {
+      snapshot.deployUrl = deploymentMetadata.deployUrl
+    }
+    if (typeof deploymentMetadata.deployPrimeUrl === 'string' && deploymentMetadata.deployPrimeUrl.length) {
+      snapshot.deployPrimeUrl = deploymentMetadata.deployPrimeUrl
+    }
+    if (typeof deploymentMetadata.siteUrl === 'string' && deploymentMetadata.siteUrl.length) {
+      snapshot.siteUrl = deploymentMetadata.siteUrl
+      snapshot.netlifySiteUrl = deploymentMetadata.siteUrl
+    }
+    if (typeof deploymentMetadata.branch === 'string' && deploymentMetadata.branch.length) {
+      snapshot.branch = deploymentMetadata.branch
+    }
   }
 
   return snapshot
@@ -364,14 +387,26 @@ function summarizeNetlifyDiagnostics(raw: any, deployment?: DeploymentSnapshot |
     if (deployment.pathname) {
       summary.push(`Deployment path: ${deployment.pathname}`)
     }
-    if (deployment.vercelEnv) {
-      summary.push(`Runtime env: ${deployment.vercelEnv}`)
+    if (deployment.deployContext) {
+      summary.push(`Runtime context: ${deployment.deployContext}`)
     }
-    if (deployment.vercelUrl && (!deployment.origin || !deployment.origin.includes(deployment.vercelUrl))) {
-      summary.push(`Vercel URL: ${deployment.vercelUrl}`)
+    if (deployment.branch) {
+      summary.push(`Branch: ${deployment.branch}`)
+    }
+    if (deployment.deployUrl) {
+      summary.push(`Deploy URL: ${deployment.deployUrl}`)
+    }
+    if (deployment.deployPrimeUrl) {
+      summary.push(`Preview URL: ${deployment.deployPrimeUrl}`)
     }
     if (deployment.netlifySiteUrl) {
       summary.push(`Netlify site URL: ${deployment.netlifySiteUrl}`)
+    }
+    if (deployment.siteUrl && deployment.siteUrl !== deployment.netlifySiteUrl) {
+      summary.push(`Site URL: ${deployment.siteUrl}`)
+    }
+    if (deployment.deployId) {
+      summary.push(`Deploy ID: ${deployment.deployId}`)
     }
     if (deployment.releaseId) {
       summary.push(`Build ID: ${deployment.releaseId}`)
@@ -1061,14 +1096,26 @@ export default function DiagnosticsPage() {
       if (deploymentSnapshot.pathname) {
         append(`[deployment] Path: ${deploymentSnapshot.pathname}`)
       }
-      if (deploymentSnapshot.vercelEnv) {
-        append(`[deployment] Runtime env: ${deploymentSnapshot.vercelEnv}`)
+      if (deploymentSnapshot.deployContext) {
+        append(`[deployment] Runtime context: ${deploymentSnapshot.deployContext}`)
       }
-      if (deploymentSnapshot.vercelUrl) {
-        append(`[deployment] Vercel URL: ${deploymentSnapshot.vercelUrl}`)
+      if (deploymentSnapshot.branch) {
+        append(`[deployment] Branch: ${deploymentSnapshot.branch}`)
+      }
+      if (deploymentSnapshot.deployUrl) {
+        append(`[deployment] Deploy URL: ${deploymentSnapshot.deployUrl}`)
+      }
+      if (deploymentSnapshot.deployPrimeUrl) {
+        append(`[deployment] Preview URL: ${deploymentSnapshot.deployPrimeUrl}`)
       }
       if (deploymentSnapshot.netlifySiteUrl) {
         append(`[deployment] Netlify site URL: ${deploymentSnapshot.netlifySiteUrl}`)
+      }
+      if (deploymentSnapshot.siteUrl && deploymentSnapshot.siteUrl !== deploymentSnapshot.netlifySiteUrl) {
+        append(`[deployment] Site URL: ${deploymentSnapshot.siteUrl}`)
+      }
+      if (deploymentSnapshot.deployId) {
+        append(`[deployment] Deploy ID: ${deploymentSnapshot.deployId}`)
       }
       if (deploymentSnapshot.releaseId) {
         append(`[deployment] Build ID: ${deploymentSnapshot.releaseId}`)

@@ -1,4 +1,4 @@
-# Hosting options after Vercel
+# Hosting options for Netlify-centric builds
 
 The app is a Next.js 14 project with App Router server actions, serverless API routes, and blob-backed audio storage. These platforms cover the required deployment + storage combo with minimal code churn.
 
@@ -10,4 +10,4 @@ The app is a Next.js 14 project with App Router server actions, serverless API r
 | **AWS Amplify Hosting + S3** | Managed Next.js builds and Lambda-backed SSR, tight integration with AWS ecosystem. S3 replaces blob storage, and SES/SNS are available for email. | Slightly more setup overhead (IAM roles, Amplify app creation). Update `lib/blob.ts` for S3 and keep the in-memory fallback. |
 | **Fly.io** | Full control over regional container deployment with WireGuard private networking. Great for custom Node servers or multi-service topologies. | Bring your own CI/CD (e.g., GitHub Actions). No managed object store—connect S3/R2 and adjust the blob helper. Monitoring/metrics are more DIY. |
 
-If you want the closest drop-in replacement for Vercel’s “push to Git → build → serverless + blob storage” workflow, start with Netlify. Render, Cloudflare, and AWS bring broader infrastructure options at the cost of slightly more configuration work, while Fly.io favors teams that want infrastructure primitives over turnkey platform features.
+Netlify remains the most direct fit for Git-driven deploys with first-party blob storage. Render, Cloudflare, and AWS bring broader infrastructure options at the cost of slightly more configuration work, while Fly.io favors teams that want infrastructure primitives over turnkey platform features.
