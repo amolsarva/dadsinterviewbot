@@ -1,8 +1,6 @@
 [build]
 command = "node scripts/embed-deploy-id.js && npm run build"
 publish = ".next"
-command = "npm run build"
-publish = ".next"
 
 [functions]
 node_bundler = "esbuild"
@@ -12,6 +10,5 @@ external_node_modules = ["@netlify/blobs", "openai", "resend"]
 [[plugins]]
 package = "@netlify/plugin-nextjs"
 
-
-  [build.environment]
+[build.environment]
 NODE_VERSION = "20"
