@@ -847,17 +847,46 @@ type CandidateInternal = {
   note?: string
 }
 
+function looksLikeUnresolvedTemplate(value: string): string | null {
+  if (!value) return null
+  const match = value.match(/^\$\{([A-Z0-9_:-]+)\}$/)
+  return match ? match[1] : null
+}
+
+function appendNote(existing: string | undefined, addition: string): string {
+  if (!existing || !existing.trim().length) return addition
+  return `${existing}; ${addition}`
+}
+
 function makeCandidate(
   key: string,
   raw: unknown,
   source: CandidateSource,
   note?: string,
 ): CandidateInternal {
+  let value = typeof raw === 'string' ? raw.trim() : ''
+  let derivedNote = note
+
+  const unresolved = looksLikeUnresolvedTemplate(value)
+  if (unresolved) {
+    logBlobDiagnostic('error', 'blob-env:unresolved-template', {
+      key,
+      source,
+      template: value,
+      unresolved,
+    })
+    value = ''
+    derivedNote = appendNote(
+      derivedNote,
+      `value resembled unresolved template for "${unresolved}" and was treated as missing`,
+    )
+  }
+
   return {
     key,
     source,
-    value: typeof raw === 'string' ? raw.trim() : '',
-    note,
+    value,
+    note: derivedNote,
   }
 }
 
